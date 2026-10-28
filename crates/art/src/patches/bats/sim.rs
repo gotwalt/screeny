@@ -67,11 +67,7 @@ impl V3 {
     }
 
     pub fn cross(self, o: V3) -> V3 {
-        v3(
-            self.y * o.z - self.z * o.y,
-            self.z * o.x - self.x * o.z,
-            self.x * o.y - self.y * o.x,
-        )
+        v3(self.y * o.z - self.z * o.y, self.z * o.x - self.x * o.z, self.x * o.y - self.y * o.x)
     }
 
     pub fn len(self) -> f32 {
@@ -273,12 +269,19 @@ impl Bat {
 
 #[derive(Clone, Copy, Debug)]
 enum Phase {
-    Idle { until: f64 },
+    Idle {
+        until: f64,
+    },
     /// A handful of bats sweep together from `from` to `to` (both points in
     /// the same camera-relative world the bats fly in) over `until - start`
     /// seconds - card 319's "small group of 3-6 streams past", replacing
     /// card 313's roost-and-corridor pour now that there is no roost.
-    Grouping { until: f64, start: f64, from: V3, to: V3 },
+    Grouping {
+        until: f64,
+        start: f64,
+        from: V3,
+        to: V3,
+    },
 }
 
 pub struct Sim {
@@ -504,8 +507,10 @@ impl Sim {
                 let sign = self.rng.sign();
                 let el = self.el_centre + self.rng.range(-EL_HALF * 0.5, EL_HALF * 0.5);
                 let depth = self.rng.range(DEPTH_CENTRE - 2.0, DEPTH_CENTRE + 2.0);
-                let from = self.dir_local((self.az_centre + sign * AZ_HALF * 1.1).to_radians(), el.to_radians()).scale(depth);
-                let to = self.dir_local((self.az_centre - sign * AZ_HALF * 1.1).to_radians(), el.to_radians()).scale(depth);
+                let from =
+                    self.dir_local((self.az_centre + sign * AZ_HALF * 1.1).to_radians(), el.to_radians()).scale(depth);
+                let to =
+                    self.dir_local((self.az_centre - sign * AZ_HALF * 1.1).to_radians(), el.to_radians()).scale(depth);
                 let dur = f64::from(self.rng.range(GROUP_DURATION.0, GROUP_DURATION.1));
                 self.phase = Phase::Grouping { until: self.t + dur, start: self.t, from, to };
             }

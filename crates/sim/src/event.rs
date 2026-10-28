@@ -193,49 +193,25 @@ impl Event {
     #[must_use]
     pub(crate) fn from_shared(e: &rx::Event<'_, SocketAddr>) -> Option<Event> {
         Some(match *e {
-            rx::Event::Shown {
-                from,
-                seq,
-                codec,
-                bytes,
-                timestamp_us,
-            } => Event::Shown {
-                from,
-                seq,
-                codec,
-                bytes,
-                timestamp_us,
-            },
+            rx::Event::Shown { from, seq, codec, bytes, timestamp_us } => {
+                Event::Shown { from, seq, codec, bytes, timestamp_us }
+            }
             rx::Event::Dropped { from, seq, cause } => Event::Dropped { from, seq, cause },
             rx::Event::Rejected { from, reason } => Event::Rejected { from, reason },
             rx::Event::Busy { to, sent } => Event::Busy { to, sent },
             rx::Event::TelemetrySent { to } => Event::TelemetrySent { to },
             rx::Event::TelemetryRateLimited { to } => Event::TelemetryRateLimited { to },
-            rx::Event::Control {
-                from,
-                op,
-                req_id,
-                error,
-                replied,
-            } => Event::Control {
-                from,
-                op,
-                req_id,
-                error,
-                replied,
-            },
+            rx::Event::Control { from, op, req_id, error, replied } => {
+                Event::Control { from, op, req_id, error, replied }
+            }
             rx::Event::ControlRejected { from, reason } => Event::ControlRejected { from, reason },
             rx::Event::StateChanged { from, to } => Event::StateChanged { from, to },
             rx::Event::LockTaken { source, displaced } => Event::LockTaken { source, displaced },
             rx::Event::LockReleased { source, reason } => Event::LockReleased { source, reason },
-            rx::Event::Brightness { requested, applied } => {
-                Event::Brightness { requested, applied }
-            }
+            rx::Event::Brightness { requested, applied } => Event::Brightness { requested, applied },
             rx::Event::Identify { duration_ms } => Event::Identify { duration_ms },
             rx::Event::IdleMode { mode } => Event::IdleMode { mode },
-            rx::Event::Renamed { name } => Event::Renamed {
-                name: name.to_string(),
-            },
+            rx::Event::Renamed { name } => Event::Renamed { name: name.to_string() },
             rx::Event::StatsReset => Event::StatsReset,
             rx::Event::Reboot => Event::Reboot,
             // The overlay timing out is a repaint on a device and nothing at

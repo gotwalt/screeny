@@ -18,8 +18,8 @@ use crate::common;
 
 use common::{post, test_config};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
-use screeny_studio::ha::MqttConfig;
 use screeny_sim::{Config as SimConfig, SimDevice};
+use screeny_studio::ha::MqttConfig;
 use screeny_studio::Studio;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -59,7 +59,11 @@ impl Seen {
                     return p;
                 }
             }
-            assert!(start.elapsed() < PATIENCE, "{topic}: waited {PATIENCE:?} for {what}; last saw {:?}", self.get(topic));
+            assert!(
+                start.elapsed() < PATIENCE,
+                "{topic}: waited {PATIENCE:?} for {what}; last saw {:?}",
+                self.get(topic)
+            );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
@@ -111,16 +115,25 @@ async fn home_assistant_sees_and_drives_the_studio() {
     let status = format!("screeny/{id}/status");
 
     let (ha, seen) = home_assistant(&host, port, &id).await;
-    let studio = Studio::bind(screeny_studio::Config { mqtt: Some(mqtt.clone()), ..test_config() }).await.unwrap().spawn();
+    let studio =
+        Studio::bind(screeny_studio::Config { mqtt: Some(mqtt.clone()), ..test_config() }).await.unwrap().spawn();
     let at = studio.addr;
 
     // Connect: the config, online, and every state.
     seen.until(&status, "online", |p| p == "online").await;
-    let config = seen.until_json(&config_topic, "the device config", |v| v["components"].as_object().is_some_and(|c| c.len() == 10)).await;
+    let config = seen
+        .until_json(&config_topic, "the device config", |v| v["components"].as_object().is_some_and(|c| c.len() == 10))
+        .await;
     assert_eq!(config["device"]["identifiers"][0], format!("screeny_{id}"));
     assert_eq!(config["origin"]["name"], "screeny-studio");
-    for (retired, platform) in [("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")] {
-        assert_eq!(config["components"][retired], serde_json::json!({ "platform": platform }), "card 310 removes {retired}");
+    for (retired, platform) in
+        [("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")]
+    {
+        assert_eq!(
+            config["components"][retired],
+            serde_json::json!({ "platform": platform }),
+            "card 310 removes {retired}"
+        );
     }
     let options = config["components"]["picture"]["options"].as_array().expect("the picture list").clone();
     assert!(options.contains(&"Flock".into()) && options.contains(&"Vesta".into()), "{options:?}");
@@ -154,10 +167,16 @@ async fn home_assistant_sees_and_drives_the_studio() {
     // Brightness is a panel's (card 353: a studio with no panel has Channel 1
     // and nothing to dim), so one arrives - on Channel 1, the first panel.
     let (_panel, panel_port) = start_sim("aa0001", 0);
-    assert_eq!(post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{panel_port}","play":true}}"#)).await.status, 200);
-    common::until_json(at, PATIENCE, "the panel known by its own id", "/api/v1/panels", |p| p["panels"][0]["device"] == "aa0001").await;
+    assert_eq!(
+        post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{panel_port}","play":true}}"#)).await.status,
+        200
+    );
+    common::until_json(at, PATIENCE, "the panel known by its own id", "/api/v1/panels", |p| {
+        p["panels"][0]["device"] == "aa0001"
+    })
+    .await;
     tokio::time::sleep(Duration::from_millis(1500)).await; // HA's look at the studio, once a second
-    // Brightness, snapped to a real stop; off is dark; a bare on comes back.
+                                                           // Brightness, snapped to a real stop; off is dark; a bare on comes back.
     ha.publish(t("brightness", "set"), QoS::AtLeastOnce, false, r#"{"state":"ON","brightness":100}"#).await.unwrap();
     let lit = seen.until_json(&t("brightness", "state"), "lit", |v| v["state"] == "ON").await;
     let level = lit["brightness"].as_u64().unwrap();
@@ -171,7 +190,8 @@ async fn home_assistant_sees_and_drives_the_studio() {
     // The slider, in the panel's own 4 % steps.
     ha.publish(t("level", "set"), QoS::AtLeastOnce, false, "8").await.unwrap();
     seen.until(&t("level", "state"), "8 %", |p| p == "8").await;
-    seen.until_json(&t("brightness", "state"), "the light follows", |v| v["state"] == "ON" && v["brightness"] == 16).await;
+    seen.until_json(&t("brightness", "state"), "the light follows", |v| v["state"] == "ON" && v["brightness"] == 16)
+        .await;
 
     // HA restarts: its birth message brings the config back.
     seen.forget(&config_topic);
@@ -204,7 +224,11 @@ async fn home_assistant_sees_and_drives_the_studio() {
     let on = post(at, "/api/v1/home_assistant/set", r#"{"enabled":true}"#).await.json();
     assert_eq!(on["enabled"], true);
     seen.until(&status, "online when switched on", |p| p == "online").await;
-    assert_eq!(post(at, "/api/v1/home_assistant/set", r#"{"enabled":true,"host":""}"#).await.status, 400, "on, but nowhere");
+    assert_eq!(
+        post(at, "/api/v1/home_assistant/set", r#"{"enabled":true,"host":""}"#).await.status,
+        400,
+        "on, but nowhere"
+    );
 
     // "Remove from Home Assistant": off, and nothing retained.
     let gone = post(at, "/api/v1/home_assistant/forget", "{}").await;
@@ -224,7 +248,13 @@ fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16) {
         if port == avoid {
             continue;
         }
-        let cfg = SimConfig { frame_port: port, control_port: port + 1, id: id.to_string(), instance: format!("sim-{id}"), ..SimConfig::for_test() };
+        let cfg = SimConfig {
+            frame_port: port,
+            control_port: port + 1,
+            id: id.to_string(),
+            instance: format!("sim-{id}"),
+            ..SimConfig::for_test()
+        };
         if let Ok(dev) = SimDevice::start_with(cfg, None) {
             return (dev, port);
         }
@@ -242,7 +272,13 @@ fn start_tapped_sim(id: &str, avoid: u16) -> (SimDevice, u16, Wire) {
         if port == avoid {
             continue;
         }
-        let cfg = SimConfig { frame_port: port, control_port: port + 1, id: id.to_string(), instance: format!("sim-{id}"), ..SimConfig::for_test() };
+        let cfg = SimConfig {
+            frame_port: port,
+            control_port: port + 1,
+            id: id.to_string(),
+            instance: format!("sim-{id}"),
+            ..SimConfig::for_test()
+        };
         let w = Arc::clone(&wire);
         let tap = Box::new(move |datagram: &[u8]| {
             if let Ok(f) = screeny_proto::FramePacket::parse(datagram) {
@@ -283,7 +319,13 @@ fn len(w: &Wire) -> usize {
 /// The channel each panel is on, from the overview.
 async fn channel_of(at: std::net::SocketAddr, device: &str) -> Value {
     let v = common::get(at, "/api/v1/panels").await.json();
-    v["panels"].as_array().unwrap().iter().find(|p| p["device"] == device).unwrap_or_else(|| panic!("no {device} in {v}"))["channel"].clone()
+    v["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["device"] == device)
+        .unwrap_or_else(|| panic!("no {device} in {v}"))["channel"]
+        .clone()
 }
 
 /// A fade, and a little more.
@@ -324,7 +366,14 @@ async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
     // What card 352 left retained on the broker for the second panel: a
     // picture and a patch of its own. The live Home Assistant has them.
     ha.publish(two("picture", "state"), QoS::AtLeastOnce, true, "Vesta").await.unwrap();
-    ha.publish(two("patch", "state"), QoS::AtLeastOnce, true, r#"{"id":"vesta","name":"Vesta","setting":"Default","modified":false}"#).await.unwrap();
+    ha.publish(
+        two("patch", "state"),
+        QoS::AtLeastOnce,
+        true,
+        r#"{"id":"vesta","name":"Vesta","setting":"Default","modified":false}"#,
+    )
+    .await
+    .unwrap();
     seen.until(&two("picture", "state"), "the old picture state", |p| p == "Vesta").await;
 
     let (_a_dev, a_port, a_wire) = start_tapped_sim("aa0001", 0);
@@ -332,7 +381,10 @@ async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
     let studio = Studio::bind(screeny_studio::Config { mqtt: Some(mqtt), ..test_config() }).await.unwrap().spawn();
     let at = studio.addr;
     for p in [a_port, b_port] {
-        assert_eq!(post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{p}","play":true}}"#)).await.status, 200);
+        assert_eq!(
+            post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{p}","play":true}}"#)).await.status,
+            200
+        );
     }
     common::until_json(at, PATIENCE, "both panels", "/api/v1/panels", |p| {
         p["panels"].as_array().is_some_and(|a| a.len() == 2 && a[0]["device"] == "aa0001" && a[1]["device"] == "bb0002")
@@ -340,19 +392,36 @@ async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
     .await;
 
     // The first device: the original five, plus the channel select.
-    let first = seen.until_json(&first_config, "the first device's config", |v| v["components"].as_object().is_some_and(|c| c.len() == 10)).await;
+    let first = seen
+        .until_json(&first_config, "the first device's config", |v| {
+            v["components"].as_object().is_some_and(|c| c.len() == 10)
+        })
+        .await;
     assert_eq!(first["device"]["identifiers"], serde_json::json!([format!("screeny_{id}")]));
     for k in ["brightness", "level", "picture", "patch", "panel"] {
         assert_eq!(first["components"][k]["unique_id"], format!("screeny_{id}_{k}"));
     }
-    assert_eq!(first["components"]["picture"]["command_topic"], one("picture", "set"), "select.screeny_picture is Channel 1's");
+    assert_eq!(
+        first["components"]["picture"]["command_topic"],
+        one("picture", "set"),
+        "select.screeny_picture is Channel 1's"
+    );
     assert_eq!(first["components"]["channel"]["options"], serde_json::json!(["Channel 1"]));
     // The second panel: its own device, a channel select, and no picture.
-    let second = seen.until_json(&second_config, "the second panel's config", |v| v["components"].as_object().is_some()).await;
+    let second =
+        seen.until_json(&second_config, "the second panel's config", |v| v["components"].as_object().is_some()).await;
     assert_eq!(second["components"]["channel"]["command_topic"], two("channel", "set"));
-    assert_eq!(second["components"]["picture"], serde_json::json!({ "platform": "select" }), "card 352's picture is removed");
+    assert_eq!(
+        second["components"]["picture"],
+        serde_json::json!({ "platform": "select" }),
+        "card 352's picture is removed"
+    );
     assert_eq!(second["components"]["patch"], serde_json::json!({ "platform": "sensor" }), "and its patch");
-    assert_eq!(second["components"]["brightness"]["command_topic"], two("brightness", "set"), "the light is still its own");
+    assert_eq!(
+        second["components"]["brightness"]["command_topic"],
+        two("brightness", "set"),
+        "the light is still its own"
+    );
     // What card 352 left on the broker is cleared.
     seen.until(&two("picture", "state"), "the old picture state cleared", str::is_empty).await;
     seen.until(&two("patch", "state"), "the old patch state cleared", str::is_empty).await;
@@ -432,7 +501,10 @@ async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
     // A rename follows: the channel's device name and every select's options.
     assert_eq!(post(at, "/api/v1/channels/rename", r#"{"channel":2,"name":"Den"}"#).await.status, 200);
     seen.until_json(&ch2_config, "the device renamed", |v| v["device"]["name"] == "Den").await;
-    seen.until_json(&first_config, "the option renamed", |v| v["components"]["channel"]["options"] == serde_json::json!(["Channel 1", "Den"])).await;
+    seen.until_json(&first_config, "the option renamed", |v| {
+        v["components"]["channel"]["options"] == serde_json::json!(["Channel 1", "Den"])
+    })
+    .await;
 
     // A delete follows too: a panel on the channel goes to Channel 1, the
     // device is removed, the options drop it.
@@ -443,7 +515,10 @@ async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
     seen.until(&ch2("picture", "state"), "its states cleared", str::is_empty).await;
     seen.until(&ch2("patch", "state"), "its patch cleared", str::is_empty).await;
     seen.until(&two("channel", "state"), "the panel on Channel 1 again", |p| p == "Channel 1").await;
-    seen.until_json(&first_config, "the option gone", |v| v["components"]["channel"]["options"] == serde_json::json!(["Channel 1"])).await;
+    seen.until_json(&first_config, "the option gone", |v| {
+        v["components"]["channel"]["options"] == serde_json::json!(["Channel 1"])
+    })
+    .await;
     assert_eq!(channel_of(at, "bb0002").await, 1);
     // A pick on a channel that has gone is dropped, not a crash.
     ha.publish(ch2("picture", "set"), QoS::AtLeastOnce, false, "Flock").await.unwrap();
@@ -451,7 +526,10 @@ async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
 
     // Renaming a panel still renames its device (the first is named on the
     // Settings screen, and does not follow).
-    assert_eq!(post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{b_port}","name":"Kitchen"}}"#)).await.status, 200);
+    assert_eq!(
+        post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{b_port}","name":"Kitchen"}}"#)).await.status,
+        200
+    );
     seen.until_json(&second_config, "the new name", |v| v["device"]["name"] == "Kitchen").await;
 
     // Forgetting a panel removes its device and clears its states; the first
@@ -463,9 +541,13 @@ async fn channels_are_ha_devices_and_a_panels_channel_is_a_select() {
 
     // A channel left over, and "Remove from Home Assistant" clears all of it.
     assert_eq!(post(at, "/api/v1/channels/new", r#"{"name":"Last"}"#).await.status, 200);
-    seen.until_json(&format!("{PREFIX}/device/screeny_{id}_ch3/config"), "the last channel's device", |v| v["device"]["name"] == "Last").await;
+    seen.until_json(&format!("{PREFIX}/device/screeny_{id}_ch3/config"), "the last channel's device", |v| {
+        v["device"]["name"] == "Last"
+    })
+    .await;
     assert_eq!(post(at, "/api/v1/home_assistant/forget", "{}").await.status, 200);
     seen.until(&first_config, "the first config removed", str::is_empty).await;
-    seen.until(&format!("{PREFIX}/device/screeny_{id}_ch3/config"), "the channel's config removed", str::is_empty).await;
+    seen.until(&format!("{PREFIX}/device/screeny_{id}_ch3/config"), "the channel's config removed", str::is_empty)
+        .await;
     studio.stop().await;
 }

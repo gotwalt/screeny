@@ -57,18 +57,36 @@ pub const DIGITS: [&[Stroke]; 10] = [
     // the stem is the remaining third and meets the bowl's shoulder, not its
     // side. (The first 5 hung a small round bowl off the *side* of a stem 13
     // LEDs long, and the author saw it at once: lopsided, all neck.)
-    &[Seg(-4.4, -B, 4.6, -B), Seg(-4.4, -B, -4.4, -1.88), Arc(0.0, 0.5, A, 208.4, 360.0), Seg(A, 0.5, A, 5.0), Arc(0.0, 5.0, A, 0.0, 165.0)],
+    &[
+        Seg(-4.4, -B, 4.6, -B),
+        Seg(-4.4, -B, -4.4, -1.88),
+        Arc(0.0, 0.5, A, 208.4, 360.0),
+        Seg(A, 0.5, A, 5.0),
+        Arc(0.0, 5.0, A, 0.0, 165.0),
+    ],
     // 6: the 0 with a bowl closed inside its lower two thirds and its top
     // right left open - one construction with the 0, the 5 and the 9, so the
     // face reads as a family. Told from the 8 by its flat left side and open
     // shoulder, from the 0 by the bar across its middle.
-    &[Arc(0.0, -5.0, A, 180.0, 318.0), Seg(-A, -5.0, -A, 5.0), Arc(0.0, 5.0, A, 0.0, 180.0), Seg(A, 1.0, A, 5.0), Arc(0.0, 1.0, A, 180.0, 360.0)],
+    &[
+        Arc(0.0, -5.0, A, 180.0, 318.0),
+        Seg(-A, -5.0, -A, 5.0),
+        Arc(0.0, 5.0, A, 0.0, 180.0),
+        Seg(A, 1.0, A, 5.0),
+        Arc(0.0, 1.0, A, 180.0, 360.0),
+    ],
     // 7: bar and diagonal, no crossbar.
     &[Seg(-4.9, -B, 5.0, -B), Seg(5.0, -B, -1.8, B)],
     // 8: two circles, pinched waist.
     &[Arc(0.0, -5.0, A, 0.0, 360.0), Arc(0.0, 5.0, A, 0.0, 360.0)],
     // 9: the 6 turned through half a turn, exactly.
-    &[Arc(0.0, 5.0, A, 0.0, 138.0), Seg(A, -5.0, A, 5.0), Arc(0.0, -5.0, A, 180.0, 360.0), Seg(-A, -5.0, -A, -1.0), Arc(0.0, -1.0, A, 0.0, 180.0)],
+    &[
+        Arc(0.0, 5.0, A, 0.0, 138.0),
+        Seg(A, -5.0, A, 5.0),
+        Arc(0.0, -5.0, A, 180.0, 360.0),
+        Seg(-A, -5.0, -A, -1.0),
+        Arc(0.0, -1.0, A, 0.0, 180.0),
+    ],
 ];
 
 /// Distance in LEDs from `(x, y)` to digit `d`'s skeleton, `(x, y)` measured

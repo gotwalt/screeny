@@ -120,8 +120,7 @@ fn run(id: &str) -> Run {
     let mut pipeline = Pipeline::new(output);
 
     let cfg = LinkConfig { cadence: Cadence::Free, ..LinkConfig::default() };
-    let mut out =
-        SenderOutput::attach(device, cfg).expect("the simulator is on loopback and answers");
+    let mut out = SenderOutput::attach(device, cfg).expect("the simulator is on loopback and answers");
 
     // Measure against the device that is actually connected, exactly as
     // `screeny-art play` does.
@@ -214,7 +213,8 @@ fn an_indexed_patch_arrives_pixel_exact() {
         assert!(pairs.len() >= FRAMES - 2, "{id}: only {} of {FRAMES} frames arrived", pairs.len());
 
         for (i, j) in pairs {
-            let (palette, indices) = wires[i].indexed.as_ref().unwrap_or_else(|| panic!("{id}: frame {i} is not indexed"));
+            let (palette, indices) =
+                wires[i].indexed.as_ref().unwrap_or_else(|| panic!("{id}: frame {i} is not indexed"));
             assert!(measured[i].exact, "{id}: frame {i} was not sent exactly ({})", measured[i].codec_name());
             assert!(sents[i].exact(), "{id}: the link disagrees with the meter about frame {i}");
             assert_eq!(
@@ -223,7 +223,11 @@ fn an_indexed_patch_arrives_pixel_exact() {
                 "{id}: frame {i} would show something other than palette[index]"
             );
             // And therefore also: what the studio drew is what the panel shows.
-            assert_eq!(as_shown(&shown[j].decoded), previews[i], "{id}: frame {i}'s preview is not what the panel shows");
+            assert_eq!(
+                as_shown(&shown[j].decoded),
+                previews[i],
+                "{id}: frame {i}'s preview is not what the panel shows"
+            );
         }
     }
 }
@@ -242,7 +246,8 @@ fn a_continuous_patch_matches_the_preview() {
     for (i, j) in pairs {
         assert!(wires[i].indexed.is_none(), "{id} is supposed to be a continuous patch");
         assert_eq!(
-            as_shown(&shown[j].decoded), previews[i],
+            as_shown(&shown[j].decoded),
+            previews[i],
             "{id}: frame {i} reached the panel as something other than the preview"
         );
         if !measured[i].exact {
@@ -250,7 +255,10 @@ fn a_continuous_patch_matches_the_preview() {
             assert_ne!(previews[i], wires[i].rgb, "{id}: frame {i} claims to be lossy but nothing changed");
         }
         assert_eq!(shown[j].codec, measured[i].codec, "{id}: frame {i}'s codec is not the one the meter chose");
-        assert_eq!(shown[j].bytes as u32, measured[i].bytes, "{id}: frame {i}'s size is not the one the meter measured");
+        assert_eq!(
+            shown[j].bytes as u32, measured[i].bytes,
+            "{id}: frame {i}'s size is not the one the meter measured"
+        );
     }
     assert!(lossy > 0, "{id} should have more colours than the exact path can carry");
 }

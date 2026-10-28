@@ -275,7 +275,9 @@ pub fn check_name(name: &str) -> Result<String, String> {
         return Err("A setting's name cannot have line breaks or control characters in it.".into());
     }
     if is_default_name(name) {
-        return Err(format!("`{DEFAULT_SETTING}` is the patch's own setting, so it cannot be the name of one of yours."));
+        return Err(format!(
+            "`{DEFAULT_SETTING}` is the patch's own setting, so it cannot be the name of one of yours."
+        ));
     }
     Ok(name.to_string())
 }
@@ -602,7 +604,11 @@ impl PatchMemory {
     /// Nothing worth writing down.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.seed.is_none() && self.params.is_empty() && self.speed.is_none() && self.setting.is_empty() && self.settings.is_empty()
+        self.seed.is_none()
+            && self.params.is_empty()
+            && self.speed.is_none()
+            && self.setting.is_empty()
+            && self.settings.is_empty()
     }
 }
 
@@ -1006,7 +1012,9 @@ fn clean_memory(raw: Option<&serde_json::Value>, repaired: &mut Vec<String>) -> 
         if screeny_art::patch::find(patch).is_none() {
             unknown += 1;
             if unknown > MAX_UNKNOWN_PATCHES {
-                repaired.push(format!("`{patch}` is not a patch here and there were already {MAX_UNKNOWN_PATCHES} such entries; dropped"));
+                repaired.push(format!(
+                    "`{patch}` is not a patch here and there were already {MAX_UNKNOWN_PATCHES} such entries; dropped"
+                ));
                 continue;
             }
         }
@@ -1042,7 +1050,9 @@ fn clean_memory(raw: Option<&serde_json::Value>, repaired: &mut Vec<String>) -> 
         let setting = if setting.is_empty() || settings.contains_key(&setting) {
             setting
         } else {
-            repaired.push(format!("`{patch}` was on a setting called `{setting}`, which is not in the file; it is on {DEFAULT_SETTING}"));
+            repaired.push(format!(
+                "`{patch}` was on a setting called `{setting}`, which is not in the file; it is on {DEFAULT_SETTING}"
+            ));
             String::new()
         };
         let m = PatchMemory { seed, params, speed, setting, settings };
@@ -1091,7 +1101,11 @@ fn clean_speed(raw: Option<&serde_json::Value>, whose: &str, repaired: &mut Vec<
 /// Bounded ([`MAX_SETTINGS`]) and checked by the same name rules a person's
 /// typing goes through, because this file can be hand-edited and a name nobody
 /// can see the whole of is no use to anybody.
-fn clean_settings(patch: &str, raw: Option<&serde_json::Value>, repaired: &mut Vec<String>) -> BTreeMap<String, Setting> {
+fn clean_settings(
+    patch: &str,
+    raw: Option<&serde_json::Value>,
+    repaired: &mut Vec<String>,
+) -> BTreeMap<String, Setting> {
     let mut out = BTreeMap::new();
     let Some(serde_json::Value::Object(entries)) = raw else {
         if raw.is_some_and(|v| !v.is_null()) {
@@ -1108,7 +1122,9 @@ fn clean_settings(patch: &str, raw: Option<&serde_json::Value>, repaired: &mut V
             }
         };
         if out.len() >= MAX_SETTINGS {
-            repaired.push(format!("`{patch}` had more than {MAX_SETTINGS} settings; `{name}` and any after it were dropped"));
+            repaired.push(format!(
+                "`{patch}` had more than {MAX_SETTINGS} settings; `{name}` and any after it were dropped"
+            ));
             break;
         }
         // A second name that differs only in case is one nobody could tell
@@ -1126,13 +1142,15 @@ fn clean_settings(patch: &str, raw: Option<&serde_json::Value>, repaired: &mut V
             Some(v) => match v.as_u64().and_then(|n| u32::try_from(n).ok()) {
                 Some(n) => n,
                 None => {
-                    repaired.push(format!("the seed saved in `{name}` (`{patch}`) was not a seed; {DEFAULT_SEED} instead"));
+                    repaired
+                        .push(format!("the seed saved in `{name}` (`{patch}`) was not a seed; {DEFAULT_SEED} instead"));
                     DEFAULT_SEED
                 }
             },
         };
         let params = clean_params(setting.get("params"), &format!("`{name}`'s saved"), repaired);
-        let speed = clean_speed(setting.get("speed"), &format!("the speed saved in `{name}` (`{patch}`)"), repaired).unwrap_or(1.0);
+        let speed = clean_speed(setting.get("speed"), &format!("the speed saved in `{name}` (`{patch}`)"), repaired)
+            .unwrap_or(1.0);
         out.insert(name, Setting { seed, params, speed });
     }
     out
@@ -1359,7 +1377,10 @@ fn interpret(mut raw: serde_json::Value) -> Result<Interpreted, String> {
     // Card 311's Home Assistant settings.
     let home_assistant = match raw.get("home_assistant") {
         None | Some(serde_json::Value::Null) => None,
-        Some(v) => match serde_json::from_value::<crate::ha::HaSettings>(v.clone()).map_err(|e| e.to_string()).and_then(crate::ha::HaSettings::check) {
+        Some(v) => match serde_json::from_value::<crate::ha::HaSettings>(v.clone())
+            .map_err(|e| e.to_string())
+            .and_then(crate::ha::HaSettings::check)
+        {
             Ok(s) => Some(s),
             Err(why) => {
                 repaired.push(format!("the Home Assistant settings could not be read and were forgotten: {why}"));
@@ -1371,11 +1392,8 @@ fn interpret(mut raw: serde_json::Value) -> Result<Interpreted, String> {
     // `patches`: this build's `Persisted` has no field for it, and it is read
     // forgivingly (a missing or malformed one is the default, never a reason
     // to condemn the file).
-    let legacy: LegacyPreview = raw
-        .get("preview")
-        .cloned()
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default();
+    let legacy: LegacyPreview =
+        raw.get("preview").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     if let Some(o) = raw.as_object_mut() {
         o.remove("patches");
         o.remove("pieces");
@@ -1694,8 +1712,21 @@ fn migrate_to_v8(state: &mut Persisted, repaired: &mut Vec<String>) {
             Some(def) => sparse(def, &p.params),
             None => p.params,
         };
-        state.channels.push(StoredChannel { id: next, patch: p.patch, setting, seed: p.seed, params, ..StoredChannel::default() });
-        state.panels.push(StoredPanel { device: p.device, on: p.on, channel: next, output: Some(p.output), brightness: p.brightness });
+        state.channels.push(StoredChannel {
+            id: next,
+            patch: p.patch,
+            setting,
+            seed: p.seed,
+            params,
+            ..StoredChannel::default()
+        });
+        state.panels.push(StoredPanel {
+            device: p.device,
+            on: p.on,
+            channel: next,
+            output: Some(p.output),
+            brightness: p.brightness,
+        });
         next += 1;
     }
     let mut lost = Vec::new();
@@ -1705,7 +1736,11 @@ fn migrate_to_v8(state: &mut Persisted, repaired: &mut Vec<String>) {
         }
         let moved = match screeny_art::patch::find(patch) {
             Some(def) => {
-                let work = Working { params: sparse(def, &entry.params), seed: entry.seed.unwrap_or(DEFAULT_SEED), speed: 1.0 };
+                let work = Working {
+                    params: sparse(def, &entry.params),
+                    seed: entry.seed.unwrap_or(DEFAULT_SEED),
+                    speed: 1.0,
+                };
                 modified(&state.patches, def, &entry.setting, &work)
             }
             // A patch this build has not got cannot be compared with anything;
@@ -1758,7 +1793,11 @@ fn migrate_to_v9(state: &mut Persisted) {
     }
     state.panels.retain(|p| p.device != UNBOUND);
     if state.channels.is_empty() {
-        state.channels.push(StoredChannel { id: HOME_CHANNEL, name: default_channel_name(HOME_CHANNEL), ..StoredChannel::default() });
+        state.channels.push(StoredChannel {
+            id: HOME_CHANNEL,
+            name: default_channel_name(HOME_CHANNEL),
+            ..StoredChannel::default()
+        });
     }
 }
 
@@ -1787,7 +1826,10 @@ fn repair_panels(state: &mut Persisted, repaired: &mut Vec<String>) {
         if !state.channels.is_empty() {
             repaired.push("Channel 1 was not in the file; it is back, on the default patch".to_string());
         }
-        state.channels.insert(0, StoredChannel { id: HOME_CHANNEL, name: default_channel_name(HOME_CHANNEL), ..StoredChannel::default() });
+        state.channels.insert(
+            0,
+            StoredChannel { id: HOME_CHANNEL, name: default_channel_name(HOME_CHANNEL), ..StoredChannel::default() },
+        );
         ids.insert(HOME_CHANNEL);
     }
     state.channels.sort_by_key(|c| c.id);
@@ -1805,7 +1847,10 @@ fn repair_panels(state: &mut Persisted, repaired: &mut Vec<String>) {
         p.output = None;
         if !ids.contains(&p.channel) {
             if p.channel != 0 {
-                repaired.push(format!("panel {} was on channel {}, which is not in the file; it is on Channel 1", p.device, p.channel));
+                repaired.push(format!(
+                    "panel {} was on channel {}, which is not in the file; it is on Channel 1",
+                    p.device, p.channel
+                ));
             }
             p.channel = HOME_CHANNEL;
         }
@@ -1861,10 +1906,16 @@ fn note_retired_modes(raw: &serde_json::Value, repaired: &mut Vec<String>) {
         .map(|es| es.iter().map(|e| format!("{} {}", text(e, "at"), text(e, "mode"))).collect())
         .unwrap_or_default();
     if !modes.is_empty() {
-        repaired.push(format!("modes are retired (card 310: Home Assistant picks a patch and setting now); they were {}", modes.join(", ")));
+        repaired.push(format!(
+            "modes are retired (card 310: Home Assistant picks a patch and setting now); they were {}",
+            modes.join(", ")
+        ));
     }
     if !entries.is_empty() {
-        repaired.push(format!("the timetable is retired (card 310: Home Assistant schedules now); it had {}", entries.join(", ")));
+        repaired.push(format!(
+            "the timetable is retired (card 310: Home Assistant schedules now); it had {}",
+            entries.join(", ")
+        ));
     }
 }
 
@@ -2029,10 +2080,7 @@ fn device_named(devices: &[StoredDevice], to: &str) -> Option<String> {
     if to.is_empty() {
         return None;
     }
-    devices
-        .iter()
-        .find(|d| d.id == to || d.instance == to || d.address == to)
-        .map(|d| d.id.clone())
+    devices.iter().find(|d| d.id == to || d.instance == to || d.address == to).map(|d| d.id.clone())
 }
 
 // ---------------------------------------------------------------- writing ---
@@ -2114,10 +2162,7 @@ impl Store {
         });
         let writer = if dir.is_some() {
             let inner2 = Arc::clone(&inner);
-            std::thread::Builder::new()
-                .name("state".into())
-                .spawn(move || write_loop(&inner2))
-                .ok()
+            std::thread::Builder::new().name("state".into()).spawn(move || write_loop(&inner2)).ok()
         } else {
             None
         };
@@ -2307,7 +2352,11 @@ mod tests {
     struct Temp(PathBuf);
     impl Temp {
         fn new(tag: &str) -> Temp {
-            let p = std::env::temp_dir().join(format!("screeny-studio-{tag}-{}-{:?}", std::process::id(), std::thread::current().id()));
+            let p = std::env::temp_dir().join(format!(
+                "screeny-studio-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
             let _ = std::fs::remove_dir_all(&p);
             std::fs::create_dir_all(&p).expect("a temp dir");
             Temp(p)
@@ -2341,7 +2390,13 @@ mod tests {
         let mut want = Persisted::default();
         want.devices.push(StoredDevice { id: "abc123".into(), name: "desk".into(), ..StoredDevice::default() });
         want.channels.push(StoredChannel { id: 1, name: "Channel 1".into(), ..StoredChannel::default() });
-        want.channels.push(StoredChannel { id: 4, name: "Kitchen".into(), patch: "metaballs".into(), seed: 7, ..StoredChannel::default() });
+        want.channels.push(StoredChannel {
+            id: 4,
+            name: "Kitchen".into(),
+            patch: "metaballs".into(),
+            seed: 7,
+            ..StoredChannel::default()
+        });
         want.channels.push(StoredChannel { id: 5, name: "Nobody".into(), ..StoredChannel::default() });
         want.panels.push(StoredPanel { device: "abc123".into(), channel: 4, ..StoredPanel::default() });
         want.panels.push(StoredPanel { device: "home01".into(), ..StoredPanel::default() });
@@ -2402,7 +2457,8 @@ mod tests {
     #[test]
     fn a_file_with_no_version_is_migrated_rather_than_thrown_away() {
         let dir = Temp::new("migrate");
-        std::fs::write(dir.0.join(FILE), r#"{"players":[{"device":"abc","piece":"metaballs","seed":3}]}"#).expect("write");
+        std::fs::write(dir.0.join(FILE), r#"{"players":[{"device":"abc","piece":"metaballs","seed":3}]}"#)
+            .expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
         assert_eq!(loaded.version, SCHEMA_VERSION);
         assert_eq!(loaded.panels.len(), 1);
@@ -2527,12 +2583,12 @@ mod tests {
         let def = metaballs();
         let hue = spec(def, "hue");
         let remembered = BTreeMap::from([
-            ("hue".to_string(), 2.5),                // good, and must survive all of this
-            ("gone".to_string(), 1.0),               // a parameter this build does not have
-            ("speed".to_string(), 99.0),             // above the range
-            ("spread".to_string(), -99.0),           // below the range
-            ("count".to_string(), f32::NAN),         // not a number
-            ("samples".to_string(), f32::INFINITY),  // not a number either
+            ("hue".to_string(), 2.5),                        // good, and must survive all of this
+            ("gone".to_string(), 1.0),                       // a parameter this build does not have
+            ("speed".to_string(), 99.0),                     // above the range
+            ("spread".to_string(), -99.0),                   // below the range
+            ("count".to_string(), f32::NAN),                 // not a number
+            ("samples".to_string(), f32::INFINITY),          // not a number either
             ("size".to_string(), spec(def, "size").default), // already the default
         ]);
         let (usable, repaired) = usable_params(&remembered, def.params);
@@ -2674,7 +2730,11 @@ mod tests {
 
         // What the panel was playing is its channel's now (card 350) - only
         // the values that were actually moved, not the whole v1 dump.
-        assert_eq!(player(&loaded, 0).params, BTreeMap::from([("size".to_string(), 2.5)]), "only `size` was off its default");
+        assert_eq!(
+            player(&loaded, 0).params,
+            BTreeMap::from([("size".to_string(), 2.5)]),
+            "only `size` was off its default"
+        );
         // The design view's tuning was merged into the memory by v2 and is
         // showing nowhere, so v8 has nowhere to keep it: it is named, once.
         assert!(!loaded.patches.contains_key("clocks-numerals"));
@@ -2880,7 +2940,11 @@ mod tests {
             assert_eq!(player(&loaded, 0).output.dither, screeny_art::dither::Dither::Bayer8);
 
             let said = store.health().repaired;
-            assert_eq!(said.len(), 2, "fps {rate}: `fps` said once, not per player, and the retired playback once: {said:?}");
+            assert_eq!(
+                said.len(),
+                2,
+                "fps {rate}: `fps` said once, not per player, and the retired playback once: {said:?}"
+            );
             assert!(said[1].contains("card 302"), "{said:?}");
             assert!(said[0].contains(&format!("`fps` ({rate})")), "{}", said[0]);
             assert!(
@@ -3018,7 +3082,10 @@ mod tests {
         // memory is the named settings - one bad value never cost them.
         let m = &loaded.patches;
         assert_eq!(m.keys().collect::<Vec<_>>(), ["no-such-patch"], "{m:?}");
-        assert_eq!(m["no-such-patch"].settings["Mine"].seed, 4, "an unknown patch keeps its settings, so a patch that comes back gets them");
+        assert_eq!(
+            m["no-such-patch"].settings["Mine"].seed, 4,
+            "an unknown patch keeps its settings, so a patch that comes back gets them"
+        );
         assert!(store.health().last_error.is_none());
     }
 
@@ -3056,7 +3123,11 @@ mod tests {
         assert_eq!(player(&loaded, 0).seed, 77, "the default patch's own remembered seed");
         assert_eq!(player(&loaded, 0).speed, 1.0, "speed is retired (card 302): 1.00x whatever was remembered");
         assert_eq!(player(&loaded, 0).params["rest"], 3.0, "and its own parameters");
-        assert!(!player(&loaded, 0).params.contains_key("scale"), "never the missing patch's: {:?}", player(&loaded, 0).params);
+        assert!(
+            !player(&loaded, 0).params.contains_key("scale"),
+            "never the missing patch's: {:?}",
+            player(&loaded, 0).params
+        );
 
         let h = store.health();
         assert!(h.recovered.as_ref().is_some_and(|w| w.contains("v7")), "migrated to v8 (card 350): {:?}", h.recovered);
@@ -3122,8 +3193,9 @@ mod tests {
     #[test]
     fn unknown_patches_are_capped() {
         let dir = Temp::new("cap");
-        let entries: Vec<String> =
-            (0..MAX_UNKNOWN_PATCHES + 20).map(|i| format!(r#""ghost-{i:03}": {{"settings": {{"A": {{"seed": {i}}}}}}}"#)).collect();
+        let entries: Vec<String> = (0..MAX_UNKNOWN_PATCHES + 20)
+            .map(|i| format!(r#""ghost-{i:03}": {{"settings": {{"A": {{"seed": {i}}}}}}}"#))
+            .collect();
         let file = format!(
             r#"{{"version":{SCHEMA_VERSION},"patches":{{{},"metaballs":{{"settings":{{"A":{{"seed":1}}}}}}}}}}"#,
             entries.join(",")
@@ -3149,8 +3221,11 @@ mod tests {
         }
         store.flush();
         store.stop();
-        let left: Vec<String> =
-            std::fs::read_dir(&dir.0).expect("readdir").filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let left: Vec<String> = std::fs::read_dir(&dir.0)
+            .expect("readdir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
         assert_eq!(left, vec![FILE.to_string()], "the state directory should hold exactly the state file");
         let text = std::fs::read_to_string(dir.0.join(FILE)).expect("read");
         let back: Persisted = serde_json::from_str(&text).expect("the file parses");
@@ -3278,7 +3353,8 @@ mod tests {
         // Card 151: the same claim, schemas on - a v3 file passes through
         // v4's renaming, v5's settings and v8's panels and channels (card 350)
         // in one start and is written as the current schema.
-        for want in ["\"panels\"", "\"channels\"", "\"patch\"", "\"output\"", &format!("\"version\": {SCHEMA_VERSION}")] {
+        for want in ["\"panels\"", "\"channels\"", "\"patch\"", "\"output\"", &format!("\"version\": {SCHEMA_VERSION}")]
+        {
             assert!(text.contains(want), "the new file should say {want}:\n{text}");
         }
         // `settings` is card 151's word now - a patch's named settings - but
@@ -3415,7 +3491,10 @@ mod tests {
         }
         let too_long = "x".repeat(MAX_NAME_CHARS + 1);
         let why = check_name(&too_long).expect_err("too long");
-        assert!(why.contains(&format!("{MAX_NAME_CHARS}")) && why.contains(&format!("{}", MAX_NAME_CHARS + 1)), "{why}");
+        assert!(
+            why.contains(&format!("{MAX_NAME_CHARS}")) && why.contains(&format!("{}", MAX_NAME_CHARS + 1)),
+            "{why}"
+        );
 
         // Saving trims, and a name that differs only in case is refused rather
         // than made into a second setting nobody could tell from the first.
@@ -3515,8 +3594,14 @@ mod tests {
 
         // Loaded, it is not modified - although the file still holds the
         // values this build cannot use.
-        assert!(!modified(&memory, def, "From before", &usable), "a repaired setting must not read as modified for ever");
-        assert!(memory["metaballs"].settings["From before"].params.contains_key("gone"), "and the file is left as it was");
+        assert!(
+            !modified(&memory, def, "From before", &usable),
+            "a repaired setting must not read as modified for ever"
+        );
+        assert!(
+            memory["metaballs"].settings["From before"].params.contains_key("gone"),
+            "and the file is left as it was"
+        );
     }
 
     /// A setting a patch has not got, and a name that has gone from under the
@@ -3580,7 +3665,11 @@ mod tests {
         assert_eq!(player(&loaded, 0).speed, 1.0, "speed is retired (card 302)");
         assert_eq!(loaded.panels[0].device, "aa11bb");
 
-        assert_eq!(player(&loaded, 0).params, BTreeMap::from([("mood".to_string(), 3.0)]), "the tuning, on its channel");
+        assert_eq!(
+            player(&loaded, 0).params,
+            BTreeMap::from([("mood".to_string(), 3.0)]),
+            "the tuning, on its channel"
+        );
         assert_eq!(setting_of(&loaded, 0), "", "a v4 file has no settings, so it is on Default");
         // A v4 file has no named settings to carry, and its working copies
         // are the channels' since card 350: nothing is left in the memory.
@@ -3588,7 +3677,11 @@ mod tests {
 
         assert!(store.health().recovered.is_some_and(|w| w.contains("v4")), "it says so once");
         let said = store.health().repaired;
-        assert_eq!(said.len(), 3, "a good v4 file needs only the retired `fps` and speed, and card 350, said: {said:?}");
+        assert_eq!(
+            said.len(),
+            3,
+            "a good v4 file needs only the retired `fps` and speed, and card 350, said: {said:?}"
+        );
         assert!(said[0].starts_with("`fps`"), "{}", said[0]);
         assert!(said[1].contains("card 302"), "{}", said[1]);
         assert!(said[2].contains("`clocks-numerals`, `metaballs`") && !said[2].contains("dials"), "{}", said[2]);
@@ -3618,7 +3711,10 @@ mod tests {
         assert_eq!(loaded.patches["metaballs"].settings["Lava"].params["hue"], 2.5);
         assert_eq!(loaded.patches["metaballs"].settings["Lava"].speed, 1.0, "retired (card 302), and said");
         assert!(store.health().repaired.iter().any(|r| r.contains("card 302")));
-        assert!(!store.health().repaired.iter().any(|r| r.contains("card 350")), "a working copy that is showing is not lost");
+        assert!(
+            !store.health().repaired.iter().any(|r| r.contains("card 350")),
+            "a working copy that is showing is not lost"
+        );
 
         store.save(loaded.clone());
         store.flush();
@@ -3708,7 +3804,11 @@ mod tests {
         std::fs::write(dir.0.join(FILE), &file).expect("write");
         let (store, loaded) = Store::open(Some(&dir.0));
         assert_eq!(loaded.patches["metaballs"].settings.len(), MAX_SETTINGS);
-        assert!(store.health().repaired.iter().any(|s| s.contains(&format!("{MAX_SETTINGS}"))), "{:?}", store.health().repaired);
+        assert!(
+            store.health().repaired.iter().any(|s| s.contains(&format!("{MAX_SETTINGS}"))),
+            "{:?}",
+            store.health().repaired
+        );
     }
 
     /// **v5 -> v6** (card 302), on a realistic v5 file: the shape the live
@@ -3754,7 +3854,11 @@ mod tests {
         assert_eq!(loaded.version, SCHEMA_VERSION);
         assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(5))).expect("the backup"), v5, "kept byte for byte");
         let said = format!("v{SCHEMA_VERSION}");
-        assert!(store.health().recovered.is_some_and(|w| w.contains("v5") && w.contains(&said)), "{:?}", store.health().recovered);
+        assert!(
+            store.health().recovered.is_some_and(|w| w.contains("v5") && w.contains(&said)),
+            "{:?}",
+            store.health().recovered
+        );
         assert!(!dir.0.join(BAD_FILE).exists());
 
         // The tuning, intact.
@@ -3768,7 +3872,10 @@ mod tests {
         assert_eq!(dials.settings["Evening"].params, p.params);
         assert_eq!(dials.settings["Busy"].seed, 11);
         let balls = &loaded.patches["metaballs"];
-        assert_eq!(balls.settings["Lava"].params, BTreeMap::from([("count".to_string(), 8.0), ("hue".to_string(), 330.0)]));
+        assert_eq!(
+            balls.settings["Lava"].params,
+            BTreeMap::from([("count".to_string(), 8.0), ("hue".to_string(), 330.0)])
+        );
 
         // What card 302 retired, and nothing else.
         assert_eq!(p.speed, 1.0, "1.7x loads as 1.00x");
@@ -3785,7 +3892,10 @@ mod tests {
         // And the named setting still loads as itself - not modified.
         let def = screeny_art::patch::find("clocks-dials").expect("clocks-dials");
         let work = Working { params: sparse(def, &p.params), seed: p.seed, speed: p.speed };
-        assert!(!modified(&loaded.patches, def, "Evening", &work), "Evening is still Evening, unmodified, after the retirement");
+        assert!(
+            !modified(&loaded.patches, def, "Evening", &work),
+            "Evening is still Evening, unmodified, after the retirement"
+        );
     }
 
     /// **Card 350: a realistic v7 file** - two panels (the owner's second
@@ -3821,7 +3931,11 @@ mod tests {
         let (store, loaded) = Store::open(Some(&dir.0));
 
         assert_eq!(loaded.version, SCHEMA_VERSION);
-        assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(7))).expect("the backup"), LIVE_V7, "kept byte for byte");
+        assert_eq!(
+            std::fs::read_to_string(dir.0.join(backup_name(7))).expect("the backup"),
+            LIVE_V7,
+            "kept byte for byte"
+        );
         assert!(store.health().recovered.is_some_and(|w| w.contains("v7") && w.contains("state.v7.json")));
 
         // The focused player first: a route without `panel` means the panel
@@ -3834,7 +3948,10 @@ mod tests {
         let second = player(&loaded, 0);
         assert_eq!((second.patch.as_str(), second.seed, second.on), ("metaballs", 1, false));
         let first = player(&loaded, 1);
-        assert_eq!((first.patch.as_str(), first.seed, first.brightness, first.on), ("clocks-dials", 4242, Some(96), true));
+        assert_eq!(
+            (first.patch.as_str(), first.seed, first.brightness, first.on),
+            ("clocks-dials", 4242, Some(96), true)
+        );
         assert_eq!(first.params, BTreeMap::from([("mood".to_string(), 3.0)]));
         assert_eq!(loaded.output, Output::default(), "output is the studio's since v10: Channel 1's (the focused panel's), so the second panel's bayer4 is dropped");
         assert_eq!(setting_of(&loaded, 1), "Evening", "and its channel is on the setting it was on");
@@ -3929,12 +4046,17 @@ mod tests {
         assert_eq!(loaded.version, SCHEMA_VERSION);
         assert!(store.health().recovered.is_some_and(|w| w.contains("v8") && w.contains("state.v8.json")));
         assert!(dir.0.join("state.v8.json").exists(), "the v8 file is kept");
-        let c: Vec<(u32, &str, &str, u32)> = loaded.channels.iter().map(|c| (c.id, c.name.as_str(), c.patch.as_str(), c.seed)).collect();
+        let c: Vec<(u32, &str, &str, u32)> =
+            loaded.channels.iter().map(|c| (c.id, c.name.as_str(), c.patch.as_str(), c.seed)).collect();
         let bats = if screeny_art::patch::find("bats").is_some() { "bats" } else { default_patch() };
         let vesta = if screeny_art::patch::find("vesta").is_some() { "vesta" } else { default_patch() };
         assert_eq!((c[0].0, c[0].1, c[0].2, c[0].3), (1, "Channel 1", bats, 11), "{c:?}");
         assert_eq!((c[1].0, c[1].1, c[1].2), (2, "Channel 2", vesta));
-        assert_eq!(loaded.output.dither, screeny_art::dither::Dither::Bayer4, "the studio has Channel 1's output (from its first member)");
+        assert_eq!(
+            loaded.output.dither,
+            screeny_art::dither::Dither::Bayer4,
+            "the studio has Channel 1's output (from its first member)"
+        );
         assert!(loaded.output.panel_model, "and Channel 2's panel_model=false is dropped");
         assert_eq!(loaded.panels.iter().map(|p| p.channel).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(loaded.panels[0].brightness, Some(96), "brightness stays the panel's");
@@ -3971,7 +4093,11 @@ mod tests {
         let (_store, loaded) = Store::open(Some(&dir.0));
         let c: Vec<(u32, &str)> = loaded.channels.iter().map(|c| (c.id, c.patch.as_str())).collect();
         assert_eq!(c, [(1, "metaballs"), (2, "flock")], "in id order, numbered from 1");
-        assert_eq!(loaded.output.dither, screeny_art::dither::Dither::Bayer8, "Channel 1's output, from the page's stand-in, is the studio's");
+        assert_eq!(
+            loaded.output.dither,
+            screeny_art::dither::Dither::Bayer8,
+            "Channel 1's output, from the page's stand-in, is the studio's"
+        );
         let p: Vec<(&str, u32)> = loaded.panels.iter().map(|p| (p.device.as_str(), p.channel)).collect();
         assert_eq!(p, [("a", 2), ("b", 2), ("idle", 1)], "the stand-in is gone; the idle panel is on Channel 1");
     }
@@ -3994,7 +4120,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.0.join("state.v9.json")).expect("the v9 file is kept"), v9);
         assert_eq!(loaded.output.dither, screeny_art::dither::Dither::Bayer8, "Channel 1's");
         assert_eq!(loaded.output.panel, screeny_art::panel::Panel::Dithered);
-        assert!(loaded.output.limiter.enabled && loaded.output.panel_model, "all of it, and not Hall's panel_model=false");
+        assert!(
+            loaded.output.limiter.enabled && loaded.output.panel_model,
+            "all of it, and not Hall's panel_model=false"
+        );
         assert_eq!(loaded.channels[1].name, "Hall", "the channels are as they were");
 
         store.save(loaded.clone());
@@ -4042,7 +4171,11 @@ mod tests {
         assert_eq!(loaded.version, SCHEMA_VERSION);
         let said = store.health().repaired;
         assert_eq!(said.len(), 2, "{said:?}");
-        assert!(said[0].contains("Day = flock / as left, Night = vesta / Default, Late = vesta / as left"), "{}", said[0]);
+        assert!(
+            said[0].contains("Day = flock / as left, Night = vesta / Default, Late = vesta / as left"),
+            "{}",
+            said[0]
+        );
         assert!(said[1].contains("07:00 Day, 22:00 Night, 23:30 Late"), "{}", said[1]);
         assert_eq!(std::fs::read_to_string(dir.0.join(backup_name(6))).expect("the backup"), old, "kept byte for byte");
         store.save(loaded);

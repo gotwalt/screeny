@@ -68,23 +68,17 @@ impl Control {
         let op = req.op();
         for attempt in 0..4 {
             self.sock.send(&buf[..n]).map_err(|e| e.to_string())?;
-            self.sock
-                .set_read_timeout(Some(REPLY_TIMEOUT))
-                .map_err(|e| e.to_string())?;
+            self.sock.set_read_timeout(Some(REPLY_TIMEOUT)).map_err(|e| e.to_string())?;
             let mut rx = [0u8; MAX_UDP_PAYLOAD];
             match self.sock.recv(&mut rx) {
                 Ok(len) => {
-                    let pkt = ControlPacket::parse(&rx[..len])
-                        .map_err(|e| format!("reply did not parse: {e:?}"))?;
+                    let pkt = ControlPacket::parse(&rx[..len]).map_err(|e| format!("reply did not parse: {e:?}"))?;
                     if !pkt.is_reply() || pkt.req_id != req_id || pkt.op != op {
                         continue; // somebody else's packet; keep waiting
                     }
                     return Ok(OwnedReply::from(&pkt));
                 }
-                Err(e)
-                    if e.kind() == io::ErrorKind::WouldBlock
-                        || e.kind() == io::ErrorKind::TimedOut =>
-                {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
                     if attempt == 3 {
                         return Err(format!("no reply to op {op:#04x} after 4 attempts"));
                     }
@@ -132,23 +126,13 @@ impl Control {
     }
 
     /// `raw` with the wait spelled out.
-    pub fn raw_timeout(
-        &mut self,
-        bytes: &[u8],
-        timeout: Duration,
-    ) -> Result<Option<Vec<u8>>, String> {
+    pub fn raw_timeout(&mut self, bytes: &[u8], timeout: Duration) -> Result<Option<Vec<u8>>, String> {
         self.sock.send(bytes).map_err(|e| e.to_string())?;
-        self.sock
-            .set_read_timeout(Some(timeout))
-            .map_err(|e| e.to_string())?;
+        self.sock.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
         let mut rx = [0u8; MAX_UDP_PAYLOAD];
         match self.sock.recv(&mut rx) {
             Ok(n) => Ok(Some(rx[..n].to_vec())),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(None)
-            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => Ok(None),
             Err(e) => Err(e.to_string()),
         }
     }
@@ -186,17 +170,10 @@ impl OwnedReply {
             Ok(Reply::Telemetry(t)) => OwnedReply::Telemetry(t),
             Ok(Reply::Brightness { applied }) => OwnedReply::Brightness { applied },
             Ok(Reply::Idle { mode }) => OwnedReply::Idle { mode },
-            Ok(Reply::Wifi { ssid, state }) => OwnedReply::Wifi {
-                ssid: ssid.to_string(),
-                state,
-            },
-            Ok(Reply::Busy {
-                reason,
-                lock_holder_ms_remaining,
-            }) => OwnedReply::Busy {
-                reason,
-                remaining_ms: lock_holder_ms_remaining,
-            },
+            Ok(Reply::Wifi { ssid, state }) => OwnedReply::Wifi { ssid: ssid.to_string(), state },
+            Ok(Reply::Busy { reason, lock_holder_ms_remaining }) => {
+                OwnedReply::Busy { reason, remaining_ms: lock_holder_ms_remaining }
+            }
             Ok(Reply::Err { code }) => OwnedReply::Err { code },
             Ok(_) => OwnedReply::Empty,
             Err(code) => OwnedReply::Undecodable { op: pkt.op, code },
@@ -239,11 +216,7 @@ impl FrameLink {
         let sock = UdpSocket::bind("0.0.0.0:0")?;
         sock.connect(addr)?;
         sock.set_nonblocking(true)?;
-        Ok(FrameLink {
-            sock,
-            sent: 0,
-            seq: 0,
-        })
+        Ok(FrameLink { sock, sent: 0, seq: 0 })
     }
 
     /// Start the sequence somewhere other than 0. Section 3.2: `seq` MAY start
@@ -288,17 +261,9 @@ impl FrameLink {
         timestamp_us: Option<u32>,
         payload: &[u8],
     ) -> io::Result<()> {
-        let pkt = FramePacket {
-            codec,
-            flags,
-            seq,
-            timestamp_us,
-            payload,
-        };
+        let pkt = FramePacket { codec, flags, seq, timestamp_us, payload };
         let mut buf = vec![0u8; pkt.encoded_len()];
-        let n = pkt
-            .write(&mut buf)
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        let n = pkt.write(&mut buf).map_err(|e| io::Error::other(format!("{e:?}")))?;
         self.sock.send(&buf[..n])?;
         Ok(())
     }
@@ -367,12 +332,7 @@ pub struct Pacer {
 
 impl Pacer {
     pub fn new(fps: f64) -> Self {
-        Pacer {
-            start: Instant::now(),
-            period: Duration::from_nanos((1e9 / fps) as u64),
-            n: 0,
-            skipped: 0,
-        }
+        Pacer { start: Instant::now(), period: Duration::from_nanos((1e9 / fps) as u64), n: 0, skipped: 0 }
     }
 
     pub fn elapsed(&self) -> Duration {

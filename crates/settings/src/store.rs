@@ -141,9 +141,7 @@ impl<E> From<SsError<E>> for StoreError {
             SsError::Corrupted { .. } => StoreError::Corrupted,
             SsError::FullStorage | SsError::ItemTooBig => StoreError::Full,
             SsError::BufferTooSmall(n) => StoreError::Scratch(n),
-            SsError::BufferTooBig | SsError::SerializationError(_) | SsError::LogicBug { .. } => {
-                StoreError::Internal
-            }
+            SsError::BufferTooBig | SsError::SerializationError(_) | SsError::LogicBug { .. } => StoreError::Internal,
             // `Error` is `#[non_exhaustive]`.
             _ => StoreError::Internal,
         }
@@ -246,9 +244,7 @@ impl LoadReport {
     /// True when every setting came out of flash and nothing went wrong.
     #[must_use]
     pub const fn is_clean(&self) -> bool {
-        matches!(self.schema, SchemaState::Current)
-            && self.fallback.is_empty()
-            && self.error.is_none()
+        matches!(self.schema, SchemaState::Current) && self.fallback.is_empty() && self.error.is_none()
     }
 
     /// True when the partition simply has nothing in it yet: a new device, or
@@ -298,9 +294,7 @@ impl<F: NorFlash> Store<F> {
     /// panic is not available to us.
     pub fn new(flash: F, flash_range: Range<u32>) -> Result<Self, MapConfigError> {
         let config = MapConfig::try_new(flash_range)?;
-        Ok(Self {
-            map: MapStorage::new(flash, config, Cache::new_uncached()),
-        })
+        Ok(Self { map: MapStorage::new(flash, config, Cache::new_uncached()) })
     }
 
     /// The flash back, for a caller that needs it (and for tests that want the
@@ -349,19 +343,13 @@ impl<F: NorFlash> Store<F> {
 
         // Wi-Fi. An absent or zero-length SSID means "no credentials"; the PSK
         // is not even consulted in that case.
-        match self
-            .fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID)
-            .await
-        {
+        match self.fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID).await {
             Err(e) => report.note(Fields::WIFI, Some(e)),
             Ok(None) => report.note(Fields::WIFI, None),
             Ok(Some(raw)) if raw.is_empty() => report.note(Fields::WIFI, None),
             Ok(Some(raw)) => match Ssid::new(&raw) {
                 Err(e) => report.note(Fields::WIFI, Some(StoreError::Invalid(e))),
-                Ok(ssid) => match self
-                    .fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK)
-                    .await
-                {
+                Ok(ssid) => match self.fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK).await {
                     Err(e) => report.note(Fields::WIFI, Some(e)),
                     Ok(psk) => {
                         let bytes = psk.as_deref().unwrap_or(&[]);
@@ -426,11 +414,7 @@ impl<F: NorFlash> Store<F> {
     /// # Errors
     /// [`StoreError`]. Nothing is written when the value is refused or the
     /// scratch buffer is too small.
-    pub async fn save_wifi(
-        &mut self,
-        scratch: &mut [u8],
-        wifi: &Wifi,
-    ) -> Result<Write, StoreError> {
+    pub async fn save_wifi(&mut self, scratch: &mut [u8], wifi: &Wifi) -> Result<Write, StoreError> {
         check_scratch(scratch)?;
         let ssid = wifi.ssid.as_bytes();
         let psk = wifi.psk.as_bytes();
@@ -439,12 +423,8 @@ impl<F: NorFlash> Store<F> {
         }
         self.prepare(scratch).await?;
 
-        let cur_ssid = self
-            .fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID)
-            .await?;
-        let cur_psk = self
-            .fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK)
-            .await?;
+        let cur_ssid = self.fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID).await?;
+        let cur_psk = self.fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK).await?;
         if cur_ssid.as_deref() == Some(ssid) && cur_psk.as_deref().unwrap_or(&[]) == psk {
             return Ok(Write::Skipped);
         }
@@ -474,12 +454,8 @@ impl<F: NorFlash> Store<F> {
         check_scratch(scratch)?;
         self.prepare(scratch).await?;
 
-        let cur_ssid = self
-            .fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID)
-            .await?;
-        let cur_psk = self
-            .fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK)
-            .await?;
+        let cur_ssid = self.fetch_bytes::<MAX_SSID_LEN>(scratch, key::WIFI_SSID).await?;
+        let cur_psk = self.fetch_bytes::<MAX_PSK_LEN>(scratch, key::WIFI_PSK).await?;
         let ssid_clear = cur_ssid.as_deref().unwrap_or(&[]).is_empty();
         let psk_clear = cur_psk.as_deref().unwrap_or(&[]).is_empty();
         if ssid_clear && psk_clear {
@@ -499,11 +475,7 @@ impl<F: NorFlash> Store<F> {
     ///
     /// # Errors
     /// [`StoreError`].
-    pub async fn save_name(
-        &mut self,
-        scratch: &mut [u8],
-        name: &Name,
-    ) -> Result<Write, StoreError> {
+    pub async fn save_name(&mut self, scratch: &mut [u8], name: &Name) -> Result<Write, StoreError> {
         check_scratch(scratch)?;
         self.prepare(scratch).await?;
         let want = name.as_bytes();
@@ -524,11 +496,7 @@ impl<F: NorFlash> Store<F> {
     ///
     /// # Errors
     /// [`StoreError`].
-    pub async fn save_brightness(
-        &mut self,
-        scratch: &mut [u8],
-        level: u8,
-    ) -> Result<Write, StoreError> {
+    pub async fn save_brightness(&mut self, scratch: &mut [u8], level: u8) -> Result<Write, StoreError> {
         self.save_u8(scratch, key::BRIGHTNESS, level).await
     }
 
@@ -536,11 +504,7 @@ impl<F: NorFlash> Store<F> {
     ///
     /// # Errors
     /// [`StoreError`].
-    pub async fn save_idle_mode(
-        &mut self,
-        scratch: &mut [u8],
-        mode: IdleMode,
-    ) -> Result<Write, StoreError> {
+    pub async fn save_idle_mode(&mut self, scratch: &mut [u8], mode: IdleMode) -> Result<Write, StoreError> {
         self.save_u8(scratch, key::IDLE_MODE, mode.as_u8()).await
     }
 
@@ -549,13 +513,8 @@ impl<F: NorFlash> Store<F> {
     ///
     /// # Errors
     /// [`StoreError`].
-    pub async fn save_colour_order(
-        &mut self,
-        scratch: &mut [u8],
-        order: ColourOrder,
-    ) -> Result<Write, StoreError> {
-        self.save_u8(scratch, key::COLOUR_ORDER, order.as_u8())
-            .await
+    pub async fn save_colour_order(&mut self, scratch: &mut [u8], order: ColourOrder) -> Result<Write, StoreError> {
+        self.save_u8(scratch, key::COLOUR_ORDER, order.as_u8()).await
     }
 
     /// Factory reset: erase the whole region.
@@ -585,13 +544,9 @@ impl<F: NorFlash> Store<F> {
             Some(SCHEMA_VERSION) => Ok(()),
             Some(_) => {
                 self.map.erase_all().await?;
-                self.store_u8(scratch, key::SCHEMA_VERSION, SCHEMA_VERSION)
-                    .await
+                self.store_u8(scratch, key::SCHEMA_VERSION, SCHEMA_VERSION).await
             }
-            None => {
-                self.store_u8(scratch, key::SCHEMA_VERSION, SCHEMA_VERSION)
-                    .await
-            }
+            None => self.store_u8(scratch, key::SCHEMA_VERSION, SCHEMA_VERSION).await,
         }
     }
 
@@ -606,17 +561,11 @@ impl<F: NorFlash> Store<F> {
     }
 
     async fn fetch_u8(&mut self, scratch: &mut [u8], k: u8) -> Result<Option<u8>, StoreError> {
-        self.map
-            .fetch_item::<u8>(scratch, &k)
-            .await
-            .map_err(StoreError::from)
+        self.map.fetch_item::<u8>(scratch, &k).await.map_err(StoreError::from)
     }
 
     async fn store_u8(&mut self, scratch: &mut [u8], k: u8, v: u8) -> Result<(), StoreError> {
-        self.map
-            .store_item::<u8>(scratch, &k, &v)
-            .await
-            .map_err(StoreError::from)
+        self.map.store_item::<u8>(scratch, &k, &v).await.map_err(StoreError::from)
     }
 
     /// Fetch a byte-string item and copy it out, so the borrow on `scratch`
@@ -631,17 +580,12 @@ impl<F: NorFlash> Store<F> {
             None => Ok(None),
             // Longer than this schema allows: a later firmware, or damage that
             // still passed the CRC. Either way the caller sees "unusable".
-            Some(bytes) => Vec::from_slice(bytes)
-                .map(Some)
-                .map_err(|_| StoreError::Internal),
+            Some(bytes) => Vec::from_slice(bytes).map(Some).map_err(|_| StoreError::Internal),
         }
     }
 
     async fn store_bytes(&mut self, scratch: &mut [u8], k: u8, v: &[u8]) -> Result<(), StoreError> {
-        self.map
-            .store_item::<&[u8]>(scratch, &k, &v)
-            .await
-            .map_err(StoreError::from)
+        self.map.store_item::<&[u8]>(scratch, &k, &v).await.map_err(StoreError::from)
     }
 }
 

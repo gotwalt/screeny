@@ -317,12 +317,7 @@ pub struct Config<'a> {
 
 impl Default for Config<'_> {
     fn default() -> Self {
-        Config {
-            ap_ssid: "screeny-000000",
-            has_stored: false,
-            form: UriForm::NoPass,
-            timing: Timing::SPEC,
-        }
+        Config { ap_ssid: "screeny-000000", has_stored: false, form: UriForm::NoPass, timing: Timing::SPEC }
     }
 }
 
@@ -421,9 +416,7 @@ impl Provisioner {
     pub fn overlay_state(&self) -> Option<u8> {
         match self.state {
             State::Portal => Some(tstate::PROVISIONING),
-            State::Trial if self.trial_origin() == Some(TrialOrigin::Portal) => {
-                Some(tstate::PROVISIONING)
-            }
+            State::Trial if self.trial_origin() == Some(TrialOrigin::Portal) => Some(tstate::PROVISIONING),
             _ => None,
         }
     }
@@ -535,21 +528,11 @@ impl Provisioner {
             // portal to point anybody at: the panel stays the stream's.
             State::Trial if self.trial_origin() == Some(TrialOrigin::Online) => None,
             State::Portal | State::Trial => {
-                let layout = if uri::fits(self.form, &self.ap_ssid) {
-                    Layout::QrAndName
-                } else {
-                    Layout::Text
-                };
-                Some(Screen::Portal {
-                    ssid: &self.ap_ssid,
-                    layout,
-                    form: self.form,
-                })
+                let layout = if uri::fits(self.form, &self.ap_ssid) { Layout::QrAndName } else { Layout::Text };
+                Some(Screen::Portal { ssid: &self.ap_ssid, layout, form: self.form })
             }
             State::Online => match (self.connected_since, self.ip) {
-                (Some(since), Some(ip))
-                    if now_ms.wrapping_sub(since) < self.timing.connected_screen_ms =>
-                {
+                (Some(since), Some(ip)) if now_ms.wrapping_sub(since) < self.timing.connected_screen_ms => {
                     Some(Screen::Connected { ip })
                 }
                 _ => None,
@@ -658,8 +641,7 @@ impl Provisioner {
                 Event::Tick
                     if self.has_stored
                         && self.ap_clients == 0
-                        && now_ms.wrapping_sub(self.portal_since)
-                            >= self.timing.portal_retry_ms =>
+                        && now_ms.wrapping_sub(self.portal_since) >= self.timing.portal_retry_ms =>
                 {
                     self.start_join(JoinTarget::Stored, now_ms, &mut out);
                 }
@@ -720,24 +702,13 @@ impl Provisioner {
         self.target = which;
         self.attempt = 1;
         self.attempt_since = now_ms;
-        push(
-            out,
-            Action::StartJoin {
-                which,
-                attempt: self.attempt,
-            },
-        );
+        push(out, Action::StartJoin { which, attempt: self.attempt });
     }
 
     fn begin_trial(&mut self, now_ms: u32, ssid: &str, origin: TrialOrigin, out: &mut Actions) {
         let mut name: String<SSID_MAX> = String::new();
         let _ = name.push_str(crate::screen::cut(ssid, SSID_MAX));
-        self.trial = Some(Trial {
-            ssid: name,
-            outcome: TrialOutcome::Trying,
-            ip: None,
-            origin,
-        });
+        self.trial = Some(Trial { ssid: name, outcome: TrialOutcome::Trying, ip: None, origin });
         // A new post is a new question, so the last one's sticky answer goes.
         self.trial_failed_sticky = false;
         self.state = State::Trial;
@@ -754,13 +725,7 @@ impl Provisioner {
         }
         // On the portal path the AP is *not* dropped: that is the whole point
         // of APSTA here, and it is what lets the page report the result.
-        push(
-            out,
-            Action::StartJoin {
-                which: JoinTarget::Trial,
-                attempt: 1,
-            },
-        );
+        push(out, Action::StartJoin { which: JoinTarget::Trial, attempt: 1 });
     }
 
     fn attempt_expired(&self, now_ms: u32) -> bool {
@@ -778,13 +743,7 @@ impl Provisioner {
             if more {
                 self.attempt += 1;
                 self.attempt_since = now_ms;
-                push(
-                    out,
-                    Action::StartJoin {
-                        which: JoinTarget::Trial,
-                        attempt: self.attempt,
-                    },
-                );
+                push(out, Action::StartJoin { which: JoinTarget::Trial, attempt: self.attempt });
                 return;
             }
             // **Nothing is written to the store** on either path.
@@ -819,13 +778,7 @@ impl Provisioner {
         if self.attempt < self.timing.join_attempts {
             self.attempt += 1;
             self.attempt_since = now_ms;
-            push(
-                out,
-                Action::StartJoin {
-                    which: self.target,
-                    attempt: self.attempt,
-                },
-            );
+            push(out, Action::StartJoin { which: self.target, attempt: self.attempt });
             return;
         }
         self.enter_portal(now_ms, true, out);
@@ -837,12 +790,7 @@ impl Provisioner {
         // succeeded, never before.
         match self.target {
             JoinTarget::Trial => {
-                push(
-                    out,
-                    Action::CommitCredentials {
-                        which: JoinTarget::Trial,
-                    },
-                );
+                push(out, Action::CommitCredentials { which: JoinTarget::Trial });
                 self.has_stored = true;
             }
             JoinTarget::Stored => {}
@@ -859,11 +807,7 @@ impl Provisioner {
         // and the phone is about to lose the AP. A `TrialOrigin::Online` post
         // came from a browser on the LAN that is being told the address in
         // its own reply, so the panel stays the stream's.
-        self.connected_since = if from_trial && origin == Some(TrialOrigin::Portal) {
-            Some(now_ms)
-        } else {
-            None
-        };
+        self.connected_since = if from_trial && origin == Some(TrialOrigin::Portal) { Some(now_ms) } else { None };
         self.state = State::Online;
         self.ip = Some(ip);
         self.link_down_since = None;

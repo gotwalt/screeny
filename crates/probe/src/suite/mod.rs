@@ -172,12 +172,7 @@ impl Ctx {
 /// A `CONTROL` datagram with an arbitrary opcode, flags and body, which
 /// `Request::write` quite rightly will not build.
 pub fn control_dgram(op: u8, flags: u8, req_id: u16, body: &[u8]) -> Vec<u8> {
-    let mut d = vec![
-        screeny_proto::MAGIC,
-        (screeny_proto::VERSION << 4) | screeny_proto::TYPE_CONTROL,
-        op,
-        flags,
-    ];
+    let mut d = vec![screeny_proto::MAGIC, (screeny_proto::VERSION << 4) | screeny_proto::TYPE_CONTROL, op, flags];
     d.extend_from_slice(&req_id.to_le_bytes());
     d.extend_from_slice(&(body.len() as u16).to_le_bytes());
     d.extend_from_slice(body);
@@ -239,11 +234,7 @@ pub fn rejected_and_silent(cx: &mut Ctx, bytes: &[u8]) -> Result<Outcome, String
                 false,
                 format!(
                     "rejected {} rx {} shown {} decode {} stale {}, {answered} replies",
-                    t.frames_rejected,
-                    t.frames_rx,
-                    t.frames_shown,
-                    t.frames_dropped_decode,
-                    t.frames_dropped_stale
+                    t.frames_rejected, t.frames_rx, t.frames_shown, t.frames_dropped_decode, t.frames_dropped_stale
                 ),
             );
         }
@@ -260,13 +251,7 @@ pub fn shown(cx: &mut Ctx, codec: u8, flags: u8, payload: &[u8]) -> Result<(bool
         cx.settle();
         let t = cx.telemetry()?;
         if t.frames_shown >= 1 && t.frames_dropped_decode == 0 && t.frames_rejected == 0 {
-            return Ok((
-                true,
-                format!(
-                    "shown {} last_codec {:#04x} ({attempt} try)",
-                    t.frames_shown, t.last_codec
-                ),
-            ));
+            return Ok((true, format!("shown {} last_codec {:#04x} ({attempt} try)", t.frames_shown, t.last_codec)));
         }
         if attempt == 3 {
             return Ok((
@@ -373,10 +358,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         })
         .collect();
     if rules.is_empty() {
-        return Err(format!(
-            "no rules match --only {:?}",
-            opts.only.clone().unwrap_or_default()
-        ));
+        return Err(format!("no rules match --only {:?}", opts.only.clone().unwrap_or_default()));
     }
 
     let mut ctrl = Control::connect(opts.ctrl_addr).map_err(|e| e.to_string())?;
@@ -415,15 +397,8 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
     println!();
 
     // Armed from here on: every exit path puts the device back.
-    let restore = Restore {
-        ctrl_addr: opts.ctrl_addr,
-        brightness: found.brightness,
-        idle: opts.restore_idle,
-    };
-    let mut guard = RestoreGuard {
-        inner: restore,
-        armed: true,
-    };
+    let restore = Restore { ctrl_addr: opts.ctrl_addr, brightness: found.brightness, idle: opts.restore_idle };
+    let mut guard = RestoreGuard { inner: restore, armed: true };
     let on_interrupt = restore;
     if let Err(e) = ctrlc::set_handler(move || {
         eprintln!("\ninterrupted (signal): restoring the device");
@@ -444,11 +419,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         brightness_found: found.brightness,
     };
 
-    let mut s = Summary {
-        passed: 0,
-        failed: 0,
-        skipped: 0,
-    };
+    let mut s = Summary { passed: 0, failed: 0, skipped: 0 };
     let total = rules.len();
     for (i, r) in rules.iter().enumerate() {
         let outcome = if r.flags & LOOPBACK_ONLY != 0 && !loopback {
@@ -464,9 +435,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
             };
             match first {
                 Outcome::Fail(why) if r.flags & RETRY != 0 => match (r.run)(&mut cx) {
-                    Ok(Outcome::Fail(again)) => {
-                        Outcome::Fail(format!("{again} (first try: {why})"))
-                    }
+                    Ok(Outcome::Fail(again)) => Outcome::Fail(format!("{again} (first try: {why})")),
                     Ok(Outcome::Pass(d)) => Outcome::Pass(format!("{d} on the second try")),
                     Ok(o) => o,
                     Err(e) => Outcome::Fail(format!("error: {e} (first try: {why})")),
@@ -484,13 +453,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
             Outcome::Fail(_) => s.failed += 1,
             Outcome::Skip(_) => s.skipped += 1,
         }
-        println!(
-            "[{:>2}/{}] {:<5} {:<56} {tag}  {detail}",
-            i + 1,
-            total,
-            r.section,
-            r.name
-        );
+        println!("[{:>2}/{}] {:<5} {:<56} {tag}  {detail}", i + 1, total, r.section, r.name);
     }
 
     println!();
@@ -509,9 +472,6 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
             s.failed += 1;
         }
     }
-    println!(
-        "conformance: {} passed, {} failed, {} skipped",
-        s.passed, s.failed, s.skipped
-    );
+    println!("conformance: {} passed, {} failed, {} skipped", s.passed, s.failed, s.skipped);
     Ok(s)
 }

@@ -34,7 +34,7 @@ use crate::color::{oklch, smoothstep, Rgb};
 use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
 use crate::patch::{choice, param, Ctx, ParamSpec, Patch, PatchDef, Playing};
-use sim::{v3, Sim, Tuning, V3, STEP};
+use sim::{v3, Sim, Tuning, STEP, V3};
 use std::f32::consts::TAU;
 
 pub const DEF: PatchDef = PatchDef {
@@ -214,14 +214,7 @@ pub(crate) struct View {
 impl View {
     pub(crate) fn of(sim: &Sim, sun: V3) -> View {
         let (right, up, fwd) = sim.view();
-        View {
-            eye: sim.camera().pos,
-            right,
-            up,
-            fwd,
-            focal: 0.5 * W as f32 / (0.5 * FOV.to_radians()).tan(),
-            sun,
-        }
+        View { eye: sim.camera().pos, right, up, fwd, focal: 0.5 * W as f32 / (0.5 * FOV.to_radians()).tan(), sun }
     }
 
     /// Panel coordinates of a world point, and how far in front it is.
@@ -233,11 +226,7 @@ impl View {
             return None;
         }
         let k = self.focal / z;
-        Some((
-            0.5 * W as f32 + v.dot(self.right) * k,
-            0.5 * H as f32 - v.dot(self.up) * k,
-            z,
-        ))
+        Some((0.5 * W as f32 + v.dot(self.right) * k, 0.5 * H as f32 - v.dot(self.up) * k, z))
     }
 
     /// The direction the panel sees at these coordinates (not normalised in
@@ -640,11 +629,7 @@ fn draw_birds(sim: &Sim, view: &View, cover: &mut Coverage, dusk: bool, size: f3
         // the chest, which is the one landmark a wing cannot swing away from.
         let Some(chest) = view.project(pose.spine[2]) else { continue };
         let margin = span + 3.0;
-        if chest.0 < -margin
-            || chest.0 > W as f32 + margin
-            || chest.1 < -margin
-            || chest.1 > H as f32 + margin
-        {
+        if chest.0 < -margin || chest.0 > W as f32 + margin || chest.1 < -margin || chest.1 > H as f32 + margin {
             continue;
         }
 

@@ -112,11 +112,8 @@ async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
 
     let window = Duration::from_secs(3);
     let before = sockets_bytes(at).await;
-    let (drag, seen, own) = tokio::join!(
-        drag(at, "dragger", window),
-        watch(&mut watcher, window),
-        watch(&mut dragger, window)
-    );
+    let (drag, seen, own) =
+        tokio::join!(drag(at, "dragger", window), watch(&mut watcher, window), watch(&mut dragger, window));
     let (posts, ended_on) = drag;
     // Card 120's `sockets.bytes_sent` counts every message, state included -
     // it is incremented wherever a socket writes - so it is a fair instrument
@@ -149,11 +146,7 @@ async fn a_drag_costs_the_second_browser_a_bounded_number_of_messages() {
         seen.per_s(),
         seen.states
     );
-    assert!(
-        seen.states * 2 < posts,
-        "{} state messages for {posts} changes is not a saving",
-        seen.states
-    );
+    assert!(seen.states * 2 < posts, "{} state messages for {posts} changes is not a saving", seen.states);
     assert!(
         server_side >= seen.state_bytes as u64,
         "sockets.bytes_sent ({server_side}) counted less than the one browser received ({})",

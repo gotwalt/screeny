@@ -19,11 +19,7 @@ const PSK: &str = "password9";
 
 #[test]
 fn the_body_a_browser_sends() {
-    let golden = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/golden/wifi_form.txt"
-    ))
-    .unwrap();
+    let golden = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/wifi_form.txt")).unwrap();
     // The file ends with a newline for the sake of every editor; a real body
     // does not.
     let body = golden.strip_suffix(b"\n").unwrap_or(&golden);
@@ -52,17 +48,11 @@ fn thirty_two_bytes_of_ssid_fit_and_thirty_three_do_not() {
     assert_eq!(form.ssid().len(), MAX_SSID_LEN);
 
     let too_long = "a".repeat(MAX_SSID_LEN + 1);
-    assert_eq!(
-        parse_wifi_form(format!("ssid={too_long}&psk=").as_bytes()),
-        Err(FormError::SsidTooLong)
-    );
+    assert_eq!(parse_wifi_form(format!("ssid={too_long}&psk=").as_bytes()), Err(FormError::SsidTooLong));
     // The same limit applies after decoding, not before: 33 escaped bytes are
     // 99 characters of body and still one byte too many.
     let escaped: String = (0..=MAX_SSID_LEN).map(|_| "%61").collect();
-    assert_eq!(
-        parse_wifi_form(format!("ssid={escaped}").as_bytes()),
-        Err(FormError::SsidTooLong)
-    );
+    assert_eq!(parse_wifi_form(format!("ssid={escaped}").as_bytes()), Err(FormError::SsidTooLong));
 }
 
 #[test]
@@ -72,22 +62,13 @@ fn sixty_four_bytes_of_psk_fit_and_sixty_five_do_not() {
     assert_eq!(form.psk_len(), MAX_PSK_LEN);
 
     let too_long = "p".repeat(MAX_PSK_LEN + 1);
-    assert_eq!(
-        parse_wifi_form(format!("ssid=Example-Wifi1&psk={too_long}").as_bytes()),
-        Err(FormError::PskTooLong)
-    );
+    assert_eq!(parse_wifi_form(format!("ssid=Example-Wifi1&psk={too_long}").as_bytes()), Err(FormError::PskTooLong));
 }
 
 #[test]
 fn an_empty_ssid_is_refused() {
-    assert_eq!(
-        parse_wifi_form(b"ssid=&psk=password9"),
-        Err(FormError::SsidEmpty)
-    );
-    assert_eq!(
-        parse_wifi_form(b"psk=password9"),
-        Err(FormError::MissingSsid)
-    );
+    assert_eq!(parse_wifi_form(b"ssid=&psk=password9"), Err(FormError::SsidEmpty));
+    assert_eq!(parse_wifi_form(b"psk=password9"), Err(FormError::MissingSsid));
     assert_eq!(parse_wifi_form(b""), Err(FormError::MissingSsid));
 }
 
@@ -96,10 +77,7 @@ fn percent_encoded_utf8_survives_as_bytes() {
     // "Café du coin", as a browser encodes it.
     let form = parse_wifi_form(b"ssid=Caf%C3%A9%20du%20coin&psk=").unwrap();
     assert_eq!(form.ssid(), "Caf\u{e9} du coin".as_bytes());
-    assert_eq!(
-        core::str::from_utf8(form.ssid()).unwrap(),
-        "Caf\u{e9} du coin"
-    );
+    assert_eq!(core::str::from_utf8(form.ssid()).unwrap(), "Caf\u{e9} du coin");
     // Lower-case hex too.
     let form = parse_wifi_form(b"ssid=Caf%c3%a9&psk=").unwrap();
     assert_eq!(form.ssid(), "Caf\u{e9}".as_bytes());
@@ -156,12 +134,7 @@ fn a_truncated_escape_is_refused() {
         b"ssid=Example-Wifi1&psk=%",
         b"ssid=Example-Wifi1&psk=%2",
     ] {
-        assert_eq!(
-            parse_wifi_form(body),
-            Err(FormError::BadEscape),
-            "{:?}",
-            core::str::from_utf8(body)
-        );
+        assert_eq!(parse_wifi_form(body), Err(FormError::BadEscape), "{:?}", core::str::from_utf8(body));
     }
 }
 
@@ -181,9 +154,7 @@ fn a_duplicate_key_is_refused_rather_than_resolved() {
 
 #[test]
 fn unknown_keys_are_ignored() {
-    let form =
-        parse_wifi_form(b"form=wifi&ssid=Example-Wifi1&psk=password9&submit=Join&csrf=abc123")
-            .unwrap();
+    let form = parse_wifi_form(b"form=wifi&ssid=Example-Wifi1&psk=password9&submit=Join&csrf=abc123").unwrap();
     assert_eq!(form.ssid(), SSID.as_bytes());
     assert_eq!(form.psk(), PSK.as_bytes());
     // Including one too long to be any key of ours, which must not be
@@ -210,19 +181,10 @@ fn the_pin_and_counter_are_parsed_and_ignored() {
     assert_eq!(form.counter, Some(17));
     assert_eq!(screeny_device_api::request::check_auth(form.auth()), Ok(()));
 
-    assert_eq!(
-        parse_wifi_form(b"ssid=Example-Wifi1&counter=twelve"),
-        Err(FormError::BadCounter)
-    );
-    assert_eq!(
-        parse_wifi_form(b"ssid=Example-Wifi1&counter=99999999999"),
-        Err(FormError::BadCounter)
-    );
+    assert_eq!(parse_wifi_form(b"ssid=Example-Wifi1&counter=twelve"), Err(FormError::BadCounter));
+    assert_eq!(parse_wifi_form(b"ssid=Example-Wifi1&counter=99999999999"), Err(FormError::BadCounter));
     let long_pin = "9".repeat(17);
-    assert_eq!(
-        parse_wifi_form(format!("ssid=Example-Wifi1&pin={long_pin}").as_bytes()),
-        Err(FormError::BadPin)
-    );
+    assert_eq!(parse_wifi_form(format!("ssid=Example-Wifi1&pin={long_pin}").as_bytes()), Err(FormError::BadPin));
 }
 
 #[test]
@@ -235,11 +197,7 @@ fn a_body_longer_than_the_bound_is_refused_before_anything_else() {
     let psk: String = (0..MAX_PSK_LEN).map(|_| "%62").collect();
     let pin: String = (0..16).map(|_| "%39").collect();
     let body = format!("ssid={ssid}&psk={psk}&pin={pin}&counter=4294967295");
-    assert!(
-        body.len() <= MAX_FORM_LEN,
-        "the worst legal body is {} bytes, MAX_FORM_LEN is {MAX_FORM_LEN}",
-        body.len()
-    );
+    assert!(body.len() <= MAX_FORM_LEN, "the worst legal body is {} bytes, MAX_FORM_LEN is {MAX_FORM_LEN}", body.len());
     let form = parse_wifi_form(body.as_bytes()).unwrap();
     assert_eq!(form.ssid().len(), MAX_SSID_LEN);
     assert_eq!(form.psk_len(), MAX_PSK_LEN);

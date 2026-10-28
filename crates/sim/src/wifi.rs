@@ -128,11 +128,7 @@ impl WifiModel {
     /// Build the model and boot the machine.
     #[must_use]
     pub fn new(cfg: &Config, ip: Ipv4Addr, out: &mut Vec<Event>) -> Self {
-        let stored = if cfg.start_in_portal {
-            None
-        } else {
-            Some(cfg.wifi_ssid.clone())
-        };
+        let stored = if cfg.start_in_portal { None } else { Some(cfg.wifi_ssid.clone()) };
         let mut m = WifiModel {
             p: Provisioner::new(&ProvConfig {
                 ap_ssid: &cfg.ap_ssid,
@@ -275,9 +271,7 @@ impl WifiModel {
             State::Boot => WifiState::Disconnected,
             State::Joining | State::Trial => WifiState::Connecting,
             State::Online => WifiState::Connected,
-            State::Portal => {
-                WifiState::from_u8(self.p.wifi_state()).unwrap_or(WifiState::Disconnected)
-            }
+            State::Portal => WifiState::from_u8(self.p.wifi_state()).unwrap_or(WifiState::Disconnected),
         }
     }
 
@@ -343,11 +337,7 @@ impl WifiModel {
     /// A station joined or left the soft-AP, which is what gates the portal's
     /// ten-minute retry.
     pub fn set_ap_client(&mut self, present: bool, now_us: u64, out: &mut Vec<Event>) {
-        let ev = if present {
-            ProvEvent::ApClientAssociated
-        } else {
-            ProvEvent::ApClientLeft
-        };
+        let ev = if present { ProvEvent::ApClientAssociated } else { ProvEvent::ApClientLeft };
         self.step(ev, ms(now_us), out);
     }
 
@@ -368,13 +358,7 @@ impl WifiModel {
                         self.step(ProvEvent::Joined { ip: self.ip.octets() }, now, out);
                     }
                     WifiOutcome::Fail => {
-                        self.step(
-                            ProvEvent::JoinFailed {
-                                reason: WifiFailReason::AuthError,
-                            },
-                            now,
-                            out,
-                        );
+                        self.step(ProvEvent::JoinFailed { reason: WifiFailReason::AuthError }, now, out);
                     }
                     // Nothing comes back at all: the machine's own
                     // `join_attempt_ms` timeout is what ends this attempt.
@@ -395,10 +379,7 @@ impl WifiModel {
         }
         let after = self.p.state();
         if after != before {
-            out.push(Event::WifiPhaseChanged {
-                from: before,
-                to: after,
-            });
+            out.push(Event::WifiPhaseChanged { from: before, to: after });
         }
     }
 

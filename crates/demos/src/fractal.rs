@@ -68,47 +68,17 @@ pub struct Target {
 
 pub const REGIONS: &[Region] = &[
     // Seahorse valley, between the cardioid and the period-2 bulb.
-    Region {
-        name: "seahorse",
-        inside: (-0.1, 0.0),
-        outside: (-0.748, 0.123),
-        palette: 0,
-    },
+    Region { name: "seahorse", inside: (-0.1, 0.0), outside: (-0.748, 0.123), palette: 0 },
     // The western antenna: aim from the period-2 bulb along the needle.
-    Region {
-        name: "needle",
-        inside: (-1.0, 0.0),
-        outside: (-1.768, 0.002),
-        palette: 1,
-    },
+    Region { name: "needle", inside: (-1.0, 0.0), outside: (-1.768, 0.002), palette: 1 },
     // Elephant valley on the east flank of the cardioid.
-    Region {
-        name: "elephant",
-        inside: (0.0, 0.0),
-        outside: (0.2825, 0.0105),
-        palette: 2,
-    },
+    Region { name: "elephant", inside: (0.0, 0.0), outside: (0.2825, 0.0105), palette: 2 },
     // The northern bulb's shoulder.
-    Region {
-        name: "north",
-        inside: (-0.125, 0.744),
-        outside: (-0.1, 0.9),
-        palette: 3,
-    },
+    Region { name: "north", inside: (-0.125, 0.744), outside: (-0.1, 0.9), palette: 3 },
     // Triple spiral valley, north-west of the cardioid.
-    Region {
-        name: "triple-spiral",
-        inside: (-0.125, 0.744),
-        outside: (-0.088, 0.654),
-        palette: 4,
-    },
+    Region { name: "triple-spiral", inside: (-0.125, 0.744), outside: (-0.088, 0.654), palette: 4 },
     // South-west, toward the period-3 bulb's antenna.
-    Region {
-        name: "south-tendril",
-        inside: (-1.0, 0.0),
-        outside: (-1.257, -0.379),
-        palette: 5,
-    },
+    Region { name: "south-tendril", inside: (-1.0, 0.0), outside: (-1.257, -0.379), palette: 5 },
 ];
 
 /// Is `c` in the set, as far as a long orbit can tell? Used only for the
@@ -138,12 +108,7 @@ pub fn resolve(r: &Region) -> Target {
             by = my;
         }
     }
-    Target {
-        name: r.name,
-        cx: bx,
-        cy: by,
-        palette: r.palette,
-    }
+    Target { name: r.name, cx: bx, cy: by, palette: r.palette }
 }
 
 const BAILOUT: f64 = 256.0;
@@ -302,18 +267,10 @@ const RAMP_IDX_N: usize = 31;
 impl FractalZoom {
     pub fn new(seed: u64) -> Self {
         let panel = NOMINAL;
-        let ramps = PALETTES
-            .iter()
-            .map(|k| build_ramp(k, RAMP_N, &panel))
-            .collect();
+        let ramps = PALETTES.iter().map(|k| build_ramp(k, RAMP_N, &panel)).collect();
         let ramps_idx = PALETTES
             .iter()
-            .map(|k| {
-                build_ramp(k, RAMP_IDX_N, &panel)
-                    .into_iter()
-                    .map(lin_to_srgb8_3)
-                    .collect()
-            })
+            .map(|k| build_ramp(k, RAMP_IDX_N, &panel).into_iter().map(lin_to_srgb8_3).collect())
             .collect();
         FractalZoom {
             seed,
@@ -328,9 +285,7 @@ impl FractalZoom {
             panel,
             ramps,
             ramps_idx,
-            threads: std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4),
+            threads: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4),
             buf_a: vec![[0.0; 3]; NPIX],
             buf_b: vec![[0.0; 3]; NPIX],
         }
@@ -350,15 +305,9 @@ impl FractalZoom {
     fn legs(&self, t: f64) -> (Leg, Option<(Leg, f32)>) {
         let n = (t / self.leg_secs).floor() as i64;
         let age = t - n as f64 * self.leg_secs;
-        let cur = Leg {
-            target: self.target(n),
-            age,
-        };
+        let cur = Leg { target: self.target(n), age };
         if n > 0 && age < self.fade_secs {
-            let prev = Leg {
-                target: self.target(n - 1),
-                age: age + self.leg_secs,
-            };
+            let prev = Leg { target: self.target(n - 1), age: age + self.leg_secs };
             let w = (age / self.fade_secs) as f32;
             let w = w * w * (3.0 - 2.0 * w);
             (prev, Some((cur, w)))
@@ -463,11 +412,7 @@ impl FractalZoom {
     fn render_lin(&mut self, t: Duration, out: &mut [[f32; 3]]) {
         let ts = t.as_secs_f64();
         let (a, b) = self.legs(ts);
-        let ss = if b.is_some() {
-            (self.ss / 2).max(2)
-        } else {
-            self.ss_for(&a)
-        };
+        let ss = if b.is_some() { (self.ss / 2).max(2) } else { self.ss_for(&a) };
         let mut buf_a = std::mem::take(&mut self.buf_a);
         self.render_leg_ss(&a, ts, ss, &mut buf_a);
         match b {
@@ -566,8 +511,7 @@ impl Piece for FractalZoom {
                     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
                     let len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
                     let tproj = if len2 > 1e-9 {
-                        ((c[0] - a[0]) * ab[0] + (c[1] - a[1]) * ab[1] + (c[2] - a[2]) * ab[2])
-                            / len2
+                        ((c[0] - a[0]) * ab[0] + (c[1] - a[1]) * ab[1] + (c[2] - a[2]) * ab[2]) / len2
                     } else {
                         0.0
                     };
@@ -651,10 +595,7 @@ pub fn escape(cr: f64, ci: f64, max_iter: u32) -> Option<f64> {
 
 /// Fraction of samples that fell inside the set, for the curation test.
 pub fn interior_fraction(z: &FractalZoom, leg_age: f64, target: Target) -> f32 {
-    let leg = Leg {
-        target,
-        age: leg_age,
-    };
+    let leg = Leg { target, age: leg_age };
     let mut out = vec![[0f32; 3]; NPIX];
     z.render_leg(&leg, 0.0, &mut out);
     let black = out.iter().filter(|p| p[0] + p[1] + p[2] < 1e-6).count();

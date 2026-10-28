@@ -85,10 +85,7 @@ impl Default for Builder {
                     // a real DROM segment.
                     data: vec![0; 1024],
                 },
-                Segment {
-                    load_addr: 0x4008_0000,
-                    data: (0..8192u32).map(|i| (i % 251) as u8).collect(),
-                },
+                Segment { load_addr: 0x4008_0000, data: (0..8192u32).map(|i| (i % 251) as u8).collect() },
             ],
         }
     }
@@ -113,20 +110,14 @@ impl Builder {
     /// point: only check 2 can tell it apart from one we should run.
     #[must_use]
     pub fn wrong_chip() -> Self {
-        Builder {
-            chip_id: CHIP_ID_ESP32C3,
-            ..Self::default()
-        }
+        Builder { chip_id: CHIP_ID_ESP32C3, ..Self::default() }
     }
 
     /// A good ESP32 image of somebody else's project. Also correct in every
     /// other respect.
     #[must_use]
     pub fn wrong_project() -> Self {
-        Builder {
-            project: "esp-idf-blink",
-            ..Self::default()
-        }
+        Builder { project: "esp-idf-blink", ..Self::default() }
     }
 
     /// The whole image, ready for [`crate::Scan`].

@@ -256,12 +256,7 @@ impl Error {
                  `IP:49374`."
                     .to_string(),
             ),
-            Error::Io(e)
-                if matches!(
-                    e.raw_os_error(),
-                    Some(libc::EHOSTUNREACH) | Some(libc::ENETUNREACH)
-                ) =>
-            {
+            Error::Io(e) if matches!(e.raw_os_error(), Some(libc::EHOSTUNREACH) | Some(libc::ENETUNREACH)) => {
                 Some(match platform {
                     Platform::MacOs => format!(
                         "The address is on a local network and the OS refused to route to it.\n\n\
@@ -272,11 +267,9 @@ impl Error {
                                         `--network host`, or give an address this namespace can \
                                         reach."
                         .to_string(),
-                    Platform::Other => {
-                        "The OS refused to route to that address. Check the interface and the \
+                    Platform::Other => "The OS refused to route to that address. Check the interface and the \
                          route to that subnet."
-                            .to_string()
-                    }
+                        .to_string(),
                 })
             }
             Error::Io(e) if e.raw_os_error() == Some(libc::ECONNREFUSED) => Some(
@@ -306,10 +299,7 @@ mod tests {
     use screeny_proto::SERVICE_TYPE;
 
     fn not_found() -> Error {
-        Error::NotFound {
-            service: SERVICE_TYPE,
-            secs: 3.0,
-        }
+        Error::NotFound { service: SERVICE_TYPE, secs: 3.0 }
     }
 
     fn unreachable() -> Error {
@@ -356,15 +346,8 @@ mod tests {
         assert!(!linux.contains("System Settings"), "{linux}");
 
         let addr = "192.168.7.221:49375".parse().unwrap();
-        let timeout = Error::Timeout {
-            addr,
-            op: 0x01,
-            tries: 3,
-            timeout_ms: 250,
-        };
-        assert!(timeout
-            .hint_for(Platform::MacOs)
-            .is_some_and(|h| h.contains("System Settings")));
+        let timeout = Error::Timeout { addr, op: 0x01, tries: 3, timeout_ms: 250 };
+        assert!(timeout.hint_for(Platform::MacOs).is_some_and(|h| h.contains("System Settings")));
         assert!(timeout
             .hint_for(Platform::Linux)
             .is_some_and(|h| !h.contains("System Settings") && h.contains("screeny discover")));

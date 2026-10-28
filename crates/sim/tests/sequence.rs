@@ -75,15 +75,7 @@ fn duplicates_and_reordered_frames_are_stale() {
         (100u16.wrapping_add(0x8000), "exactly half the space away"),
     ] {
         tx.send_seq(codec::SOLID, F_KEY, seq, &p99);
-        let ev = sim.wait_for(&mut cursor, T, |e| {
-            matches!(
-                e,
-                Event::Dropped {
-                    cause: DropCause::Stale,
-                    ..
-                }
-            )
-        });
+        let ev = sim.wait_for(&mut cursor, T, |e| matches!(e, Event::Dropped { cause: DropCause::Stale, .. }));
         assert!(ev.is_some(), "{what} (seq {seq}) should have been stale");
     }
 
@@ -103,10 +95,7 @@ fn a_slow_decode_supersedes_rather_than_queues() {
     // not frames_dropped_stale - the distinction section 6.9 asks a sender to
     // act on.
     let mut cfg = Config::for_test();
-    cfg.faults = Faults {
-        decode_ms: 60,
-        ..Faults::default()
-    };
+    cfg.faults = Faults { decode_ms: 60, ..Faults::default() };
     let dev = SimDevice::start(cfg).expect("bind loopback");
     let sim = dev.handle();
     let mut tx = Sender::new(dev.frame_addr());
@@ -119,9 +108,7 @@ fn a_slow_decode_supersedes_rather_than_queues() {
     }
 
     let s = sim
-        .wait_until(T, |s| {
-            s.telemetry.frames_rx + s.telemetry.frames_dropped_stale >= n
-        })
+        .wait_until(T, |s| s.telemetry.frames_rx + s.telemetry.frames_dropped_stale >= n)
         .expect("all frames accounted for");
     let t = s.telemetry;
 
@@ -137,18 +124,12 @@ fn a_slow_decode_supersedes_rather_than_queues() {
         "every accepted frame is either shown, superseded or undecodable"
     );
     assert_eq!(t.frames_dropped_stale, 0, "nothing arrived out of order");
-    assert!(
-        t.decode_us >= 60_000,
-        "a 60 ms pretend-decode should show up in decode_us, got {}",
-        t.decode_us
-    );
+    assert!(t.decode_us >= 60_000, "a 60 ms pretend-decode should show up in decode_us, got {}", t.decode_us);
 
     // And the newest frame really is the one on the panel.
     let (last, expect) = marker(200);
     tx.send(codec::SOLID, F_KEY, &last);
-    let s = sim
-        .wait_until(T, |s| s.shown.map(|m| m.seq) == Some(n as u16))
-        .expect("the last frame");
+    let s = sim.wait_until(T, |s| s.shown.map(|m| m.seq) == Some(n as u16)).expect("the last frame");
     assert_frames_eq(&s.decoded[..], &expect, "newest wins");
 }
 
@@ -173,16 +154,10 @@ fn a_new_source_resets_the_sequence_but_not_the_counters() {
     let b = Sender::new(dev.frame_addr());
     let (p2, e2) = marker(2);
     b.send_seq(codec::SOLID, F_KEY, 0, &p2);
-    let s = sim
-        .wait_until(T, |s| s.telemetry.frames_shown >= 2)
-        .expect("the second sender's first frame");
+    let s = sim.wait_until(T, |s| s.telemetry.frames_shown >= 2).expect("the second sender's first frame");
 
     assert_frames_eq(&s.decoded[..], &e2, "the new source took the panel");
-    assert_eq!(
-        s.telemetry.frames_dropped_stale, 0,
-        "seq 0 is not stale here"
-    );
+    assert_eq!(s.telemetry.frames_dropped_stale, 0, "seq 0 is not stale here");
     assert_eq!(s.telemetry.frames_rx, 2, "counters kept running");
     assert_eq!(s.active_source, Some(b.addr()));
 }
-

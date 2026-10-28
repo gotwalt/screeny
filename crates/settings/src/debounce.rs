@@ -61,9 +61,7 @@ impl Debounce {
     /// Nothing pending.
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            changed_at: [None; 3],
-        }
+        Self { changed_at: [None; 3] }
     }
 
     /// Record that `field` changed at `now_ms`. Restarts that field's timer.
@@ -102,10 +100,6 @@ impl Debounce {
     /// the task can wait for a change instead of a timer.
     #[must_use]
     pub fn next_due_in_ms(&self, now_ms: u64) -> Option<u64> {
-        self.changed_at
-            .iter()
-            .flatten()
-            .map(|at| QUIET_MS.saturating_sub(now_ms.saturating_sub(*at)))
-            .min()
+        self.changed_at.iter().flatten().map(|at| QUIET_MS.saturating_sub(now_ms.saturating_sub(*at))).min()
     }
 }

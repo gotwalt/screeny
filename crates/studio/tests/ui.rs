@@ -90,8 +90,17 @@ async fn all_three_screens_are_served_and_so_are_their_files() {
     // (The content types are `ui::content_type`'s and are checked over real
     // HTTP in the card's Log; the test client keeps only the body.)
     for path in [
-        "/", "/index.html", "/panel", "/panel.html", "/settings", "/settings.html",
-        "/common.js", "/picture.js", "/panel.js", "/settings.js", "/style.css",
+        "/",
+        "/index.html",
+        "/panel",
+        "/panel.html",
+        "/settings",
+        "/settings.html",
+        "/common.js",
+        "/picture.js",
+        "/panel.js",
+        "/settings.js",
+        "/style.css",
     ] {
         let r = get(at, path).await;
         assert_eq!(r.status, 200, "{path}");
@@ -151,7 +160,9 @@ fn has(html: &str, sel: &str) -> bool {
     if let Some(id) = sel.strip_prefix('#') {
         html.contains(&format!("id=\"{id}\""))
     } else if let Some(class) = sel.strip_prefix('.') {
-        html.contains(&format!("\"{class}\"")) || html.contains(&format!("{class} ")) || html.contains(&format!(" {class}\""))
+        html.contains(&format!("\"{class}\""))
+            || html.contains(&format!("{class} "))
+            || html.contains(&format!(" {class}\""))
     } else {
         true
     }
@@ -198,8 +209,18 @@ fn the_screens_hold_what_the_split_says_they_do() {
     // The panel's own affairs, by the ids they are drawn into. Every one of
     // them was on the one page before this card.
     for gone in [
-        "discovery-note", "panel-out", "panel-out-label", "panel-facts", "device-block",
-        "device-facts", "device-note", "identify", "rename", "reboot", "setup", "add-to",
+        "discovery-note",
+        "panel-out",
+        "panel-out-label",
+        "panel-facts",
+        "device-block",
+        "device-facts",
+        "device-note",
+        "identify",
+        "rename",
+        "reboot",
+        "setup",
+        "add-to",
     ] {
         assert!(!INDEX_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} belongs on the Panel screen");
         assert!(PANEL_HTML.contains(&format!("id=\"{gone}\"")), "#{gone} has to still exist somewhere");
@@ -221,7 +242,16 @@ fn the_screens_hold_what_the_split_says_they_do() {
     // (card 353 made them the channel's, card 354 put them on the Picture
     // screen, and the owner has only ever wanted the defaults): one Output
     // section, on Settings, and on neither of the other two screens.
-    for moved in ["sec-output", "panel-kind", "dither", "panel-model", "codec-preview", "limiter-on", "apl-slider", "rise-slider"] {
+    for moved in [
+        "sec-output",
+        "panel-kind",
+        "dither",
+        "panel-model",
+        "codec-preview",
+        "limiter-on",
+        "apl-slider",
+        "rise-slider",
+    ] {
         assert!(SETTINGS_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is the studio's, on the Settings screen");
         assert!(!INDEX_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is not the channel's any more");
         assert!(!PANEL_HTML.contains(&format!("id=\"{moved}\"")), "#{moved} is not the panel's any more");
@@ -326,7 +356,8 @@ async fn bootstrap_carries_the_brightness_stops() {
     let studio = studio().await;
     let at = studio.addr;
     let boot = get(at, "/api/v1/bootstrap").await.json();
-    let stops: Vec<u64> = boot["brightness_stops"].as_array().expect("a list").iter().map(|v| v.as_u64().unwrap()).collect();
+    let stops: Vec<u64> =
+        boot["brightness_stops"].as_array().expect("a list").iter().map(|v| v.as_u64().unwrap()).collect();
     assert_eq!(stops.first(), Some(&0), "off is always the first stop: {stops:?}");
     assert!(stops.windows(2).all(|w| w[0] < w[1]), "strictly increasing: {stops:?}");
     assert!(stops.len() > 2 && stops.len() < 256, "the real resolution, not 256 raw values: {stops:?}");
@@ -485,11 +516,8 @@ async fn the_gpu_outcome_is_on_the_api_and_is_never_a_fault() {
     assert!(patches.iter().all(|p| p["needs_gpu"].is_boolean()), "every patch says whether it needs an adapter");
     // Built with the `gpu` feature, so there are some; without it there are
     // none, and that is the truth for that build.
-    let marked: Vec<&str> = patches
-        .iter()
-        .filter(|p| p["needs_gpu"] == true)
-        .filter_map(|p| p["id"].as_str())
-        .collect();
+    let marked: Vec<&str> =
+        patches.iter().filter(|p| p["needs_gpu"] == true).filter_map(|p| p["id"].as_str()).collect();
     let expected: Vec<&str> = screeny_art::patches::ALL
         .iter()
         .map(|d| d.id)
@@ -660,7 +688,10 @@ fn no_control_offers_a_frame_rate() {
         assert!(!html.contains(">Frames per second<"), "{what} still labels a rate control");
     }
     for (what, js) in [("picture.js", PICTURE_JS), ("panel.js", PANEL_JS)] {
-        assert!(!js.contains("'set_playback', { paused: state.paused, speed: state.speed, fps"), "{what} still sends a rate");
+        assert!(
+            !js.contains("'set_playback', { paused: state.paused, speed: state.speed, fps"),
+            "{what} still sends a rate"
+        );
         assert!(!js.contains("$('#fps')"), "{what} still reaches for a rate control");
     }
     // Nor a **readout** of it, since 2026-09-26: the rate has one right answer,
@@ -769,7 +800,10 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
         serde_json::json!(["as it was", "quiet", "hatched, quiet", "hatched, faint", "zigzag, quiet"])
     );
     assert_eq!(rest["switch"], false);
-    assert_eq!((rest["min"].as_f64(), rest["max"].as_f64(), rest["default"].as_f64()), (Some(0.0), Some(4.0), Some(2.0)));
+    assert_eq!(
+        (rest["min"].as_f64(), rest["max"].as_f64(), rest["default"].as_f64()),
+        (Some(0.0), Some(4.0), Some(2.0))
+    );
 
     // The fourteen choreographies the label could not even try to name.
     assert_eq!(param("dance")["choices"].as_array().expect("choices").len(), 14);
@@ -817,9 +851,19 @@ fn the_seed_is_not_a_control_on_the_page_at_all_any_more() {
 #[test]
 fn the_settings_control_heads_the_parameters_it_holds() {
     for id in [
-        "setting", "setting-list", "setting-mark", "setting-save", "setting-saveas", "setting-rename",
-        "setting-delete", "setting-revert", "setting-name", "setting-name-input", "setting-confirm",
-        "setting-confirm-yes", "setting-error",
+        "setting",
+        "setting-list",
+        "setting-mark",
+        "setting-save",
+        "setting-saveas",
+        "setting-rename",
+        "setting-delete",
+        "setting-revert",
+        "setting-name",
+        "setting-name-input",
+        "setting-confirm",
+        "setting-confirm-yes",
+        "setting-error",
     ] {
         assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "the settings control needs #{id}");
     }
@@ -949,8 +993,8 @@ async fn a_setting_that_cannot_be_saved_says_why_in_words() {
 
     let long = "x".repeat(screeny_studio::state::MAX_NAME_CHARS + 1);
     for (body, expect) in [
-        (r#"{"name":""}"#, "cannot be written over"),      // Save on Default
-        (r#"{"name":"   "}"#, "cannot be written over"),   // ...and a name of spaces is no name
+        (r#"{"name":""}"#, "cannot be written over"),    // Save on Default
+        (r#"{"name":"   "}"#, "cannot be written over"), // ...and a name of spaces is no name
         (r#"{"name":"Default"}"#, "patch's own setting"),
         (r#"{"name":"lava"}"#, "already a setting called `Lava`"),
         (&format!(r#"{{"name":"{long}"}}"#), "at most 40 characters"),
@@ -1039,33 +1083,45 @@ fn each_screen_is_in_the_order_it_should_stack_in() {
     // The Picture screen: the picture, View folded under it, then what
     // changes the picture. Card 301 took brightness, the panel model, the
     // limiter, Speed and pause/restart off this screen entirely.
-    order("the Picture screen", INDEX_HTML, &[
-        // Card 354: the channel row heads it, then the chosen channel's
-        // picture, and after its parameters the channel itself and its
-        // Output.
-        ("the channel row", "id=\"channels\""),
-        ("the picture", "id=\"stage\""),
-        ("view", "id=\"sec-view\""),
-        ("now playing", "id=\"sec-now\""),
-        ("parameters", "id=\"sec-params\""),
-        ("manage channel", "id=\"sec-channel\""),
-        // And the meters, which are a detail, come after all of them.
-        ("the meters", "class=\"meters\""),
-    ]);
+    order(
+        "the Picture screen",
+        INDEX_HTML,
+        &[
+            // Card 354: the channel row heads it, then the chosen channel's
+            // picture, and after its parameters the channel itself and its
+            // Output.
+            ("the channel row", "id=\"channels\""),
+            ("the picture", "id=\"stage\""),
+            ("view", "id=\"sec-view\""),
+            ("now playing", "id=\"sec-now\""),
+            ("parameters", "id=\"sec-params\""),
+            ("manage channel", "id=\"sec-channel\""),
+            // And the meters, which are a detail, come after all of them.
+            ("the meters", "class=\"meters\""),
+        ],
+    );
     // The Panel screen: the things the owner touches - its channel, the
     // switch, brightness - then what it says about itself, then the studio.
-    order("the Panel screen", PANEL_HTML, &[
-        ("the panel row", "id=\"panels\""),
-        ("the panel's name", "id=\"panel-name\""),
-        ("the panel's controls", "id=\"sec-panel\""),
-        ("its channel", "id=\"panel-channel\""),
-        ("its output switch", "id=\"panel-out\""),
-        ("the link", "id=\"sec-link\""),
-        ("the device's own facts", "id=\"device-block\""),
-        ("the studio", "id=\"sec-studio\""),
-    ]);
+    order(
+        "the Panel screen",
+        PANEL_HTML,
+        &[
+            ("the panel row", "id=\"panels\""),
+            ("the panel's name", "id=\"panel-name\""),
+            ("the panel's controls", "id=\"sec-panel\""),
+            ("its channel", "id=\"panel-channel\""),
+            ("its output switch", "id=\"panel-out\""),
+            ("the link", "id=\"sec-link\""),
+            ("the device's own facts", "id=\"device-block\""),
+            ("the studio", "id=\"sec-studio\""),
+        ],
+    );
     // The Settings screen (card 311): Home Assistant, and nothing else yet.
-    order("the Settings screen", SETTINGS_HTML, &[("Home Assistant", "id=\"sec-ha\""), ("Output", "id=\"sec-output\"")]);
+    order(
+        "the Settings screen",
+        SETTINGS_HTML,
+        &[("Home Assistant", "id=\"sec-ha\""), ("Output", "id=\"sec-output\"")],
+    );
 }
 
 /// Card 301: one nav, the same markup, on every screen - and the current
@@ -1089,7 +1145,8 @@ fn the_nav_is_on_every_screen_with_the_current_one_marked() {
         // Exactly one item is marked, and it is the screen we are actually on.
         assert_eq!(html.matches("aria-current=\"page\"").count(), 1, "{what}: exactly one nav item is current");
         let at = html.find("aria-current=\"page\"").expect("the marked link");
-        let tag = &html[html[..at].rfind('<').expect("the tag it is on")..html[at..].find("</a>").map(|n| at + n).expect("its close")];
+        let tag = &html[html[..at].rfind('<').expect("the tag it is on")
+            ..html[at..].find("</a>").map(|n| at + n).expect("its close")];
         assert!(tag.contains(current), "{what}: the marked nav item should say {current}, not: {tag}");
     }
 }
@@ -1104,14 +1161,26 @@ fn the_nav_is_on_every_screen_with_the_current_one_marked() {
 fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
     // The rows: channels (with thumbnails) on the Picture screen, panels
     // (without) on the Panel screen, each filled by one shared function.
-    assert!(INDEX_HTML.contains(r#"<div class="channels__row" id="channels">"#), "the Picture screen carries the channel row");
+    assert!(
+        INDEX_HTML.contains(r#"<div class="channels__row" id="channels">"#),
+        "the Picture screen carries the channel row"
+    );
     assert!(!INDEX_HTML.contains(r#"id="panels""#), "and not the panel row any more");
     assert!(PANEL_HTML.contains(r#"<div class="panels__row" id="panels">"#), "the Panel screen carries the panel row");
-    assert!(!SETTINGS_HTML.contains(r#"id="panels""#) && !SETTINGS_HTML.contains(r#"id="channels""#), "Settings is about the studio");
+    assert!(
+        !SETTINGS_HTML.contains(r#"id="panels""#) && !SETTINGS_HTML.contains(r#"id="channels""#),
+        "Settings is about the studio"
+    );
     assert!(COMMON_JS.contains("export function channelRow("), "one channel row, shared");
     assert!(COMMON_JS.contains("export function panelRow("), "one panel row, shared");
-    assert!(PICTURE_JS.contains("channelRow($('#channels'), { current: here, onNew: newChannel })"), "the Picture screen's row is of channels");
-    assert!(PANEL_JS.contains("panelRow($('#panels'), { path: 'panel', current: attachedId })"), "the Panel screen's of panels");
+    assert!(
+        PICTURE_JS.contains("channelRow($('#channels'), { current: here, onNew: newChannel })"),
+        "the Picture screen's row is of channels"
+    );
+    assert!(
+        PANEL_JS.contains("panelRow($('#panels'), { path: 'panel', current: attachedId })"),
+        "the Panel screen's of panels"
+    );
 
     // A channel card: thumbnail, name, picture, member chips, and New channel
     // at the end. Thumbnails are the README's cheap recipe - a socket per
@@ -1119,12 +1188,22 @@ fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
     // and the screen's own pace (0 in a hidden tab).
     let row = &COMMON_JS[COMMON_JS.find("export function channelRow(").unwrap()..];
     let row = &row[..row.find("export function panelRow(").unwrap()];
-    for needle in ["'ccard__thumb'", "span('ccard__name')", "span('ccard__pic')", "span('ccard__panels')", "span('chip', n)", "'New channel'"] {
+    for needle in [
+        "'ccard__thumb'",
+        "span('ccard__name')",
+        "span('ccard__pic')",
+        "span('ccard__panels')",
+        "span('chip', n)",
+        "'New channel'",
+    ] {
         assert!(row.contains(needle), "a channel card has {needle}");
     }
     assert!(row.contains("const THUMB_FPS = 4;"), "thumbnails at a low rate");
     assert!(row.contains("Math.min(THUMB_FPS, pace())"), "and none while the tab is hidden");
-    assert!(row.contains("{ channel: c.id, overview: false, quiet: true }"), "a thumbnail's socket is its channel's, with no overview");
+    assert!(
+        row.contains("{ channel: c.id, overview: false, quiet: true }"),
+        "a thumbnail's socket is its channel's, with no overview"
+    );
     assert!(row.contains("const wants = !mine;"), "no second socket for the channel on screen");
     let prow = &COMMON_JS[COMMON_JS.find("export function panelRow(").unwrap()..];
     assert!(!prow[..prow.find("\n}\n").unwrap()].contains("canvas"), "the panel row draws no pictures");
@@ -1145,43 +1224,74 @@ fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
         assert!(js.contains("carryNav({"), "{what} carries its channel and panel across the nav");
         assert!(js.contains("channels: (message) =>"), "{what} reads the channel overview");
     }
-    assert!(SETTINGS_JS.contains("carryNav({ channel: chosenChannel(), panel: chosenPanel() })"), "Settings hands both back");
+    assert!(
+        SETTINGS_JS.contains("carryNav({ channel: chosenChannel(), panel: chosenPanel() })"),
+        "Settings hands both back"
+    );
     assert!(SETTINGS_JS.contains("showPanelsChip("), "Settings' chip is about every panel");
     assert!(PICTURE_JS.contains("showPanelsChip("), "the Picture screen's about every panel on its channel");
 
     // Every change on the Picture screen names its channel.
-    assert!(PICTURE_JS.contains("const forHere = (args) => ({ ...(args || {}), channel: here() });"), "calls carry `channel`");
+    assert!(
+        PICTURE_JS.contains("const forHere = (args) => ({ ...(args || {}), channel: here() });"),
+        "calls carry `channel`"
+    );
     assert!(PICTURE_JS.contains("invoke(cmd, forHere(args))"), "every one of them");
 
     // The Picture screen: "On: ..." under the title, an empty channel says
     // so, its panels each with a Move to, a way to bring one here, rename and
     // delete (inline, no dialogs), and the channel's Output.
     for id in [
-        "channel-kicker", "channel-on", "empty-note", "sec-channel", "members", "members-empty", "bring", "channel-rename",
-        "channel-delete", "channel-name", "channel-name-input", "channel-confirm", "channel-confirm-yes", "manage",
+        "channel-kicker",
+        "channel-on",
+        "empty-note",
+        "sec-channel",
+        "members",
+        "members-empty",
+        "bring",
+        "channel-rename",
+        "channel-delete",
+        "channel-name",
+        "channel-name-input",
+        "channel-confirm",
+        "channel-confirm-yes",
+        "manage",
     ] {
         assert!(INDEX_HTML.contains(&format!("id=\"{id}\"")), "#{id} on the Picture screen");
     }
     assert!(PICTURE_JS.contains("`On: ${names.join(', ')}`"), "the panels this picture is on, under the title");
-    assert!(PICTURE_JS.contains("invoke('channels/new', { from: here() })"), "New channel starts as a copy of this one");
+    assert!(
+        PICTURE_JS.contains("invoke('channels/new', { from: here() })"),
+        "New channel starts as a copy of this one"
+    );
     assert!(PICTURE_JS.contains("invoke('panel/channel', { panel, channel })"), "a panel is moved by `/panel/channel`");
     assert!(PICTURE_JS.contains("invoke('channels/rename', { channel: here(), name: channelInput.value })"), "renamed");
     assert!(PICTURE_JS.contains("invoke('channels/delete', { channel: here() })"), "deleted");
-    assert!(PICTURE_JS.contains("$('#channel-delete').disabled = home;"), "Channel 1 cannot be deleted, and says so by shape");
+    assert!(
+        PICTURE_JS.contains("$('#channel-delete').disabled = home;"),
+        "Channel 1 cannot be deleted, and says so by shape"
+    );
     assert!(!PICTURE_JS.contains("set_output"), "Output is not the channel's any more");
     assert!(SETTINGS_JS.contains("invoke('set_output', { output })"), "it is the studio's, set on Settings");
     // Card 356: Manage channel is folded shut by default, after the
     // parameters, with everything that was in the channel section inside it;
     // "On: ..." under the title stays where it was.
-    let manage = &INDEX_HTML[INDEX_HTML.find("<details class=\"manage\" id=\"manage\">").expect("a Manage channel fold")..];
+    let manage =
+        &INDEX_HTML[INDEX_HTML.find("<details class=\"manage\" id=\"manage\">").expect("a Manage channel fold")..];
     let manage = &manage[..manage.find("</details>").unwrap()];
     assert!(!manage.contains(" open"), "collapsed by default");
     assert!(manage.contains("<summary>Manage channel</summary>"), "and named for what it does");
     for id in ["members", "bring", "channel-rename", "channel-delete", "channel-name", "channel-confirm"] {
         assert!(manage.contains(&format!("id=\"{id}\"")), "#{id} is inside Manage channel");
     }
-    assert!(INDEX_HTML.find("id=\"channel-on\"").unwrap() < INDEX_HTML.find("id=\"manage\"").unwrap(), "On: ... stays under the title");
-    assert!(!PICTURE_JS.contains("window.confirm") && !PICTURE_JS.contains("window.prompt"), "no native dialogs on the Picture screen");
+    assert!(
+        INDEX_HTML.find("id=\"channel-on\"").unwrap() < INDEX_HTML.find("id=\"manage\"").unwrap(),
+        "On: ... stays under the title"
+    );
+    assert!(
+        !PICTURE_JS.contains("window.confirm") && !PICTURE_JS.contains("window.prompt"),
+        "no native dialogs on the Picture screen"
+    );
 
     // The Panel screen: the channel it is on, as a select.
     for id in ["panel-channel", "panel-channel-note", "ro-channel"] {
@@ -1192,7 +1302,9 @@ fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
     assert!(!PANEL_JS.contains("set_output"), "Output is not the panel's any more");
 
     // Card 351's implicit channels are gone from every screen.
-    for (what, text) in [("index.html", INDEX_HTML), ("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("common.js", COMMON_JS)] {
+    for (what, text) in
+        [("index.html", INDEX_HTML), ("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("common.js", COMMON_JS)]
+    {
         for gone in ["same_as", "'detach'", "id=\"same-as\"", "id=\"detach\"", "id=\"shared\"", "Same as", "Detach"] {
             assert!(!text.contains(gone), "{what} should not still carry {gone}");
         }
@@ -1208,16 +1320,27 @@ fn the_picture_screen_is_a_channel_and_the_panel_screen_a_panel() {
 fn every_screen_is_sized_for_a_thumb() {
     let touch = STYLE_CSS.find("@media (pointer: coarse), (max-width: 700px)").expect("a touch block");
     let block = &STYLE_CSS[touch..touch + STYLE_CSS[touch..].find("\n}\n").expect("closed")];
-    for needle in ["min-height: 44px", "height: 44px", "::-webkit-slider-thumb", ".seg span", ".patches span", ".switch input"] {
+    for needle in
+        ["min-height: 44px", "height: 44px", "::-webkit-slider-thumb", ".seg span", ".patches span", ".switch input"]
+    {
         assert!(block.contains(needle), "the touch block should size {needle}");
     }
     assert!(STYLE_CSS.contains(".ccard__thumb"), "thumbnails are styled");
-    assert!(STYLE_CSS.matches("image-rendering: pixelated").count() >= 2, "the main canvas and the thumbnails keep crisp pixels");
+    assert!(
+        STYLE_CSS.matches("image-rendering: pixelated").count() >= 2,
+        "the main canvas and the thumbnails keep crisp pixels"
+    );
     let row = STYLE_CSS.find(".channels__row, .panels__row {").expect("the rows");
-    assert!(STYLE_CSS[row..row + 200].contains("overflow-x: auto"), "both rows scroll sideways rather than widening the page");
+    assert!(
+        STYLE_CSS[row..row + 200].contains("overflow-x: auto"),
+        "both rows scroll sideways rather than widening the page"
+    );
     assert!(block.contains(".pcard, .ccard { min-height: 48px; }"), "a card is thumb-sized");
     for (what, html) in [("index.html", INDEX_HTML), ("panel.html", PANEL_HTML), ("settings.html", SETTINGS_HTML)] {
-        assert!(html.contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#), "{what} is laid out for the device's width");
+        assert!(
+            html.contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#),
+            "{what} is laid out for the device's width"
+        );
     }
 }
 
@@ -1249,7 +1372,9 @@ fn no_url_the_pages_use_is_root_absolute() {
             assert!(!text.contains(attr), "{what} has a root-absolute URL ({attr}); use a relative one");
         }
     }
-    for (what, js) in [("common.js", COMMON_JS), ("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("settings.js", SETTINGS_JS)] {
+    for (what, js) in
+        [("common.js", COMMON_JS), ("picture.js", PICTURE_JS), ("panel.js", PANEL_JS), ("settings.js", SETTINGS_JS)]
+    {
         for (n, line) in js.lines().enumerate() {
             let t = line.trim_start();
             if t.starts_with('*') || t.starts_with("/*") || t.starts_with("//") {

@@ -131,14 +131,8 @@ const RESET_REASONS: &[ResetReason] = &[
 const FW_SLOTS: &[FwSlot] = &[FwSlot::Ota0, FwSlot::Ota1, FwSlot::Unknown];
 
 /// Every [`FwState`] the API defines.
-const FW_STATES: &[FwState] = &[
-    FwState::New,
-    FwState::PendingVerify,
-    FwState::Valid,
-    FwState::Invalid,
-    FwState::Aborted,
-    FwState::Undefined,
-];
+const FW_STATES: &[FwState] =
+    &[FwState::New, FwState::PendingVerify, FwState::Valid, FwState::Invalid, FwState::Aborted, FwState::Undefined];
 
 // The three lists above are the only place in this crate that enumerates the
 // API's variants, and these three matches are exhaustive: a variant added to
@@ -195,12 +189,8 @@ where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
     let name = s.trim();
-    serde_json::from_value::<T>(serde_json::Value::String(name.to_string())).map_err(|_| {
-        format!(
-            "{flag}: unknown value {name:?}; valid values are {}",
-            names(all).join(", ")
-        )
-    })
+    serde_json::from_value::<T>(serde_json::Value::String(name.to_string()))
+        .map_err(|_| format!("{flag}: unknown value {name:?}; valid values are {}", names(all).join(", ")))
 }
 
 /// The serde names of a list of values, in the order the enum declares them.

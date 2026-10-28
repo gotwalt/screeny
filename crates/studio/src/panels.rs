@@ -204,7 +204,12 @@ impl Panels {
     #[must_use]
     pub fn new(memory: SharedMemory, faults: bool) -> Self {
         let panels = Panels {
-            inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
+            inner: Mutex::new(Inner {
+                panels: Vec::new(),
+                channels: BTreeMap::new(),
+                next: HOME_CHANNEL + 1,
+                retired: Vec::new(),
+            }),
             memory,
             meter: Arc::new(SocketMeter::default()),
             output: shared_output(state::default_output()),
@@ -314,7 +319,11 @@ impl Panels {
         if let Some(c) = inner.channels.get(&HOME_CHANNEL) {
             return Arc::clone(c);
         }
-        let stored = StoredChannel { id: HOME_CHANNEL, name: state::default_channel_name(HOME_CHANNEL), ..StoredChannel::default() };
+        let stored = StoredChannel {
+            id: HOME_CHANNEL,
+            name: state::default_channel_name(HOME_CHANNEL),
+            ..StoredChannel::default()
+        };
         self.insert_locked(&mut inner, stored)
     }
 
@@ -338,7 +347,8 @@ impl Panels {
                     continue;
                 }
                 inner.next = inner.next.max(c.id.saturating_add(1));
-                if let Some(old) = inner.channels.insert(c.id, Channel::new(c, self.faults, &self.meter, &self.output)) {
+                if let Some(old) = inner.channels.insert(c.id, Channel::new(c, self.faults, &self.meter, &self.output))
+                {
                     old.shutdown();
                 }
             }
@@ -386,7 +396,8 @@ impl Panels {
         let order: Vec<String> = panels.iter().filter(|p| !p.device.is_empty()).map(|p| p.device.clone()).collect();
         let home = self.ensure_home();
         let mut inner = self.lock();
-        let wanted: std::collections::BTreeSet<ChannelId> = channels.iter().map(|c| c.id).filter(|id| *id != 0).collect();
+        let wanted: std::collections::BTreeSet<ChannelId> =
+            channels.iter().map(|c| c.id).filter(|id| *id != 0).collect();
         for c in channels {
             if c.id == 0 {
                 continue;
@@ -403,7 +414,8 @@ impl Panels {
                             && now.params == c.params
                     };
                     if !same {
-                        let def = crate::channel::find_patch(&c.patch, self.faults).unwrap_or_else(|| crate::channel::fallback_patch(""));
+                        let def = crate::channel::find_patch(&c.patch, self.faults)
+                            .unwrap_or_else(|| crate::channel::fallback_patch(""));
                         have.show(def, &c.setting, Working { params: c.params, seed: c.seed, speed: 1.0 }, None);
                         have.ensure_running();
                     }
@@ -413,7 +425,8 @@ impl Panels {
                 }
             }
         }
-        let gone: Vec<ChannelId> = inner.channels.keys().copied().filter(|id| *id != HOME_CHANNEL && !wanted.contains(id)).collect();
+        let gone: Vec<ChannelId> =
+            inner.channels.keys().copied().filter(|id| *id != HOME_CHANNEL && !wanted.contains(id)).collect();
         for id in gone {
             if let Some(old) = inner.channels.remove(&id) {
                 for panel in old.followers() {
@@ -544,7 +557,8 @@ impl Panels {
         let from = from.cloned().unwrap_or_else(|| self.home());
         let mut inner = self.lock();
         let id = inner.next;
-        let stored = StoredChannel { id, name: name.unwrap_or_else(|| state::default_channel_name(id)), ..from.stored() };
+        let stored =
+            StoredChannel { id, name: name.unwrap_or_else(|| state::default_channel_name(id)), ..from.stored() };
         Ok(self.insert_locked(&mut inner, stored))
     }
 
@@ -602,7 +616,13 @@ impl Panels {
     /// # Errors
     ///
     /// If the patch has no setting by that name.
-    pub fn pick(&self, channel: &Arc<Channel>, def: &'static PatchDef, setting: &str, fade: Option<f32>) -> Result<(), String> {
+    pub fn pick(
+        &self,
+        channel: &Arc<Channel>,
+        def: &'static PatchDef,
+        setting: &str,
+        fade: Option<f32>,
+    ) -> Result<(), String> {
         let (work, repaired) = self.memory.usable_setting(def, setting)?;
         if !repaired.is_empty() {
             // The `repaired` voice, said once per load rather than per value:
@@ -807,7 +827,12 @@ impl Panels {
     #[cfg(test)]
     fn quiet(memory: SharedMemory) -> Self {
         let panels = Panels {
-            inner: Mutex::new(Inner { panels: Vec::new(), channels: BTreeMap::new(), next: HOME_CHANNEL + 1, retired: Vec::new() }),
+            inner: Mutex::new(Inner {
+                panels: Vec::new(),
+                channels: BTreeMap::new(),
+                next: HOME_CHANNEL + 1,
+                retired: Vec::new(),
+            }),
             memory,
             meter: Arc::new(SocketMeter::default()),
             output: shared_output(state::default_output()),

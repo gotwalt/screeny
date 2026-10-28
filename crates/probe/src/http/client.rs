@@ -93,22 +93,13 @@ impl Res {
     /// One header's value.
     #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
+        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 
     /// The `Content-Type`, without any parameters, lowercased.
     #[must_use]
     pub fn content_type(&self) -> String {
-        self.header("content-type")
-            .unwrap_or("")
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase()
+        self.header("content-type").unwrap_or("").split(';').next().unwrap_or("").trim().to_ascii_lowercase()
     }
 
     /// True when the reply says it is JSON.
@@ -192,12 +183,7 @@ impl Client {
     /// (research 007 section 4.3), so this is normally just the address.
     #[must_use]
     pub fn new(addr: SocketAddr, host: impl Into<String>) -> Self {
-        Client {
-            addr,
-            host: host.into(),
-            io_timeout: IO_TIMEOUT,
-            refusals: Arc::new(AtomicU32::new(0)),
-        }
+        Client { addr, host: host.into(), io_timeout: IO_TIMEOUT, refusals: Arc::new(AtomicU32::new(0)) }
     }
 
     /// A client that waits longer for one read or write.
@@ -279,12 +265,7 @@ impl Client {
     /// # Errors
     /// Anything that stops a response coming back.
     pub fn post_form(&self, path: &str, body: &str) -> Result<Res, String> {
-        self.request(
-            "POST",
-            path,
-            Some("application/x-www-form-urlencoded"),
-            body.as_bytes(),
-        )
+        self.request("POST", path, Some("application/x-www-form-urlencoded"), body.as_bytes())
     }
 
     /// `POST path` with a raw octet-stream body.
@@ -312,12 +293,7 @@ impl Client {
     ///
     /// # Errors
     /// Anything that stops a response coming back.
-    pub fn post_bytes_declaring(
-        &self,
-        path: &str,
-        declared: usize,
-        body: &[u8],
-    ) -> Result<Res, String> {
+    pub fn post_bytes_declaring(&self, path: &str, declared: usize, body: &[u8]) -> Result<Res, String> {
         let head = format!(
             "POST {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\
              Content-Type: application/octet-stream\r\nContent-Length: {declared}\r\n\r\n",
@@ -333,12 +309,15 @@ impl Client {
         s.write_all(&wire).map_err(|e| format!("write: {e}"))?;
         s.flush().map_err(|e| format!("flush: {e}"))?;
         // "There is no more body coming." The response is still on its way.
-        s.shutdown(std::net::Shutdown::Write)
-            .map_err(|e| format!("shutdown: {e}"))?;
+        s.shutdown(std::net::Shutdown::Write).map_err(|e| format!("shutdown: {e}"))?;
         let mut buf = Vec::new();
-        s.read_to_end(&mut buf)
-            .map_err(|e| format!("read: {e}"))
-            .or_else(|e| if buf.is_empty() { Err(e) } else { Ok(0) })?;
+        s.read_to_end(&mut buf).map_err(|e| format!("read: {e}")).or_else(|e| {
+            if buf.is_empty() {
+                Err(e)
+            } else {
+                Ok(0)
+            }
+        })?;
         let mut res = parse(&buf)?;
         res.elapsed = t0.elapsed();
         Ok(res)
@@ -349,17 +328,8 @@ impl Client {
     ///
     /// # Errors
     /// Anything that stops a response coming back.
-    pub fn request(
-        &self,
-        method: &str,
-        path: &str,
-        content_type: Option<&str>,
-        body: &[u8],
-    ) -> Result<Res, String> {
-        let mut head = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n",
-            self.host
-        );
+    pub fn request(&self, method: &str, path: &str, content_type: Option<&str>, body: &[u8]) -> Result<Res, String> {
+        let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n", self.host);
         if let Some(ct) = content_type {
             head.push_str(&format!("Content-Type: {ct}\r\n"));
         }
@@ -400,11 +370,7 @@ impl Client {
         // the answer. Reporting "write: Broken pipe" and throwing that away is
         // what the bench saw and it hid the reason. The error is kept and only
         // used if nothing came back.
-        let write_err = s
-            .write_all(wire)
-            .and_then(|()| s.flush())
-            .err()
-            .map(|e| format!("write: {e}"));
+        let write_err = s.write_all(wire).and_then(|()| s.flush()).err().map(|e| format!("write: {e}"));
 
         // Read the head, then exactly as much body as `Content-Length` says -
         // or, when there is none, to EOF. Reading to EOF unconditionally would
@@ -474,10 +440,7 @@ pub fn parse(wire: &[u8]) -> Result<Res, String> {
         return Err("the connection closed without a response".into());
     }
     let end = head_end(wire).ok_or_else(|| {
-        format!(
-            "no header terminator in {:?}",
-            String::from_utf8_lossy(&wire[..wire.len().min(120)])
-        )
+        format!("no header terminator in {:?}", String::from_utf8_lossy(&wire[..wire.len().min(120)]))
     })?;
     let head = String::from_utf8_lossy(&wire[..end - 4]).into_owned();
     let body = wire[end..].to_vec();
@@ -494,12 +457,7 @@ pub fn parse(wire: &[u8]) -> Result<Res, String> {
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect();
 
-    Ok(Res {
-        status,
-        headers,
-        body,
-        elapsed: Duration::ZERO,
-    })
+    Ok(Res { status, headers, body, elapsed: Duration::ZERO })
 }
 
 #[cfg(test)]
@@ -538,9 +496,7 @@ mod tests {
         // it really does fail part way through.
         let image = vec![0xE9u8; 4 * 1024 * 1024];
         let client = Client::new(addr, addr.to_string()).with_timeout(Duration::from_secs(5));
-        let res = client
-            .post_bytes("/api/v1/firmware", &image)
-            .expect("the reply was there to be read");
+        let res = client.post_bytes("/api/v1/firmware", &image).expect("the reply was there to be read");
         assert_eq!(res.status, 200);
         assert!(res.text().contains("busy"), "{}", res.snippet(120));
         let _ = server.join();
@@ -548,10 +504,8 @@ mod tests {
 
     #[test]
     fn a_response_is_a_status_lowercased_headers_and_the_bytes_after_the_head() {
-        let res = parse(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"api\":1}",
-        )
-        .unwrap();
+        let res = parse(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"api\":1}")
+            .unwrap();
         assert_eq!(res.status, 200);
         assert_eq!(res.header("content-type"), Some("application/json"));
         assert!(res.is_json());
@@ -560,8 +514,7 @@ mod tests {
 
     #[test]
     fn a_content_type_with_parameters_is_still_recognised() {
-        let res = parse(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>")
-            .unwrap();
+        let res = parse(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>").unwrap();
         assert_eq!(res.content_type(), "text/html");
         assert!(!res.is_json());
     }
@@ -575,19 +528,12 @@ mod tests {
 
     #[test]
     fn the_error_shape_is_checked_against_its_own_status() {
-        let ok = parse(
-            b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":\"not_found\"}",
-        )
-        .unwrap();
-        assert_eq!(
-            ok.error().unwrap().error,
-            screeny_device_api::ErrorCode::NotFound
-        );
+        let ok = parse(b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":\"not_found\"}")
+            .unwrap();
+        assert_eq!(ok.error().unwrap().error, screeny_device_api::ErrorCode::NotFound);
         // The same body with the wrong status is a failure, not a parse.
-        let wrong = parse(
-            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"error\":\"not_found\"}",
-        )
-        .unwrap();
+        let wrong =
+            parse(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"error\":\"not_found\"}").unwrap();
         assert!(wrong.error().unwrap_err().contains("404"));
     }
 
@@ -616,15 +562,9 @@ mod tests {
         let t0 = Instant::now();
         let err = c.get("/api/v1/status").expect_err("nothing is listening");
         assert!(err.contains("refused"), "{err}");
-        assert!(
-            err.contains(&format!("{CONNECT_TRIES}/{CONNECT_TRIES}")),
-            "the last try is named: {err}"
-        );
+        assert!(err.contains(&format!("{CONNECT_TRIES}/{CONNECT_TRIES}")), "the last try is named: {err}");
         assert_eq!(c.connect_refusals(), CONNECT_TRIES as u32);
-        assert!(
-            t0.elapsed() >= CONNECT_RETRY_DELAY * (CONNECT_TRIES as u32 - 1),
-            "the tries are spaced out"
-        );
+        assert!(t0.elapsed() >= CONNECT_RETRY_DELAY * (CONNECT_TRIES as u32 - 1), "the tries are spaced out");
 
         // A clone shares the count, because the suite hands one to its restore
         // guard and the last line has to report the run's total.
@@ -633,12 +573,8 @@ mod tests {
 
     #[test]
     fn a_snippet_is_one_line_and_bounded() {
-        let res = Res {
-            status: 200,
-            headers: Vec::new(),
-            body: b"a\r\nb".repeat(100).to_vec(),
-            elapsed: Duration::ZERO,
-        };
+        let res =
+            Res { status: 200, headers: Vec::new(), body: b"a\r\nb".repeat(100).to_vec(), elapsed: Duration::ZERO };
         let s = res.snippet(20);
         assert!(!s.contains('\n'));
         assert_eq!(s.chars().count(), 23, "20 characters and the ellipsis");

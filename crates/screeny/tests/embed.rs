@@ -37,11 +37,7 @@ fn brisk() -> LinkConfig {
             ..SenderConfig::default()
         },
         silence: Duration::from_millis(400),
-        backoff: screeny::Backoff {
-            first: Duration::from_millis(20),
-            max: Duration::from_millis(100),
-            factor: 2.0,
-        },
+        backoff: screeny::Backoff { first: Duration::from_millis(20), max: Duration::from_millis(100), factor: 2.0 },
         ..LinkConfig::default()
     }
 }
@@ -49,11 +45,7 @@ fn brisk() -> LinkConfig {
 /// A target that names an address, so `resolve` is instant and no test ever
 /// touches mDNS. Reconnection re-runs exactly this.
 fn target_at(frame: SocketAddr) -> Target {
-    Target {
-        addr: Some(frame),
-        timeout: Some(Duration::from_millis(200)),
-        ..Target::default()
-    }
+    Target { addr: Some(frame), timeout: Some(Duration::from_millis(200)), ..Target::default() }
 }
 
 /// Start a simulator on the given ports whose control port is frame + 1, so a
@@ -224,10 +216,7 @@ fn a_host_name_that_means_nothing_names_itself() {
     target.timeout = Some(Duration::from_millis(200));
     let started = Instant::now();
     let err = Link::open(target, brisk()).expect_err("cannot resolve");
-    assert!(
-        matches!(err, screeny::Error::Unresolved { .. }),
-        "{err:?} should not be a missing-panel error"
-    );
+    assert!(matches!(err, screeny::Error::Unresolved { .. }), "{err:?} should not be a missing-panel error");
     let msg = err.to_string();
     assert!(msg.contains("nothing-here.invalid:49374"), "{msg}");
     assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
@@ -293,10 +282,7 @@ fn a_sixty_fps_producer_is_decimated_to_the_devices_rate() {
 #[test]
 fn free_cadence_sends_everything() {
     let (dev, _sim, _port) = sim_anywhere();
-    let cfg = LinkConfig {
-        cadence: Cadence::Free,
-        ..brisk()
-    };
+    let cfg = LinkConfig { cadence: Cadence::Free, ..brisk() };
     let mut link = Link::open(target_at(dev.frame_addr()), cfg).expect("opens");
     for k in 0..20 {
         assert!(push(&mut link, k).is_sent());
@@ -319,9 +305,7 @@ fn dropping_the_link_sends_final() {
 
     drop(link);
 
-    let released = sim
-        .wait_until(PATIENCE, |s| s.active_source.is_none())
-        .is_some();
+    let released = sim.wait_until(PATIENCE, |s| s.active_source.is_none()).is_some();
     assert!(released, "the source lock should be released by FINAL");
     drop(dev);
 }
@@ -355,15 +339,8 @@ fn a_link_survives_the_device_rebooting_on_the_same_port() {
     // It comes back on the same ports.
     let (dev2, sim2) = sim_pair(port);
     let back = push_until(&mut link, PATIENCE, |l| l.stats().sessions >= 2);
-    assert!(
-        back,
-        "never reconnected: state {:?}, last error {:?}",
-        link.state(),
-        link.stats().last_error
-    );
-    assert!(push_until(&mut link, PATIENCE, |l| l
-        .session()
-        .is_some_and(|s| s.frames_sent > 0)));
+    assert!(back, "never reconnected: state {:?}, last error {:?}", link.state(), link.stats().last_error);
+    assert!(push_until(&mut link, PATIENCE, |l| l.session().is_some_and(|s| s.frames_sent > 0)));
 
     let shot = sim2.wait_for_frames(1, PATIENCE).expect("the new sim draws");
     // Which phase of the test pattern landed depends on how many frames the
@@ -417,14 +394,9 @@ fn a_link_follows_the_device_to_a_new_address() {
         "never reconnected at the new address: {:?}",
         link.stats().last_error
     );
-    assert!(push_until(&mut link, PATIENCE, |l| l
-        .session()
-        .is_some_and(|s| s.frames_sent > 0)));
+    assert!(push_until(&mut link, PATIENCE, |l| l.session().is_some_and(|s| s.frames_sent > 0)));
     let shot = sim2.wait_for_frames(1, PATIENCE).expect("the new sim draws");
-    assert!(
-        PAL.contains(&[shot.decoded[0], shot.decoded[1], shot.decoded[2]]),
-        "still palette-exact after the move"
-    );
+    assert!(PAL.contains(&[shot.decoded[0], shot.decoded[1], shot.decoded[2]]), "still palette-exact after the move");
 
     assert_eq!(link.device().map(|d| d.frame), Some(dev2.frame_addr()));
     assert!(link.stats().frames_sent > sent_before, "totals carried over");
@@ -449,16 +421,9 @@ fn silence_alone_brings_the_link_down() {
     drop(dev);
     let t0 = Instant::now();
     assert!(push_until(&mut link, PATIENCE, |l| !l.state().is_up()));
-    assert!(
-        t0.elapsed() < Duration::from_millis(1500),
-        "took {:?} to notice 400 ms of silence",
-        t0.elapsed()
-    );
+    assert!(t0.elapsed() < Duration::from_millis(1500), "took {:?} to notice 400 ms of silence", t0.elapsed());
     let why = link.stats().last_error.clone().unwrap_or_default();
-    assert!(
-        why.contains("telemetry") || why.contains("send failed"),
-        "unhelpful reason: {why:?}"
-    );
+    assert!(why.contains("telemetry") || why.contains("send failed"), "unhelpful reason: {why:?}");
 }
 
 /// With reconnection off, a link that goes down stays down and says so, which
@@ -466,15 +431,11 @@ fn silence_alone_brings_the_link_down() {
 #[test]
 fn reconnection_can_be_turned_off() {
     let (dev, _sim, port) = sim_anywhere();
-    let cfg = LinkConfig {
-        reconnect: false,
-        ..brisk()
-    };
+    let cfg = LinkConfig { reconnect: false, ..brisk() };
     let mut link = Link::open(target_at(dev.frame_addr()), cfg).expect("opens");
     assert!(push_until(&mut link, PATIENCE, |l| l.stats().frames_sent >= 3));
     drop(dev);
-    assert!(push_until(&mut link, PATIENCE, |l| l.state()
-        == LinkState::Closed));
+    assert!(push_until(&mut link, PATIENCE, |l| l.state() == LinkState::Closed));
 
     // The panel comes back on the same ports. A reconnecting link would pick
     // it up within a backoff or two; this one must not.
@@ -499,11 +460,7 @@ fn a_deferred_link_connects_when_the_device_appears() {
     assert!(matches!(push(&mut link, 0), Sent::Dropped));
 
     let (dev, sim) = sim_pair(port);
-    assert!(
-        push_until(&mut link, PATIENCE, |l| l.state().is_up()),
-        "never connected: {:?}",
-        link.stats().last_error
-    );
+    assert!(push_until(&mut link, PATIENCE, |l| l.state().is_up()), "never connected: {:?}", link.stats().last_error);
     assert!(push_until(&mut link, PATIENCE, |l| l.stats().frames_sent > 0));
     sim.wait_for_frames(1, PATIENCE).expect("displayed");
     assert_eq!(link.stats().sessions, 1);
@@ -518,13 +475,7 @@ fn a_deferred_link_connects_when_the_device_appears() {
 fn sending_into_a_dead_link_stays_fast() {
     // 203.0.113.0/24 is TEST-NET-3 (RFC 5737): reserved for documentation, so
     // nothing on this bench answers and nothing is disturbed by trying.
-    let cfg = LinkConfig {
-        sender: SenderConfig {
-            handshake: true,
-            ..brisk().sender
-        },
-        ..brisk()
-    };
+    let cfg = LinkConfig { sender: SenderConfig { handshake: true, ..brisk().sender }, ..brisk() };
     let mut link = Link::open_deferred(target_at("203.0.113.9:49374".parse().unwrap()), cfg);
     let t0 = Instant::now();
     for k in 0..200 {
@@ -561,22 +512,9 @@ fn a_bad_index_does_not_break_the_accounting() {
     let mut idx = indices(0);
     idx[7] = 99;
     let err = link.send(Pixels::indexed(&PAL, &idx)).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            screeny::Error::BadIndex {
-                index: 99,
-                pixel: 7,
-                palette: 4
-            }
-        ),
-        "{err:?}"
-    );
+    assert!(matches!(err, screeny::Error::BadIndex { index: 99, pixel: 7, palette: 4 }), "{err:?}");
     let s = link.stats();
-    assert_eq!(
-        s.frames_offered,
-        s.frames_sent + s.frames_coalesced + s.frames_dropped
-    );
+    assert_eq!(s.frames_offered, s.frames_sent + s.frames_coalesced + s.frames_dropped);
     assert_eq!(s.frames_offered, 1);
     drop(link);
     drop(dev);
@@ -597,11 +535,7 @@ fn an_attached_link_reaches_a_device_on_ephemeral_ports() {
     let dev = SimDevice::start(sim_config(0, 0)).expect("sim starts");
     let sim = dev.handle();
     let device = device_for(dev.frame_addr(), dev.control_addr());
-    assert_ne!(
-        device.control.port(),
-        device.frame.port() + 1,
-        "an ephemeral pair is the whole point of this test"
-    );
+    assert_ne!(device.control.port(), device.frame.port() + 1, "an ephemeral pair is the whole point of this test");
 
     let mut link = Link::attach(device.clone(), brisk()).expect("attaches");
     assert_eq!(link.state(), LinkState::Up);
@@ -634,10 +568,7 @@ fn an_attached_link_reconnects_to_the_same_two_ports() {
     assert!(push_until(&mut link, PATIENCE, |l| l.stats().frames_sent >= 5));
 
     drop(dev);
-    assert!(
-        push_until(&mut link, PATIENCE, |l| !l.state().is_up()),
-        "the link never noticed the device had gone"
-    );
+    assert!(push_until(&mut link, PATIENCE, |l| !l.state().is_up()), "the link never noticed the device had gone");
 
     // Back on exactly the ports it had, which is a reboot.
     let dev2 = sim_at(frame.port(), control.port());
@@ -662,8 +593,7 @@ fn an_attached_link_reconnects_to_the_same_two_ports() {
 #[test]
 fn reattach_moves_a_pinned_link_to_another_known_device() {
     let dev = SimDevice::start(sim_config(0, 0)).expect("sim starts");
-    let mut link = Link::attach(device_for(dev.frame_addr(), dev.control_addr()), brisk())
-        .expect("attaches");
+    let mut link = Link::attach(device_for(dev.frame_addr(), dev.control_addr()), brisk()).expect("attaches");
     assert!(push_until(&mut link, PATIENCE, |l| l.stats().frames_sent >= 3));
     let sent_before = link.stats().frames_sent;
 

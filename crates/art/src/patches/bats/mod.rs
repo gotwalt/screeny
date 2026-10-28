@@ -36,7 +36,7 @@ use crate::dither::Dither;
 use crate::frame::{Frame, H, N, W};
 use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use moon::Moon;
-use sim::{v3, Bat, Sim, Tuning, V3, STEP};
+use sim::{v3, Bat, Sim, Tuning, STEP, V3};
 use std::collections::VecDeque;
 
 pub const DEF: PatchDef = PatchDef {

@@ -29,15 +29,13 @@ use screeny_device_api::enums::{
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply,
-    StatusReply, TelemetryReply, UpdateRecord, WifiReply, MAX_NETWORKS,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply, StatusReply, TelemetryReply,
+    UpdateRecord, WifiReply, MAX_NETWORKS,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 
 fn golden_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(format!("{name}.json"))
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden").join(format!("{name}.json"))
 }
 
 /// Check one value against `tests/golden/<name>.json`, all four ways.
@@ -53,8 +51,8 @@ where
         std::fs::write(&path, &pretty).unwrap();
     }
 
-    let golden = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{}: {e} (run with UPDATE_GOLDEN=1)", path.display()));
+    let golden =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e} (run with UPDATE_GOLDEN=1)", path.display()));
 
     // 1. the file is what serde_json writes
     assert_eq!(pretty, golden, "{name}: serialised form changed");
@@ -63,10 +61,7 @@ where
     // contains a `/` (picoserve escapes it) or a control character
     // (serde-json-core spells `\u00XX` in upper case). Keeping the goldens
     // clear of both is what makes them the truth for all three.
-    assert!(
-        !golden.contains('/'),
-        "{name}: a golden must not contain '/': picoserve would write it as '\\/'"
-    );
+    assert!(!golden.contains('/'), "{name}: a golden must not contain '/': picoserve would write it as '\\/'");
     assert!(
         !golden.contains("\\u"),
         "{name}: a golden must not contain a \\u escape: serde-json-core spells it in upper case"
@@ -80,8 +75,8 @@ where
     //    all - which is what a hand-written `curl -d @file` sends.
     //    `from_slice_escaped`, never `from_slice`: see MIN_UNESCAPE_BUFFER.
     let mut unescape = [0u8; screeny_device_api::request::MIN_UNESCAPE_BUFFER];
-    let (back, _used) = serde_json_core::from_slice_escaped::<T>(golden.as_bytes(), &mut unescape)
-        .expect("serde-json-core parse");
+    let (back, _used) =
+        serde_json_core::from_slice_escaped::<T>(golden.as_bytes(), &mut unescape).expect("serde-json-core parse");
     assert_eq!(&back, value, "{name}: serde-json-core round trip");
 
     // 4. the compact wire forms agree
@@ -117,11 +112,7 @@ pub fn wire<T: Serialize>(value: &T) -> Vec<u8> {
     let compact = serde_json::to_string(value).expect("serde_json");
     let n = to_slice(value);
     let core = SCRATCH.with(|s| s.borrow()[..n].to_vec());
-    assert_eq!(
-        compact.as_bytes(),
-        &core[..],
-        "the two writers disagree: serde_json {compact:?}"
-    );
+    assert_eq!(compact.as_bytes(), &core[..], "the two writers disagree: serde_json {compact:?}");
     core
 }
 
@@ -279,17 +270,12 @@ pub fn worst_firmware() -> FirmwareReply {
 
 /// The longest [`AcceptedReply`] that can exist.
 pub fn worst_accepted() -> AcceptedReply {
-    AcceptedReply {
-        result: Accepted::Identifying,
-    }
+    AcceptedReply { result: Accepted::Identifying }
 }
 
 /// The longest [`ErrorReply`] that can exist.
 pub fn worst_error() -> ErrorReply {
-    ErrorReply {
-        error: ErrorCode::MethodNotAllowed,
-        detail: Some(worst_text()),
-    }
+    ErrorReply { error: ErrorCode::MethodNotAllowed, detail: Some(worst_text()) }
 }
 
 /// The longest [`SettingsRequest`] that can exist.
@@ -306,18 +292,10 @@ pub fn worst_settings_request() -> SettingsRequest {
 
 /// The longest [`RebootRequest`] that can exist.
 pub fn worst_reboot_request() -> RebootRequest {
-    RebootRequest {
-        confirm: worst_text(),
-        pin: Some(worst_text()),
-        counter: Some(u32::MAX),
-    }
+    RebootRequest { confirm: worst_text(), pin: Some(worst_text()), counter: Some(u32::MAX) }
 }
 
 /// The longest [`IdentifyRequest`] that can exist.
 pub fn worst_identify_request() -> IdentifyRequest {
-    IdentifyRequest {
-        duration_ms: u32::MAX,
-        pin: Some(worst_text()),
-        counter: Some(u32::MAX),
-    }
+    IdentifyRequest { duration_ms: u32::MAX, pin: Some(worst_text()), counter: Some(u32::MAX) }
 }

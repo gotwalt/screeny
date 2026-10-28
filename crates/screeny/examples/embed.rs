@@ -61,10 +61,7 @@ fn stripes(t: f64) -> (Vec<[u8; 3]>, Vec<u8>) {
 fn main() {
     // `--addr IP[:PORT]` skips discovery; with nothing, browse `_screeny._udp`.
     let mut args = std::env::args().skip(1);
-    let mut target = Target {
-        timeout: Some(Duration::from_secs(3)),
-        ..Target::default()
-    };
+    let mut target = Target { timeout: Some(Duration::from_secs(3)), ..Target::default() };
     while let Some(a) = args.next() {
         match a.as_str() {
             "--addr" => {

@@ -117,12 +117,7 @@ pub const FRAC: u16 = 1 << FRAC_BITS;
 /// level: the spatial mean is not merely close to constant, it is constant.
 /// Card 007's "no periodic structure in mean luminance" is now true by
 /// construction instead of by measurement.
-pub const BAYER4: [[u16; 4]; 4] = [
-    [0, 8, 2, 10],
-    [12, 4, 14, 6],
-    [3, 11, 1, 9],
-    [15, 7, 13, 5],
-];
+pub const BAYER4: [[u16; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
 /// The Bayer offset for a pixel, from [`BAYER4`].
 #[inline(always)]
@@ -282,9 +277,7 @@ mod tests {
 
     /// One dither cycle of outputs for a held `q`.
     fn cycle(q: u16, bayer: u16, frac_bits: u16) -> Vec<u8> {
-        (0..(1u16 << frac_bits))
-            .map(|phase| quantise_raw(q, threshold(phase, bayer, frac_bits), frac_bits))
-            .collect()
+        (0..(1u16 << frac_bits)).map(|phase| quantise_raw(q, threshold(phase, bayer, frac_bits), frac_bits)).collect()
     }
 
     fn longest_run(v: &[u8]) -> usize {
@@ -319,11 +312,7 @@ mod tests {
             for q in 0..=top_q(frac_bits) {
                 for b in 0..16u16 {
                     let sum: u32 = cycle(q, b, frac_bits).iter().map(|&l| u32::from(l)).sum();
-                    assert_eq!(
-                        sum,
-                        u32::from(q),
-                        "frac_bits {frac_bits}, q {q}, bayer {b}: sum over the cycle"
-                    );
+                    assert_eq!(sum, u32::from(q), "frac_bits {frac_bits}, q {q}, bayer {b}: sum over the cycle");
                 }
             }
         }
@@ -336,9 +325,7 @@ mod tests {
     fn the_thresholds_are_a_permutation_of_the_cycle() {
         for frac_bits in WIDTHS {
             for b in 0..16u16 {
-                let mut seen: Vec<u16> = (0..(1u16 << frac_bits))
-                    .map(|p| threshold(p, b, frac_bits))
-                    .collect();
+                let mut seen: Vec<u16> = (0..(1u16 << frac_bits)).map(|p| threshold(p, b, frac_bits)).collect();
                 seen.sort_unstable();
                 let want: Vec<u16> = (0..(1u16 << frac_bits)).collect();
                 assert_eq!(seen, want, "frac_bits {frac_bits}, bayer {b}");
@@ -368,9 +355,7 @@ mod tests {
                     );
 
                     let old: Vec<u8> = (0..(1u16 << frac_bits))
-                        .map(|p| {
-                            quantise_raw(q, counting_threshold(p, b, frac_bits), frac_bits)
-                        })
+                        .map(|p| quantise_raw(q, counting_threshold(p, b, frac_bits), frac_bits))
                         .collect();
                     assert_eq!(
                         longest_run(&old),
@@ -482,14 +467,9 @@ mod tests {
     fn the_dithered_path_is_steady_inside_the_dead_zone() {
         for q in 0..=top_q(4) {
             for b in 0..16u16 {
-                let c: Vec<u8> = (0..16)
-                    .map(|p| quantise_dither(q, threshold(p, b, 4), 4))
-                    .collect();
+                let c: Vec<u8> = (0..16).map(|p| quantise_dither(q, threshold(p, b, 4), 4)).collect();
                 let sum: u32 = c.iter().map(|&l| u32::from(l)).sum();
-                assert!(
-                    sum.abs_diff(u32::from(q)) <= 1,
-                    "q {q} bayer {b}: cycle sums to {sum}"
-                );
+                assert!(sum.abs_diff(u32::from(q)) <= 1, "q {q} bayer {b}: cycle sums to {sum}");
                 if matches!(q & 15, 0 | 1 | 15) {
                     assert_eq!(longest_run(&c), 16, "q {q} bayer {b} should not move at all");
                 }
@@ -513,9 +493,7 @@ mod tests {
         assert_eq!(15u16 >> 4, 0, "truncation was black all the way to 16");
         // 22 of the 64 level codes landed a level low under truncation: the
         // remainders 8..=15, which are 22 of the table's 256 entries.
-        let low = (0..=Q_SCALE)
-            .filter(|q| u16::from(quantise_plain(*q, 4)) != q >> 4)
-            .count();
+        let low = (0..=Q_SCALE).filter(|q| u16::from(quantise_plain(*q, 4)) != q >> 4).count();
         assert_eq!(low, 63 * 8, "half of every level's remainders round up");
         // Never above the top level, at any width.
         for frac_bits in WIDTHS {

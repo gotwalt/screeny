@@ -86,14 +86,22 @@ pub fn spawn(
 /// it again whenever the settings change it. Runs until the studio stops;
 /// the returned handle finishes when the last client has said goodbye.
 #[must_use]
-pub fn supervise(ha: std::sync::Arc<Ha>, snapshots: watch::Receiver<Fleet>, commands: mpsc::Sender<Order>, mut stop: watch::Receiver<bool>) -> Handle {
+pub fn supervise(
+    ha: std::sync::Arc<Ha>,
+    snapshots: watch::Receiver<Fleet>,
+    commands: mpsc::Sender<Order>,
+    mut stop: watch::Receiver<bool>,
+) -> Handle {
     let task = tokio::spawn(async move {
         let mut want = ha.want.subscribe();
         loop {
             let cfg = want.borrow_and_update().clone();
             let (quit_client, client_stop) = watch::channel(false);
             let client = cfg.map(|cfg| {
-                eprintln!("studio: home assistant: mqtt://{}:{} as `{}` (discovery prefix `{}`)", cfg.host, cfg.port, cfg.instance, cfg.discovery_prefix);
+                eprintln!(
+                    "studio: home assistant: mqtt://{}:{} as `{}` (discovery prefix `{}`)",
+                    cfg.host, cfg.port, cfg.instance, cfg.discovery_prefix
+                );
                 ha.status.send_replace(Status::Connecting);
                 spawn(cfg, snapshots.clone(), commands.clone(), ha.status.clone(), client_stop)
             });
@@ -222,7 +230,8 @@ async fn poll(
             }
             Ok(Event::Incoming(Packet::Publish(p))) => {
                 if incoming.try_send((p.topic, p.payload.to_vec())).is_err() {
-                    dropped.say(|n| format!("studio: home assistant: {n} incoming message(s) dropped, the queue is full"));
+                    dropped
+                        .say(|n| format!("studio: home assistant: {n} incoming message(s) dropped, the queue is full"));
                 }
             }
             Ok(Event::Outgoing(Outgoing::Disconnect)) if closing.load(Ordering::Relaxed) => return,
@@ -235,7 +244,12 @@ async fn poll(
                 let why = describe(&e);
                 status.send_replace(Status::Failed { detail: why.clone() });
                 if last_error.as_deref() != Some(why.as_str()) {
-                    eprintln!("studio: home assistant: mqtt://{}:{}: {why}; retrying, backing off to {}s", cfg.host, cfg.port, LAST_RETRY.as_secs());
+                    eprintln!(
+                        "studio: home assistant: mqtt://{}:{}: {why}; retrying, backing off to {}s",
+                        cfg.host,
+                        cfg.port,
+                        LAST_RETRY.as_secs()
+                    );
                     last_error = Some(why);
                 }
                 tokio::time::sleep(retry).await;
@@ -249,7 +263,9 @@ async fn poll(
 /// retry.
 fn describe(e: &ConnectionError) -> String {
     match e {
-        ConnectionError::ConnectionRefused(code) => format!("the broker refused the connection ({code:?}); check the username and password"),
+        ConnectionError::ConnectionRefused(code) => {
+            format!("the broker refused the connection ({code:?}); check the username and password")
+        }
         other => other.to_string(),
     }
 }
@@ -428,7 +444,10 @@ impl Session {
         // Whose topic is it? Only a panel or channel this studio has owns
         // one; a command for one that has gone is stale and dropped.
         let panel = fleet.panels.iter().find(|v| fleet::topics_of(&self.cfg, v).command_topics().contains(&topic));
-        let channel = || fleet::channel_devices(fleet).find(|c| Topics::for_channel(&self.cfg, c.id).command_topics().contains(&topic));
+        let channel = || {
+            fleet::channel_devices(fleet)
+                .find(|c| Topics::for_channel(&self.cfg, c.id).command_topics().contains(&topic))
+        };
         let mut channel_id = None;
         let (topics, snapshot, last_lit) = if let Some(view) = panel {
             let topics = fleet::topics_of(&self.cfg, view);
@@ -446,7 +465,9 @@ impl Session {
                 // select is Channel 1's (card 355), a channel device's its own.
                 let target = match (&command, panel) {
                     (Command::ShowPicture { .. }, Some(_)) => Target::Channel(crate::state::HOME_CHANNEL),
-                    (Command::ShowPicture { .. }, None) => Target::Channel(channel_id.unwrap_or(crate::state::HOME_CHANNEL)),
+                    (Command::ShowPicture { .. }, None) => {
+                        Target::Channel(channel_id.unwrap_or(crate::state::HOME_CHANNEL))
+                    }
                     (_, Some(view)) => Target::Panel(view.device.clone()),
                     (_, None) => return,
                 };
@@ -479,7 +500,12 @@ impl Session {
 /// # Errors
 ///
 /// The broker could not be reached, or refused us, within `within`.
-pub async fn forget(cfg: &MqttConfig, panels: &[Option<String>], channels: &[u32], within: Duration) -> Result<(), String> {
+pub async fn forget(
+    cfg: &MqttConfig,
+    panels: &[Option<String>],
+    channels: &[u32],
+    within: Duration,
+) -> Result<(), String> {
     let topics = Topics::new(cfg);
     let (client, mut eventloop) = AsyncClient::new(options(cfg, &topics, false), REQUESTS);
     let work = async {
@@ -512,7 +538,9 @@ pub async fn forget(cfg: &MqttConfig, panels: &[Option<String>], channels: &[u32
             }
         }
     };
-    tokio::time::timeout(within, work).await.map_err(|_| format!("mqtt://{}:{}: no answer within {}s", cfg.host, cfg.port, within.as_secs()))?
+    tokio::time::timeout(within, work)
+        .await
+        .map_err(|_| format!("mqtt://{}:{}: no answer within {}s", cfg.host, cfg.port, within.as_secs()))?
 }
 
 #[cfg(test)]
@@ -522,7 +550,12 @@ mod tests {
     use crate::ha::{ChannelView, PanelView, Snapshot};
 
     fn view(device: &str, key: Option<&str>) -> PanelView {
-        PanelView { device: device.into(), key: key.map(str::to_string), name: device.into(), snapshot: Snapshot::default() }
+        PanelView {
+            device: device.into(),
+            key: key.map(str::to_string),
+            name: device.into(),
+            snapshot: Snapshot::default(),
+        }
     }
 
     fn session() -> Session {

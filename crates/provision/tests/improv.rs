@@ -17,8 +17,7 @@ fn hex(s: &str) -> Vec<u8> {
 const GET_STATE: &str = "494d50524f560103020200e5";
 const GET_INFO: &str = "494d50524f560103020300e6";
 const SCAN: &str = "494d50524f560103020400e7";
-const WIFI: &str =
-    "494d50524f56010320011e0c4d79576972656c6573734150106d7973656375726570617373776f7264c1";
+const WIFI: &str = "494d50524f56010320011e0c4d79576972656c6573734150106d7973656375726570617373776f7264c1";
 
 fn feed(p: &mut Parser, bytes: &[u8]) -> Vec<String> {
     let mut v = Vec::new();
@@ -317,10 +316,7 @@ fn a_successful_provision_from_the_portal() {
 
     let _ = m.step(Event::Joined { ip: [10, 0, 0, 7] }, 4_000);
     s.poll(&Observed::from_machine(&m), 4_100, &mut out);
-    assert_eq!(
-        drain(&mut out),
-        [Reply::State(State::Provisioned), Reply::Url([10, 0, 0, 7], cmd::WIFI_SETTINGS)]
-    );
+    assert_eq!(drain(&mut out), [Reply::State(State::Provisioned), Reply::Url([10, 0, 0, 7], cmd::WIFI_SETTINGS)]);
     assert!(!s.busy());
 }
 
@@ -336,10 +332,7 @@ fn a_wrong_password_is_unable_to_connect_and_back_to_authorized() {
     let _ = m.step(Event::JoinFailed { reason: FailReason::AuthError }, 3_000);
     assert!(matches!(m.trial().unwrap().outcome, TrialOutcome::Failed(_)));
     s.poll(&Observed::from_machine(&m), 3_100, &mut out);
-    assert_eq!(
-        drain(&mut out),
-        [Reply::Error(ErrorCode::UnableToConnect), Reply::State(State::Authorized)]
-    );
+    assert_eq!(drain(&mut out), [Reply::Error(ErrorCode::UnableToConnect), Reply::State(State::Authorized)]);
     assert!(!s.busy());
 }
 

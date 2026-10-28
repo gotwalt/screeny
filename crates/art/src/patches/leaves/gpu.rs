@@ -158,7 +158,11 @@ fn make_pipeline(
             module,
             entry_point: Some("fs_main"),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL })],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: COLOR_FORMAT,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
         multiview_mask: None,
         cache: None,
@@ -182,7 +186,11 @@ pub(crate) fn open() -> Option<Live> {
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         }],
     });
@@ -192,7 +200,8 @@ pub(crate) fn open() -> Option<Live> {
         immediate_size: 0,
     });
     let opaque_pipeline = make_pipeline(gpu, &module, &pl, None, true, "leaves opaque");
-    let ghost_pipeline = make_pipeline(gpu, &module, &pl, Some(wgpu::BlendState::ALPHA_BLENDING), false, "leaves ghost");
+    let ghost_pipeline =
+        make_pipeline(gpu, &module, &pl, Some(wgpu::BlendState::ALPHA_BLENDING), false, "leaves ghost");
     let scene = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("leaves scene"),
         size: std::mem::size_of::<Scene>() as u64,
@@ -215,7 +224,14 @@ pub(crate) fn open() -> Option<Live> {
 /// ([`super::shell::LeafShell::faces`], which is also what the physics
 /// body's own collision surface uses), so the picture and the simulation can
 /// never triangulate a leaf two different ways.
-fn push_shell(out: &mut Vec<GVertex>, leaf: &Leaf3D, shell: &super::shell::LeafShell, families: &[HueFamily; HUES], color: f32, alpha: f32) {
+fn push_shell(
+    out: &mut Vec<GVertex>,
+    leaf: &Leaf3D,
+    shell: &super::shell::LeafShell,
+    families: &[HueFamily; HUES],
+    color: f32,
+    alpha: f32,
+) {
     push_shell_posed(out, leaf, shell, |v| v, families, color, alpha);
 }
 
@@ -254,7 +270,13 @@ fn push_shell_posed(
     alpha: f32,
 ) {
     let verts: Vec<RenderVertex> = shell.render_vertices().into_iter().map(repose).collect();
-    push_lit_mesh(out, LitMesh { verts: &verts, faces: shell.faces(), hue: leaf.build.hue, z: leaf.pos.z }, families, color, alpha);
+    push_lit_mesh(
+        out,
+        LitMesh { verts: &verts, faces: shell.faces(), hue: leaf.build.hue, z: leaf.pos.z },
+        families,
+        color,
+        alpha,
+    );
 }
 
 /// A finished leaf mesh, ready to append to a vertex buffer: already-final
@@ -343,7 +365,15 @@ impl Live {
     /// leaf is its own baked or live-posed mesh ([`push_lit_mesh`]) - never a
     /// second, re-derived shape.
     #[must_use]
-    pub(crate) fn render(&self, falling: Falling, ground: Ground, sun_deg: f32, color: f32, families: &[HueFamily; HUES], blur_trail: usize) -> Frame {
+    pub(crate) fn render(
+        &self,
+        falling: Falling,
+        ground: Ground,
+        sun_deg: f32,
+        color: f32,
+        families: &[HueFamily; HUES],
+        blur_trail: usize,
+    ) -> Frame {
         let (light, proj) = camera(sun_deg);
         let scene = Scene { view_proj: proj, eye: [0.0, 0.0, 0.0, 1.0], light };
         self.gpu.queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&scene));
@@ -355,11 +385,23 @@ impl Live {
             }
         }
         for litter in ground.resting {
-            push_lit_mesh(&mut opaque, LitMesh { verts: &litter.verts, faces: &litter.faces, hue: litter.hue, z: litter.pos.z }, families, color, 1.0);
+            push_lit_mesh(
+                &mut opaque,
+                LitMesh { verts: &litter.verts, faces: &litter.faces, hue: litter.hue, z: litter.pos.z },
+                families,
+                color,
+                1.0,
+            );
         }
         for settling in ground.landing {
             let verts = settling.render_vertices();
-            push_lit_mesh(&mut opaque, LitMesh { verts: &verts, faces: settling.faces(), hue: settling.hue(), z: settling.depth() }, families, color, 1.0);
+            push_lit_mesh(
+                &mut opaque,
+                LitMesh { verts: &verts, faces: settling.faces(), hue: settling.hue(), z: settling.depth() },
+                families,
+                color,
+                1.0,
+            );
         }
 
         // The echoes: up to `blur_trail - 1` steps immediately before the
@@ -383,7 +425,15 @@ impl Live {
                     let (Some(leaf_now), Some(shell)) = (newest.get(i), falling.shells.get(i)) else { continue };
                     let attach_now = super::shell::Attachment::of(leaf_now);
                     let attach_then = super::shell::Attachment::of(leaf_then);
-                    push_shell_posed(&mut ghosts, leaf_then, shell, |v| v.reposed(attach_now, attach_then), families, color, weight);
+                    push_shell_posed(
+                        &mut ghosts,
+                        leaf_then,
+                        shell,
+                        |v| v.reposed(attach_now, attach_then),
+                        families,
+                        color,
+                        weight,
+                    );
                 }
             }
         }
@@ -393,7 +443,13 @@ impl Live {
         // reads as *less there*, never wrongly occludes something nearer).
         for &(litter, alpha) in ground.fading {
             if alpha > 0.0 {
-                push_lit_mesh(&mut ghosts, LitMesh { verts: &litter.verts, faces: &litter.faces, hue: litter.hue, z: litter.pos.z }, families, color, alpha);
+                push_lit_mesh(
+                    &mut ghosts,
+                    LitMesh { verts: &litter.verts, faces: &litter.faces, hue: litter.hue, z: litter.pos.z },
+                    families,
+                    color,
+                    alpha,
+                );
             }
         }
 

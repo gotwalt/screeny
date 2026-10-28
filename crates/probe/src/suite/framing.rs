@@ -11,10 +11,7 @@ use screeny_proto::control::op;
 use screeny_proto::dec::codec;
 use screeny_proto::F_KEY;
 
-use super::{
-    control_dgram, frame_dgram, rejected_and_silent, shown, verdict, Ctx, Outcome, Rule,
-    LOOPBACK_ONLY,
-};
+use super::{control_dgram, frame_dgram, rejected_and_silent, shown, verdict, Ctx, Outcome, Rule, LOOPBACK_ONLY};
 use crate::enc;
 
 const V1_FRAME: u8 = (screeny_proto::VERSION << 4) | screeny_proto::TYPE_FRAME;
@@ -135,14 +132,7 @@ fn bad_magic(cx: &mut Ctx) -> Result<Outcome, String> {
 
 fn bad_version(cx: &mut Ctx) -> Result<Outcome, String> {
     for v in [0u8, 2, 9] {
-        let d = frame_dgram(
-            (v << 4) | screeny_proto::TYPE_FRAME,
-            codec::SOLID,
-            F_KEY,
-            1,
-            3,
-            &dim(),
-        );
+        let d = frame_dgram((v << 4) | screeny_proto::TYPE_FRAME, codec::SOLID, F_KEY, 1, 3, &dim());
         match rejected_and_silent(cx, &d)? {
             Outcome::Pass(_) => {}
             Outcome::Fail(why) => return verdict(false, format!("version {v}: {why}")),
@@ -154,14 +144,7 @@ fn bad_version(cx: &mut Ctx) -> Result<Outcome, String> {
 
 fn reserved_type(cx: &mut Ctx) -> Result<Outcome, String> {
     for t in [0x1u8, 0xF] {
-        let d = frame_dgram(
-            (screeny_proto::VERSION << 4) | t,
-            codec::SOLID,
-            F_KEY,
-            1,
-            3,
-            &dim(),
-        );
+        let d = frame_dgram((screeny_proto::VERSION << 4) | t, codec::SOLID, F_KEY, 1, 3, &dim());
         match rejected_and_silent(cx, &d)? {
             Outcome::Pass(_) => {}
             Outcome::Fail(why) => return verdict(false, format!("type {t:#x}: {why}")),
@@ -188,13 +171,7 @@ fn frame_on_control_port(cx: &mut Ctx) -> Result<Outcome, String> {
     let t = cx.telemetry()?;
     verdict(
         r.is_none() && t.frames_rejected == 0 && t.frames_shown == 0 && t.frames_rx == 0,
-        format!(
-            "reply {}, rejected {} shown {} rx {}",
-            r.is_some(),
-            t.frames_rejected,
-            t.frames_shown,
-            t.frames_rx
-        ),
+        format!("reply {}, rejected {} shown {} rx {}", r.is_some(), t.frames_rejected, t.frames_shown, t.frames_rx),
     )
 }
 
@@ -245,14 +222,7 @@ fn datagram_too_long(cx: &mut Ctx) -> Result<Outcome, String> {
 
 fn has_ts_truncated(cx: &mut Ctx) -> Result<Outcome, String> {
     // HAS_TS set, len = 2: no room for the four-byte timestamp.
-    let d = frame_dgram(
-        V1_FRAME,
-        codec::SOLID,
-        F_KEY | screeny_proto::F_HAS_TS,
-        1,
-        2,
-        &[1, 2],
-    );
+    let d = frame_dgram(V1_FRAME, codec::SOLID, F_KEY | screeny_proto::F_HAS_TS, 1, 2, &[1, 2]);
     rejected_and_silent(cx, &d)
 }
 
@@ -264,23 +234,16 @@ fn has_ts_happy(cx: &mut Ctx) -> Result<Outcome, String> {
     let link = cx.claim()?;
     let p = dim();
     for attempt in 1..=3u32 {
-        link.send_full(codec::SOLID, F_KEY, 100 + attempt as u16, Some(0xDEAD_BEEF), &p)
-            .map_err(|e| e.to_string())?;
+        link.send_full(codec::SOLID, F_KEY, 100 + attempt as u16, Some(0xDEAD_BEEF), &p).map_err(|e| e.to_string())?;
         cx.settle();
         let t = cx.telemetry()?;
         if t.frames_shown >= 1 && t.frames_dropped_decode == 0 {
-            return verdict(
-                true,
-                format!("shown {} last_codec {:#04x}", t.frames_shown, t.last_codec),
-            );
+            return verdict(true, format!("shown {} last_codec {:#04x}", t.frames_shown, t.last_codec));
         }
         if attempt == 3 {
             return verdict(
                 false,
-                format!(
-                    "shown {} decode {} rejected {}",
-                    t.frames_shown, t.frames_dropped_decode, t.frames_rejected
-                ),
+                format!("shown {} decode {} rejected {}", t.frames_shown, t.frames_dropped_decode, t.frames_rejected),
             );
         }
     }
@@ -305,10 +268,7 @@ fn padding_ignored(cx: &mut Ctx) -> Result<Outcome, String> {
         if attempt == 3 {
             return verdict(
                 false,
-                format!(
-                    "shown {} decode {} rejected {}",
-                    t.frames_shown, t.frames_dropped_decode, t.frames_rejected
-                ),
+                format!("shown {} decode {} rejected {}", t.frames_shown, t.frames_dropped_decode, t.frames_rejected),
             );
         }
     }

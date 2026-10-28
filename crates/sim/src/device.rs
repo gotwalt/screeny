@@ -60,10 +60,7 @@ struct Bus {
 
 impl Bus {
     fn new() -> Self {
-        Bus {
-            log: Mutex::new((VecDeque::new(), 0)),
-            cv: Condvar::new(),
-        }
+        Bus { log: Mutex::new((VecDeque::new(), 0)), cv: Condvar::new() }
     }
 
     fn publish(&self, events: &[Event]) {
@@ -245,12 +242,7 @@ impl SimHandle {
     /// keeps the outcome it started with only until the next tick, which is
     /// what a test that wants to change its mind mid-join expects.
     pub fn set_wifi_outcome(&self, outcome: crate::WifiOutcome) {
-        self.shared
-            .core
-            .lock()
-            .unwrap()
-            .wifi_mut()
-            .set_outcome(outcome);
+        self.shared.core.lock().unwrap().wifi_mut().set_outcome(outcome);
     }
 
     /// Take the WiFi link down, or bring it back.
@@ -262,11 +254,7 @@ impl SimHandle {
     pub fn set_link_down(&self, down: bool) {
         let now = self.shared.now_us();
         let mut out = Outbox::default();
-        self.shared
-            .core
-            .lock()
-            .unwrap()
-            .set_link_down(down, now, &mut out);
+        self.shared.core.lock().unwrap().set_link_down(down, now, &mut out);
         self.shared.bus.publish(&out.events);
         out.clear();
     }
@@ -276,13 +264,7 @@ impl SimHandle {
     pub fn post_wifi(&self, ssid: &str) -> crate::Posted {
         let now = self.shared.now_us();
         let mut events = Vec::new();
-        let posted = self
-            .shared
-            .core
-            .lock()
-            .unwrap()
-            .wifi_mut()
-            .post_credentials(ssid, now, &mut events);
+        let posted = self.shared.core.lock().unwrap().wifi_mut().post_credentials(ssid, now, &mut events);
         self.shared.bus.publish(&events);
         posted
     }
@@ -291,12 +273,7 @@ impl SimHandle {
     pub fn wifi_wipe(&self) {
         let now = self.shared.now_us();
         let mut events = Vec::new();
-        self.shared
-            .core
-            .lock()
-            .unwrap()
-            .wifi_mut()
-            .wipe(now, &mut events);
+        self.shared.core.lock().unwrap().wifi_mut().wipe(now, &mut events);
         self.shared.bus.publish(&events);
     }
 
@@ -315,11 +292,7 @@ impl SimHandle {
     pub fn press_button(&self, hold_ms: u32) {
         let now = self.shared.now_us();
         let mut out = Outbox::default();
-        self.shared
-            .core
-            .lock()
-            .unwrap()
-            .press_button(hold_ms, now, &mut out);
+        self.shared.core.lock().unwrap().press_button(hold_ms, now, &mut out);
         self.shared.bus.publish(&out.events);
         out.clear();
     }
@@ -329,12 +302,7 @@ impl SimHandle {
     pub fn set_ap_client(&self, present: bool) {
         let now = self.shared.now_us();
         let mut events = Vec::new();
-        self.shared
-            .core
-            .lock()
-            .unwrap()
-            .wifi_mut()
-            .set_ap_client(present, now, &mut events);
+        self.shared.core.lock().unwrap().wifi_mut().set_ap_client(present, now, &mut events);
         self.shared.bus.publish(&events);
     }
 
@@ -385,24 +353,14 @@ impl SimHandle {
     pub fn wifi_observed(&self) -> screeny_provision::improv::Observed {
         let core = self.shared.core.lock().unwrap();
         let w = core.wifi();
-        screeny_provision::improv::Observed {
-            state: w.phase(),
-            trial: w.trial().map(|t| t.outcome),
-            ip: w.ip(),
-        }
+        screeny_provision::improv::Observed { state: w.phase(), trial: w.trial().map(|t| t.outcome), ip: w.ip() }
     }
 
     /// The SSID the store holds, if any. There is no method for the PSK,
     /// because the simulator never keeps one (spec section 8.4).
     #[must_use]
     pub fn stored_ssid(&self) -> Option<String> {
-        self.shared
-            .core
-            .lock()
-            .unwrap()
-            .wifi()
-            .stored_ssid()
-            .map(str::to_string)
+        self.shared.core.lock().unwrap().wifi().stored_ssid().map(str::to_string)
     }
 
     /// How many times the settings store has been written since boot. A
@@ -500,11 +458,7 @@ impl SimHandle {
 
     /// Change the injected faults while the device is running.
     pub fn set_faults(&self, faults: Faults) {
-        self.shared
-            .core
-            .lock()
-            .unwrap()
-            .set_extra_decode_us(faults.decode_ms.saturating_mul(1_000));
+        self.shared.core.lock().unwrap().set_extra_decode_us(faults.decode_ms.saturating_mul(1_000));
         *self.shared.faults.lock().unwrap() = faults;
     }
 
@@ -573,12 +527,7 @@ impl SimHandle {
             *from = next;
             let left = deadline.checked_duration_since(Instant::now())?;
             let g = self.shared.bus.log.lock().unwrap();
-            let _ = self
-                .shared
-                .bus
-                .cv
-                .wait_timeout(g, left.min(Duration::from_millis(20)))
-                .unwrap();
+            let _ = self.shared.bus.cv.wait_timeout(g, left.min(Duration::from_millis(20))).unwrap();
         }
     }
 
@@ -717,14 +666,9 @@ impl SimDevice {
                 // regression for them. A port somebody named is different -
                 // they are going to connect to it - so that one still fails.
                 Err(e)
-                    if e.kind() == std::io::ErrorKind::AddrInUse
-                        && !cfg.http_port_explicit
-                        && cfg.http_port != 0 =>
+                    if e.kind() == std::io::ErrorKind::AddrInUse && !cfg.http_port_explicit && cfg.http_port != 0 =>
                 {
-                    eprintln!(
-                        "screeny-sim: HTTP port {} is busy; using an ephemeral one instead",
-                        cfg.http_port
-                    );
+                    eprintln!("screeny-sim: HTTP port {} is busy; using an ephemeral one instead", cfg.http_port);
                     crate::http::Server::start(
                         SocketAddr::new(cfg.bind, 0),
                         crate::api::handler(Arc::clone(&shared)),
@@ -740,12 +684,7 @@ impl SimDevice {
         };
 
         let mdns = if cfg.mdns {
-            Some(Advertisement::start(
-                &cfg,
-                frame_addr.port(),
-                shared.core.lock().unwrap().info_bytes(),
-                display_addr,
-            )?)
+            Some(Advertisement::start(&cfg, frame_addr.port(), shared.core.lock().unwrap().info_bytes(), display_addr)?)
         } else {
             None
         };
@@ -770,18 +709,12 @@ impl SimDevice {
             let fs = Arc::clone(&frame_sock);
             let cs = Arc::clone(&control_sock);
             threads.push(
-                thread::Builder::new()
-                    .name("sim-control".into())
-                    .spawn(move || control_loop(&shared, &fs, &cs))?,
+                thread::Builder::new().name("sim-control".into()).spawn(move || control_loop(&shared, &fs, &cs))?,
             );
         }
         {
             let shared = Arc::clone(&shared);
-            threads.push(
-                thread::Builder::new()
-                    .name("sim-tick".into())
-                    .spawn(move || tick_loop(&shared))?,
-            );
+            threads.push(thread::Builder::new().name("sim-tick".into()).spawn(move || tick_loop(&shared))?);
         }
 
         let handle = SimHandle { shared };
@@ -794,13 +727,7 @@ impl SimDevice {
             None => None,
         };
 
-        Ok(SimDevice {
-            handle,
-            threads,
-            mdns,
-            http,
-            improv,
-        })
+        Ok(SimDevice { handle, threads, mdns, http, improv })
     }
 
     /// A handle to drive this device with. Cheap to clone.
@@ -911,11 +838,7 @@ fn frame_loop(
                         // A uniform 0..=delay_ms hold, which produces jitter
                         // and reordering rather than a constant offset.
                         let d = rng.below(faults.delay_ms as u64 + 1) * 1_000;
-                        held.push_back(Held {
-                            due_us: shared.now_us() + d,
-                            from,
-                            data,
-                        });
+                        held.push_back(Held { due_us: shared.now_us() + d, from, data });
                     } else {
                         batch.push((from, data));
                     }
@@ -1028,10 +951,7 @@ fn send_all(out: &Outbox, frame_sock: &UdpSocket, control_sock: &UdpSocket) {
 }
 
 fn would_block(e: &io::Error) -> bool {
-    matches!(
-        e.kind(),
-        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
-    )
+    matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted)
 }
 
 // ---------------------------------------------------------------------------

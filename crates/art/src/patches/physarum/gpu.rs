@@ -76,8 +76,9 @@ impl Sim {
     pub fn new(gpu: &'static Gpu, w: u32, h: u32, agents: &[[f32; 4]], food_cells: usize) -> Sim {
         let device = &gpu.device;
         use wgpu::BufferUsages as U;
-        let buffer =
-            |label, size: u64, usage| device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false });
+        let buffer = |label, size: u64, usage| {
+            device.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage, mapped_at_creation: false })
+        };
         let cells = u64::from(w * h) * 16;
         let params = buffer("physarum params", SLOT, U::UNIFORM | U::COPY_DST);
         let agent_buf = buffer("physarum agents", agents.len() as u64 * 16, U::STORAGE | U::COPY_DST);
@@ -106,8 +107,10 @@ impl Sim {
             });
             let bind = |parity: usize| {
                 let bound = [&params, &agent_buf, &trails[parity], &dep, &trails[1 - parity], &leds, &food];
-                let entries: Vec<wgpu::BindGroupEntry> =
-                    bindings.iter().map(|b| wgpu::BindGroupEntry { binding: *b, resource: bound[*b as usize].as_entire_binding() }).collect();
+                let entries: Vec<wgpu::BindGroupEntry> = bindings
+                    .iter()
+                    .map(|b| wgpu::BindGroupEntry { binding: *b, resource: bound[*b as usize].as_entire_binding() })
+                    .collect();
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some(name),
                     layout: &pipeline.get_bind_group_layout(0),
@@ -120,7 +123,23 @@ impl Sim {
         let step = pass("step", &[0, 1, 2, 3]);
         let diffuse = pass("diffuse", &[0, 2, 3, 4, 6]);
         let picture = pass("picture", &[0, 2, 5]);
-        Sim { gpu, w, h, n: agents.len() as u32, params, slots, leds, food, leds_read, pending: None, turn: 0, step, diffuse, picture, parity: 0 }
+        Sim {
+            gpu,
+            w,
+            h,
+            n: agents.len() as u32,
+            params,
+            slots,
+            leds,
+            food,
+            leds_read,
+            pending: None,
+            turn: 0,
+            step,
+            diffuse,
+            picture,
+            parity: 0,
+        }
     }
 
     pub fn agents(&self) -> u32 {
@@ -145,7 +164,8 @@ impl Sim {
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
         for k in 0..params.len() {
             enc.copy_buffer_to_buffer(&self.slots, k as u64 * SLOT, &self.params, 0, SLOT);
-            let mut cp = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("physarum"), timestamp_writes: None });
+            let mut cp = enc
+                .begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("physarum"), timestamp_writes: None });
             let mut run = |pass: &Pass, parity: usize, groups: [u32; 3]| {
                 cp.set_pipeline(&pass.pipeline);
                 cp.set_bind_group(0, &pass.binds[parity], &[]);

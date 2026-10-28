@@ -200,13 +200,7 @@ pub enum RenderError {
 /// presentation rule, it does not change a setting.
 #[must_use]
 pub const fn wants_fixed_brightness(screen: &Screen<'_>) -> bool {
-    matches!(
-        screen,
-        Screen::Portal {
-            layout: Layout::QrAndName,
-            ..
-        }
-    )
+    matches!(screen, Screen::Portal { layout: Layout::QrAndName, .. })
 }
 
 /// Draw `screen` into `frame`, clearing it first.
@@ -218,11 +212,7 @@ pub fn render(screen: &Screen<'_>, frame: &mut Rgb888Frame) -> Result<(), Render
     frame.fill(0);
     let mut t = FrameTarget(frame);
     match *screen {
-        Screen::Portal {
-            ssid,
-            layout: Layout::QrAndName,
-            form,
-        } => {
+        Screen::Portal { ssid, layout: Layout::QrAndName, form } => {
             let payload = uri::wifi_uri(form, ssid).map_err(|_| RenderError::NoQr)?;
             let code = qr::encode(&payload).map_err(|_| RenderError::NoQr)?;
             blit_qr(&mut t, &code);
@@ -236,11 +226,7 @@ pub fn render(screen: &Screen<'_>, frame: &mut Rgb888Frame) -> Result<(), Render
             text(&mut t, head, TEXT_X, 16, value);
             text(&mut t, tail, TEXT_X, 22, value);
         }
-        Screen::Portal {
-            ssid,
-            layout: Layout::Text,
-            ..
-        } => {
+        Screen::Portal { ssid, layout: Layout::Text, .. } => {
             // The wording card 221 settled on: what to do, what it is called,
             // what to do next, where to go.
             let title = MonoTextStyle::new(&FONT_5X7, TITLE);
@@ -258,10 +244,7 @@ pub fn render(screen: &Screen<'_>, frame: &mut Rgb888Frame) -> Result<(), Render
             text(&mut t, "connected", 1, 3, title);
             text(&mut t, "find me at", 1, 14, label);
             let mut line: heapless::String<16> = heapless::String::new();
-            let _ = core::fmt::write(
-                &mut line,
-                format_args!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
-            );
+            let _ = core::fmt::write(&mut line, format_args!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
             text(&mut t, &line, 1, 22, value);
         }
         Screen::Updating { percent } => {
@@ -431,10 +414,7 @@ impl DrawTarget for FrameTarget<'_> {
     type Color = Rgb888;
     type Error = core::convert::Infallible;
 
-    fn draw_iter<I: IntoIterator<Item = Pixel<Self::Color>>>(
-        &mut self,
-        pixels: I,
-    ) -> Result<(), Self::Error> {
+    fn draw_iter<I: IntoIterator<Item = Pixel<Self::Color>>>(&mut self, pixels: I) -> Result<(), Self::Error> {
         for Pixel(p, c) in pixels {
             self.put(p.x, p.y, [c.r(), c.g(), c.b()]);
         }
@@ -454,15 +434,8 @@ mod tests {
     #[test]
     fn layout_a_puts_the_quiet_zone_and_the_block_where_the_bench_measured_it() {
         let mut f = [0u8; NBYTES];
-        render(
-            &Screen::Portal {
-                ssid: "screeny-4a00a4",
-                layout: Layout::QrAndName,
-                form: UriForm::NoPass,
-            },
-            &mut f,
-        )
-        .unwrap();
+        render(&Screen::Portal { ssid: "screeny-4a00a4", layout: Layout::QrAndName, form: UriForm::NoPass }, &mut f)
+            .unwrap();
         // The lit block is 31x31 at columns 0..=30, rows 0..=30.
         for x in 0..31 {
             assert!(lit(&f, x, 0), "top quiet row, column {x}");
@@ -483,15 +456,8 @@ mod tests {
     #[test]
     fn the_corner_of_the_finder_pattern_is_dark() {
         let mut f = [0u8; NBYTES];
-        render(
-            &Screen::Portal {
-                ssid: "screeny-4a00a4",
-                layout: Layout::QrAndName,
-                form: UriForm::NoPass,
-            },
-            &mut f,
-        )
-        .unwrap();
+        render(&Screen::Portal { ssid: "screeny-4a00a4", layout: Layout::QrAndName, form: UriForm::NoPass }, &mut f)
+            .unwrap();
         // Module (1,1) of the top-left finder is light, (0,0) is dark.
         assert!(!lit(&f, QR_X as usize, QR_Y as usize));
         assert!(lit(&f, QR_X as usize + 1, QR_Y as usize + 1));
@@ -502,11 +468,7 @@ mod tests {
         let mut f = [0u8; NBYTES];
         assert_eq!(
             render(
-                &Screen::Portal {
-                    ssid: "screeny-a-very-long-name",
-                    layout: Layout::QrAndName,
-                    form: UriForm::NoPass,
-                },
+                &Screen::Portal { ssid: "screeny-a-very-long-name", layout: Layout::QrAndName, form: UriForm::NoPass },
                 &mut f,
             ),
             Err(RenderError::NoQr)
@@ -516,15 +478,8 @@ mod tests {
     #[test]
     fn layout_c_lights_no_more_than_text_does() {
         let mut f = [0u8; NBYTES];
-        render(
-            &Screen::Portal {
-                ssid: "screeny-4a00a4",
-                layout: Layout::Text,
-                form: UriForm::NoPass,
-            },
-            &mut f,
-        )
-        .unwrap();
+        render(&Screen::Portal { ssid: "screeny-4a00a4", layout: Layout::Text, form: UriForm::NoPass }, &mut f)
+            .unwrap();
         let on = (0..W).flat_map(|x| (0..H).map(move |y| (x, y)));
         let n = on.filter(|&(x, y)| lit(&f, x, y)).count();
         assert!(n > 100, "the text screen drew nothing ({n} pixels)");
@@ -543,16 +498,8 @@ mod tests {
         // The panel runs off laptop USB. The QR's lit area is
         // 31x31 of 64x32 and nothing else comes close.
         for s in [
-            Screen::Portal {
-                ssid: "screeny-4a00a4",
-                layout: Layout::QrAndName,
-                form: UriForm::NoPass,
-            },
-            Screen::Portal {
-                ssid: "screeny-4a00a4",
-                layout: Layout::Text,
-                form: UriForm::NoPass,
-            },
+            Screen::Portal { ssid: "screeny-4a00a4", layout: Layout::QrAndName, form: UriForm::NoPass },
+            Screen::Portal { ssid: "screeny-4a00a4", layout: Layout::Text, form: UriForm::NoPass },
             Screen::Connected { ip: [192, 168, 7, 221] },
             Screen::Updating { percent: Some(100) },
             Screen::Updating { percent: None },
@@ -565,10 +512,7 @@ mod tests {
             let mut f = [0u8; NBYTES];
             render(&s, &mut f).unwrap();
             let full = f.as_chunks::<3>().0.iter().filter(|p| *p == &[0xff, 0xff, 0xff]).count();
-            assert!(
-                full * 100 / (W * H) <= 50,
-                "more than half the panel is full white"
-            );
+            assert!(full * 100 / (W * H) <= 50, "more than half the panel is full white");
         }
     }
 
@@ -606,10 +550,7 @@ mod tests {
         render(&Screen::Installing, &mut installing).unwrap();
         let mut updating = [0u8; NBYTES];
         render(&Screen::Updating { percent: Some(100) }, &mut updating).unwrap();
-        assert_ne!(
-            installing, updating,
-            "the two screens must be told apart from across a room"
-        );
+        assert_ne!(installing, updating, "the two screens must be told apart from across a room");
         // Rows 22 and 28 are the bar's two edges, drawn right across the panel
         // on `Updating` and nothing at all here.
         for y in [22, 28] {
@@ -620,10 +561,7 @@ mod tests {
                 "row {y} of the updating screen should be the bar's edge"
             );
         }
-        let n = (0..W)
-            .flat_map(|x| (0..H).map(move |y| (x, y)))
-            .filter(|&(x, y)| lit(&installing, x, y))
-            .count();
+        let n = (0..W).flat_map(|x| (0..H).map(move |y| (x, y))).filter(|&(x, y)| lit(&installing, x, y)).count();
         assert!(n > 100, "the installing screen drew nothing ({n} pixels)");
     }
 
@@ -633,9 +571,7 @@ mod tests {
     fn the_updating_screen_is_never_blank() {
         let mut f = [0u8; NBYTES];
         render(&Screen::Updating { percent: None }, &mut f).unwrap();
-        let n = (0..W).flat_map(|x| (0..H).map(move |y| (x, y)))
-            .filter(|&(x, y)| lit(&f, x, y))
-            .count();
+        let n = (0..W).flat_map(|x| (0..H).map(move |y| (x, y))).filter(|&(x, y)| lit(&f, x, y)).count();
         assert!(n > 100, "the updating screen drew almost nothing ({n} pixels)");
         assert!(n < 700, "the updating screen is suspiciously bright ({n} pixels)");
     }
@@ -664,13 +600,7 @@ mod tests {
         // was taken in.
         let frames: [[u8; NBYTES]; 4] = core::array::from_fn(|i| {
             let mut f = [0u8; NBYTES];
-            render(
-                &Screen::WipeCountdown {
-                    seconds_left: i as u8 + 1,
-                },
-                &mut f,
-            )
-            .unwrap();
+            render(&Screen::WipeCountdown { seconds_left: i as u8 + 1 }, &mut f).unwrap();
             f
         });
         for i in 0..frames.len() {
@@ -695,15 +625,8 @@ mod tests {
         assert_ne!(counting, cancelled);
         assert_ne!(counting, unavailable);
         assert_ne!(cancelled, unavailable);
-        for (what, f) in [
-            ("countdown", &counting),
-            ("cancelled", &cancelled),
-            ("unavailable", &unavailable),
-        ] {
-            let n = (0..W)
-                .flat_map(|x| (0..H).map(move |y| (x, y)))
-                .filter(|&(x, y)| lit(f, x, y))
-                .count();
+        for (what, f) in [("countdown", &counting), ("cancelled", &cancelled), ("unavailable", &unavailable)] {
+            let n = (0..W).flat_map(|x| (0..H).map(move |y| (x, y))).filter(|&(x, y)| lit(f, x, y)).count();
             assert!(n > 80, "the {what} screen drew almost nothing ({n} pixels)");
             assert!(n < 700, "the {what} screen is suspiciously bright ({n} pixels)");
         }
@@ -714,10 +637,7 @@ mod tests {
         assert_eq!(split_at_cols("screeny-4a00a4", 8), ("screeny-", "4a00a4"));
         assert_eq!(split_at_cols("short", 8), ("short", ""));
         // Four 3-byte characters: the split is by character, not by byte.
-        assert_eq!(
-            split_at_cols("\u{4e00}\u{4e01}\u{4e02}", 2),
-            ("\u{4e00}\u{4e01}", "\u{4e02}")
-        );
+        assert_eq!(split_at_cols("\u{4e00}\u{4e01}\u{4e02}", 2), ("\u{4e00}\u{4e01}", "\u{4e02}"));
     }
 
     #[test]
@@ -728,16 +648,8 @@ mod tests {
         let long = "screeny-an-extremely-long-name-indeed";
         let mut a = [0u8; NBYTES];
         let mut b = [0u8; NBYTES];
-        render(
-            &Screen::Portal { ssid: long, layout: Layout::Text, form: UriForm::NoPass },
-            &mut a,
-        )
-        .unwrap();
-        render(
-            &Screen::Portal { ssid: &long[..16], layout: Layout::Text, form: UriForm::NoPass },
-            &mut b,
-        )
-        .unwrap();
+        render(&Screen::Portal { ssid: long, layout: Layout::Text, form: UriForm::NoPass }, &mut a).unwrap();
+        render(&Screen::Portal { ssid: &long[..16], layout: Layout::Text, form: UriForm::NoPass }, &mut b).unwrap();
         assert_eq!(a, b);
     }
 }

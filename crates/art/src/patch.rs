@@ -178,7 +178,12 @@ pub const fn param(id: &'static str, label: &'static str, min: f32, max: f32, st
 ///
 /// At compile time, if `choices` is empty: a choice of nothing is a mistake,
 /// not a parameter.
-pub const fn choice(id: &'static str, label: &'static str, choices: &'static [&'static str], default: f32) -> ParamSpec {
+pub const fn choice(
+    id: &'static str,
+    label: &'static str,
+    choices: &'static [&'static str],
+    default: f32,
+) -> ParamSpec {
     assert!(!choices.is_empty(), "a choice parameter needs at least one named stop");
     ParamSpec { id, label, min: 0.0, max: (choices.len() - 1) as f32, step: 1.0, default, choices, switch: false }
 }
@@ -425,7 +430,11 @@ mod tests {
         // grid: the three grids, written the way a person says them.
         let grid = by_id(&crate::patches::clocks::dials::DEF, "grid");
         assert_eq!(grid.choices, ["4 x 2", "6 x 3", "8 x 4"]);
-        assert_eq!((grid.min, grid.max, grid.default), (0.0, 2.0, 0.0), "the range is card 100's; the default became 4 x 2 on 2026-09-25");
+        assert_eq!(
+            (grid.min, grid.max, grid.default),
+            (0.0, 2.0, 0.0),
+            "the range is card 100's; the default became 4 x 2 on 2026-09-25"
+        );
     }
 
     /// Nothing card 163 touched changed a patch's behaviour: every id, range,

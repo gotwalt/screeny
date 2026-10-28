@@ -28,8 +28,7 @@ use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
 
 pub use screeny_probe::enc::{
-    assert_frames_eq, bc1_dual, bc1_mixed, indexed_runs, lz_compress, pal4_lz, pal5, pal8_lz,
-    solid, Block, Indexed,
+    assert_frames_eq, bc1_dual, bc1_mixed, indexed_runs, lz_compress, pal4_lz, pal5, pal8_lz, solid, Block, Indexed,
 };
 pub use screeny_probe::link::{error_code, parse_reply, OwnedReply};
 pub use screeny_probe::vectors::{all as vectors, Vector};
@@ -52,9 +51,7 @@ pub struct Sender {
 impl Sender {
     /// Bind an ephemeral loopback port and aim at `dst`.
     pub fn new(dst: SocketAddr) -> Sender {
-        Sender {
-            link: FrameLink::connect(dst).expect("bind sender"),
-        }
+        Sender { link: FrameLink::connect(dst).expect("bind sender") }
     }
 
     /// This sender's own address, which is its identity as far as spec
@@ -76,23 +73,12 @@ impl Sender {
 
     /// Send one frame with an explicit sequence number.
     pub fn send_seq(&self, codec: u8, flags: u8, seq: u16, payload: &[u8]) {
-        self.link
-            .send_seq(codec, flags, seq, payload)
-            .expect("send frame");
+        self.link.send_seq(codec, flags, seq, payload).expect("send frame");
     }
 
     /// Send one frame with everything spelled out, including `HAS_TS`.
-    pub fn send_full(
-        &self,
-        codec: u8,
-        flags: u8,
-        seq: u16,
-        timestamp_us: Option<u32>,
-        payload: &[u8],
-    ) {
-        self.link
-            .send_full(codec, flags, seq, timestamp_us, payload)
-            .expect("send frame");
+    pub fn send_full(&self, codec: u8, flags: u8, seq: u16, timestamp_us: Option<u32>, payload: &[u8]) {
+        self.link.send_full(codec, flags, seq, timestamp_us, payload).expect("send frame");
     }
 
     /// Send arbitrary bytes, for the malformed-packet tests.

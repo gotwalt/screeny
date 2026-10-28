@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 use screeny_proto::control::Telemetry;
 use screeny_proto::dec::codec;
 use screeny_proto::{
-    FramePacket, IndexedFrame, Packet, Rgb888Frame, F_FINAL, F_KEY, F_STATS_REQ, MAX_PIXEL_PAYLOAD,
-    MAX_UDP_PAYLOAD, NPIX,
+    FramePacket, IndexedFrame, Packet, Rgb888Frame, F_FINAL, F_KEY, F_STATS_REQ, MAX_PIXEL_PAYLOAD, MAX_UDP_PAYLOAD,
+    NPIX,
 };
 
 use crate::device::Device;
@@ -412,13 +412,7 @@ impl Sender {
             Some(i) => {
                 let common = i.common_codecs(&my_codecs);
                 if common.is_empty() {
-                    return Err(Error::NoCommonCodec(
-                        i.codecs
-                            .iter()
-                            .map(u8::to_string)
-                            .collect::<Vec<_>>()
-                            .join(","),
-                    ));
+                    return Err(Error::NoCommonCodec(i.codecs.iter().map(u8::to_string).collect::<Vec<_>>().join(",")));
                 }
                 (common, i.budget())
             }
@@ -428,26 +422,16 @@ impl Sender {
 
         let budget = cfg.budget.unwrap_or(dev_budget).min(MAX_PIXEL_PAYLOAD);
         if !(screeny_proto::dec::SOLID_LEN..=MAX_PIXEL_PAYLOAD).contains(&budget) {
-            return Err(Error::Budget {
-                got: budget,
-                max: MAX_PIXEL_PAYLOAD,
-            });
+            return Err(Error::Budget { got: budget, max: MAX_PIXEL_PAYLOAD });
         }
 
         let sock = net::connected_socket(device.frame, true, cfg.qos)?;
         sock.set_nonblocking(true)?;
 
-        let enc = Encoder::new(EncodeConfig {
-            codecs: codecs.clone(),
-            profile: cfg.profile,
-            ..EncodeConfig::default()
-        });
+        let enc =
+            Encoder::new(EncodeConfig { codecs: codecs.clone(), profile: cfg.profile, ..EncodeConfig::default() });
 
-        let mut stats = SendStats {
-            fps: cfg.fps,
-            control,
-            ..SendStats::default()
-        };
+        let mut stats = SendStats { fps: cfg.fps, control, ..SendStats::default() };
         stats.by_codec.clear();
 
         Ok(Sender {
@@ -458,13 +442,7 @@ impl Sender {
             enc,
             seq: 0,
             stats,
-            adapt: Adapt {
-                prev: None,
-                sent_at_prev: 0,
-                bad: 0,
-                good: 0,
-                rung: 0,
-            },
+            adapt: Adapt { prev: None, sent_at_prev: 0, bad: 0, good: 0, rung: 0 },
             epoch: Instant::now(),
             buf: vec![0u8; MAX_UDP_PAYLOAD],
             rx: vec![0u8; MAX_UDP_PAYLOAD],
@@ -543,7 +521,7 @@ impl Sender {
     /// [`Error::Frame`] or [`Error::BadIndex`] if the frame is malformed -
     /// the caller's bug - and [`Error::Io`] if the datagram could not be sent.
     pub fn send(&mut self, px: Pixels<'_>) -> Result<Sent> {
-        px.check()?;  // the index check belongs to the indexed arm below
+        px.check()?; // the index check belongs to the indexed arm below
         match px {
             Pixels::Rgb(bytes) => {
                 // `check` has already pinned the length; this is the cast.
@@ -583,10 +561,7 @@ impl Sender {
     pub fn send_indexed(&mut self, palette: &[[u8; 3]], indices: &[u8]) -> Result<Sent> {
         Pixels::indexed(palette, indices).validate()?;
         self.idx.copy_from_slice(indices);
-        let f = IndexedFrame {
-            palette,
-            indices: &self.idx,
-        };
+        let f = IndexedFrame { palette, indices: &self.idx };
         // Infallible now: the two things `encode_indexed` rejects - a palette
         // outside 1..=256, and an out-of-range index - were both just checked,
         // with a better error than `Corrupt` for each.
@@ -648,12 +623,7 @@ impl Sender {
         let seq = self.seq;
         self.transmit(frame.codec, &frame.payload, false)?;
         self.last_payload = Some((frame.codec, frame.payload.clone()));
-        Ok(Sent::Frame {
-            codec: frame.codec,
-            bytes: frame.payload.len(),
-            exact,
-            seq,
-        })
+        Ok(Sent::Frame { codec: frame.codec, bytes: frame.payload.len(), exact, seq })
     }
 
     /// Put an [`Encoded`] on the wire and account for it.
@@ -669,12 +639,7 @@ impl Sender {
         let bytes = out.payload.len();
         self.transmit(out.codec, &out.payload, final_frame)?;
         self.last_payload = Some((out.codec, out.payload));
-        Ok(Sent::Frame {
-            codec: out.codec,
-            bytes,
-            exact,
-            seq,
-        })
+        Ok(Sent::Frame { codec: out.codec, bytes, exact, seq })
     }
 
     /// When the device was last heard from on the frame socket: a `TELEMETRY`
@@ -724,12 +689,8 @@ impl Sender {
         }
         let now = Instant::now();
         // Spec 6.4: about one frame per second, never more than one in 100 ms.
-        let due = self
-            .last_stats_req
-            .is_none_or(|t| now.duration_since(t) >= self.cfg.stats_interval);
-        let allowed = self
-            .last_stats_req
-            .is_none_or(|t| now.duration_since(t) >= Duration::from_millis(100));
+        let due = self.last_stats_req.is_none_or(|t| now.duration_since(t) >= self.cfg.stats_interval);
+        let allowed = self.last_stats_req.is_none_or(|t| now.duration_since(t) >= Duration::from_millis(100));
         if due && allowed {
             flags |= F_STATS_REQ;
             self.last_stats_req = Some(now);
@@ -739,11 +700,7 @@ impl Sender {
             codec,
             flags,
             seq: self.seq,
-            timestamp_us: if self.cfg.timestamps {
-                Some(self.epoch.elapsed().as_micros() as u32)
-            } else {
-                None
-            },
+            timestamp_us: if self.cfg.timestamps { Some(self.epoch.elapsed().as_micros() as u32) } else { None },
             payload,
         };
         let n = pkt
@@ -838,9 +795,7 @@ impl Sender {
         }
 
         let d_rx = t.frames_rx.wrapping_sub(prev.frames_rx) as u64;
-        let d_superseded = t
-            .frames_dropped_superseded
-            .wrapping_sub(prev.frames_dropped_superseded);
+        let d_superseded = t.frames_dropped_superseded.wrapping_sub(prev.frames_dropped_superseded);
         let d_decode = t.frames_dropped_decode.wrapping_sub(prev.frames_dropped_decode);
         let d_rejected = t.frames_rejected.wrapping_sub(prev.frames_rejected);
 
@@ -912,12 +867,7 @@ impl Sender {
         }
         self.stats.codec_limited = on;
         if on {
-            let cheap: Vec<u8> = self
-                .my_codecs
-                .iter()
-                .copied()
-                .filter(|c| CHEAP_CODECS.contains(c))
-                .collect();
+            let cheap: Vec<u8> = self.my_codecs.iter().copied().filter(|c| CHEAP_CODECS.contains(c)).collect();
             if cheap.is_empty() {
                 self.stats.codec_limited = false;
             } else {
@@ -949,14 +899,7 @@ impl Sender {
         stop: &AtomicBool,
         tick: &mut dyn FnMut(&SendStats),
     ) -> Result<()> {
-        self.drive(
-            &mut RgbDriver {
-                src,
-                frame: Frame::black(),
-            },
-            stop,
-            tick,
-        )
+        self.drive(&mut RgbDriver { src, frame: Frame::black() }, stop, tick)
     }
 
     /// [`Sender::run`] for a source that owns its palette.
@@ -995,12 +938,7 @@ impl Sender {
 
     /// The pacing loop, shared by both pull APIs. `src` produces and sends one
     /// frame per slot; everything else here is spec 9.1's schedule.
-    fn drive(
-        &mut self,
-        src: &mut dyn Driver,
-        stop: &AtomicBool,
-        tick: &mut dyn FnMut(&SendStats),
-    ) -> Result<()> {
+    fn drive(&mut self, src: &mut dyn Driver, stop: &AtomicBool, tick: &mut dyn FnMut(&SendStats)) -> Result<()> {
         let stream_start = Instant::now();
         self.stats.started = Some(stream_start);
 
@@ -1018,11 +956,7 @@ impl Sender {
             }
             sleep_until(start + period.mul_f64(n as f64));
 
-            let t = FrameTime {
-                index: n,
-                elapsed: stream_start.elapsed(),
-                fps,
-            };
+            let t = FrameTime { index: n, elapsed: stream_start.elapsed(), fps };
             if !src.produce(t, self)? {
                 break;
             }

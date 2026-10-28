@@ -319,7 +319,11 @@ struct NewChannel {
 
 /// **New channel**: a copy of `from` (Channel 1 by default), with no panels.
 /// Answers with the new channel's state.
-async fn channels_new(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<NewChannel>) -> ApiResult<Json<StudioState>> {
+async fn channels_new(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<NewChannel>,
+) -> ApiResult<Json<StudioState>> {
     let from = match req.from {
         Some(id) => Some(st.panels.channel(id).ok_or_else(|| ApiError::not_found(format!("no channel {id}")))?),
         None => None,
@@ -334,8 +338,13 @@ struct RenameChannel {
     name: String,
 }
 
-async fn channels_rename(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<RenameChannel>) -> ApiResult<Json<StudioState>> {
-    let channel = st.panels.channel(req.channel).ok_or_else(|| ApiError::not_found(format!("no channel {}", req.channel)))?;
+async fn channels_rename(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RenameChannel>,
+) -> ApiResult<Json<StudioState>> {
+    let channel =
+        st.panels.channel(req.channel).ok_or_else(|| ApiError::not_found(format!("no channel {}", req.channel)))?;
     st.panels.rename_channel(&channel, &req.name).map_err(ApiError::bad_request)?;
     Ok(Json(publish(&st, &headers, &Aim { channel, from: None })))
 }
@@ -347,8 +356,13 @@ struct DeleteChannel {
 
 /// **Delete a channel**: its panels move to Channel 1. Channel 1 is a 400.
 /// Answers with Channel 1's state.
-async fn channels_delete(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<DeleteChannel>) -> ApiResult<Json<StudioState>> {
-    let channel = st.panels.channel(req.channel).ok_or_else(|| ApiError::not_found(format!("no channel {}", req.channel)))?;
+async fn channels_delete(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DeleteChannel>,
+) -> ApiResult<Json<StudioState>> {
+    let channel =
+        st.panels.channel(req.channel).ok_or_else(|| ApiError::not_found(format!("no channel {}", req.channel)))?;
     let moved = channel.followers();
     st.panels.delete_channel(&channel).map_err(ApiError::bad_request)?;
     for p in &moved {
@@ -366,15 +380,24 @@ struct PanelChannel {
 /// **Move a panel to a channel**: it fades there over 2 s, alone, and is then
 /// on that channel's shared frames. Answers with the channel's state, seen
 /// from the panel.
-async fn panel_channel(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<PanelChannel>) -> ApiResult<Json<StudioState>> {
-    let panel = st.panels.get(req.panel.trim()).ok_or_else(|| ApiError::not_found(format!("no panel `{}`", req.panel.trim())))?;
-    let channel = st.panels.channel(req.channel).ok_or_else(|| ApiError::not_found(format!("no channel {}", req.channel)))?;
+async fn panel_channel(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PanelChannel>,
+) -> ApiResult<Json<StudioState>> {
+    let panel = st
+        .panels
+        .get(req.panel.trim())
+        .ok_or_else(|| ApiError::not_found(format!("no panel `{}`", req.panel.trim())))?;
+    let channel =
+        st.panels.channel(req.channel).ok_or_else(|| ApiError::not_found(format!("no channel {}", req.channel)))?;
     crate::fleet::move_to_channel(&st, &panel, &channel);
     Ok(Json(publish(&st, &headers, &Aim { channel, from: Some(panel) })))
 }
 
 /// What `same_as` and `detach` say now (card 353).
-pub const PICK_RULES_RETIRED: &str = "`same_as` and `detach` are retired (card 353): panels are on explicit channels now. \
+pub const PICK_RULES_RETIRED: &str =
+    "`same_as` and `detach` are retired (card 353): panels are on explicit channels now. \
     Make one with POST /api/v1/channels/new and move a panel with POST /api/v1/panel/channel";
 
 /// Card 350's `same_as` and `detach`, **retired** by card 353: a 410 that
@@ -397,7 +420,12 @@ struct SetPatch {
 }
 
 /// A patch, on its Default, for a channel - every panel on it.
-async fn set_patch(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetPatch>) -> ApiResult<Json<StudioState>> {
+async fn set_patch(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<SetPatch>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     let def = patch_def(&st, &req.id)?;
     pick(&st, &aim.channel, def, None)?;
@@ -417,7 +445,12 @@ struct SetPicture {
 
 /// **A picture** - a patch on one of its named settings - for a channel, in
 /// one step. What Home Assistant's picture select does, as a route.
-async fn set_picture(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetPicture>) -> ApiResult<Json<StudioState>> {
+async fn set_picture(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<SetPicture>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     let def = patch_def(&st, &req.patch)?;
     pick(&st, &aim.channel, def, Some(&req.setting))?;
@@ -432,7 +465,12 @@ struct SetParam {
     at: Target,
 }
 
-async fn set_param(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetParam>) -> ApiResult<Json<StudioState>> {
+async fn set_param(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<SetParam>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     edit(&st, &headers, &aim, &Edit { param: Some((req.id, req.value)), ..Edit::default() })
 }
@@ -440,7 +478,12 @@ async fn set_param(State(st): State<AppState>, Query(q): Query<Which>, headers: 
 /// Takes no arguments but the target - and reads the body anyway, because
 /// the UI sends `{}` and a server that closes a connection with a request
 /// body still unread gets a TCP reset rather than a clean close.
-async fn reset_params(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
+async fn reset_params(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &body_target(&body), &q)?;
     edit(&st, &headers, &aim, &Edit { reset_params: true, ..Edit::default() })
 }
@@ -454,7 +497,12 @@ struct SetSeed {
     at: Target,
 }
 
-async fn set_seed(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetSeed>) -> ApiResult<Json<StudioState>> {
+async fn set_seed(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<SetSeed>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     let seed = req.seed.unwrap_or_else(page::fresh_seed);
     edit(&st, &headers, &aim, &Edit { seed: Some(seed), ..Edit::default() })
@@ -472,7 +520,12 @@ struct SetOutput {
 /// **The studio's output stage** (card 356): one setting for every channel.
 /// A `channel` or `panel` (an older client's) is accepted, and only chooses
 /// which state the answer describes - falling back to Channel 1 if it is gone.
-async fn set_output(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetOutput>) -> ApiResult<Json<StudioState>> {
+async fn set_output(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<SetOutput>,
+) -> ApiResult<Json<StudioState>> {
     st.panels.set_output(req.output);
     let aim = target(&st, &req.at, &q).unwrap_or_else(|_| Aim { channel: st.panels.home(), from: None });
     Ok(Json(publish(&st, &headers, &aim)))
@@ -487,7 +540,11 @@ pub const PLAYBACK_RETIRED: &str = "speed and pause are not settings any more (c
 /// sends `{paused, speed}` is not broken by it - but it **changes nothing**,
 /// and says so: the answer is the whole state, as before, with one more key,
 /// `ignored`, holding [`PLAYBACK_RETIRED`]. Any body at all is accepted.
-async fn set_playback(State(st): State<AppState>, Query(q): Query<Which>, body: axum::body::Bytes) -> ApiResult<Json<serde_json::Value>> {
+async fn set_playback(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<serde_json::Value>> {
     let aim = target(&st, &body_target(&body), &q)?;
     let mut answer = serde_json::to_value(st.state_of(&aim.channel, aim.from.as_ref())).unwrap_or_default();
     if let Some(o) = answer.as_object_mut() {
@@ -507,7 +564,11 @@ struct PatchAct {
     panel: Option<String>,
 }
 
-async fn patch_act(State(st): State<AppState>, Query(q): Query<Which>, Json(req): Json<PatchAct>) -> ApiResult<Json<Option<Playing>>> {
+async fn patch_act(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    Json(req): Json<PatchAct>,
+) -> ApiResult<Json<Option<Playing>>> {
     let aim = target(&st, &Target { channel: req.channel, panel: req.panel }, &q)?;
     aim.channel.edit(&Edit { act: Some(req.action), ..Edit::default() }).map_err(ApiError::bad_request)?;
     // A patch's own action changes the patch, not the studio's state, so there
@@ -518,7 +579,12 @@ async fn patch_act(State(st): State<AppState>, Query(q): Query<Which>, Json(req)
 
 /// Takes no arguments but the target; reads the body for the reason
 /// `reset_params` does.
-async fn restart(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, body: axum::body::Bytes) -> ApiResult<Json<StudioState>> {
+async fn restart(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &body_target(&body), &q)?;
     edit(&st, &headers, &aim, &Edit { restart: true, ..Edit::default() })
 }
@@ -551,7 +617,12 @@ struct LoadSetting {
 
 /// Put the channel on a setting of the patch it is showing, in one change:
 /// the parameters and the seed move together, one broadcast and one write.
-async fn settings_load(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<LoadSetting>) -> ApiResult<Json<StudioState>> {
+async fn settings_load(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<LoadSetting>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     let channel = &aim.channel;
     let (def, _) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(channel)))?;
@@ -571,7 +642,12 @@ struct SaveSetting {
     at: Target,
 }
 
-async fn settings_save(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SaveSetting>) -> ApiResult<Json<StudioState>> {
+async fn settings_save(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<SaveSetting>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     let channel = &aim.channel;
     let (def, work) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(channel)))?;
@@ -594,7 +670,12 @@ struct RenameSetting {
     at: Target,
 }
 
-async fn settings_rename(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<RenameSetting>) -> ApiResult<Json<StudioState>> {
+async fn settings_rename(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<RenameSetting>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     let channel = &aim.channel;
     let (def, _) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(channel)))?;
@@ -615,7 +696,12 @@ struct DeleteSetting {
 /// Delete a setting. **What is playing does not change**: the values stay, and
 /// what goes is the name they came from - so every channel that was on it says
 /// `Default`, and `modified`, which is the truth.
-async fn settings_delete(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<DeleteSetting>) -> ApiResult<Json<StudioState>> {
+async fn settings_delete(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<DeleteSetting>,
+) -> ApiResult<Json<StudioState>> {
     let aim = target(&st, &req.at, &q)?;
     let channel = &aim.channel;
     let (def, _) = channel.working().ok_or_else(|| ApiError::bad_request(unknown_patch(channel)))?;
@@ -690,7 +776,14 @@ async fn ha_forget(State(st): State<AppState>, _body: axum::body::Bytes) -> ApiR
     // The running client must be gone first: `forget` connects as the same
     // client, and the broker would throw one off for the other.
     st.ha.until_off(crate::ha::client::GOODBYE + std::time::Duration::from_secs(1)).await;
-    crate::ha::client::forget(&cfg, &crate::ha::bridge::panel_keys(&st), &crate::ha::bridge::channel_ids(&st), std::time::Duration::from_secs(10)).await.map_err(|e| ApiError::unreachable(format!("removing from Home Assistant: {e}.")))?;
+    crate::ha::client::forget(
+        &cfg,
+        &crate::ha::bridge::panel_keys(&st),
+        &crate::ha::bridge::channel_ids(&st),
+        std::time::Duration::from_secs(10),
+    )
+    .await
+    .map_err(|e| ApiError::unreachable(format!("removing from Home Assistant: {e}.")))?;
     Ok(Json(st.ha.view()))
 }
 
@@ -800,7 +893,12 @@ struct PanelOutcome {
 ///   as `POST /devices/add` would, if it is new - onto Channel 1) and drive
 ///   it. `to` may be a device id, an mDNS instance name or an address.
 /// - `{"on":true}` - output back on, for `panel` or the first panel.
-async fn set_panel(State(st): State<AppState>, Query(q): Query<Which>, headers: HeaderMap, Json(req): Json<SetPanel>) -> ApiResult<Json<PanelOutcome>> {
+async fn set_panel(
+    State(st): State<AppState>,
+    Query(q): Query<Which>,
+    headers: HeaderMap,
+    Json(req): Json<SetPanel>,
+) -> ApiResult<Json<PanelOutcome>> {
     let named = req.panel.as_deref().or(q.panel.as_deref()).filter(|p| !p.trim().is_empty());
     let panel: Option<Arc<Panel>> = if req.on {
         match req.to.trim() {
@@ -852,12 +950,7 @@ fn find_or_add(st: &AppState, to: &str) -> ApiResult<String> {
     if st.devices.get(to).is_some() {
         return Ok(to.to_string());
     }
-    if let Some(d) = st
-        .devices
-        .list()
-        .into_iter()
-        .find(|d| d.stored.instance == to || d.stored.address == to)
-    {
+    if let Some(d) = st.devices.list().into_iter().find(|d| d.stored.instance == to || d.stored.address == to) {
         return Ok(d.stored.id);
     }
     st.devices.add_manual(to, "").map_err(ApiError::bad_request)
@@ -923,7 +1016,10 @@ async fn devices_forget(State(st): State<AppState>, Json(req): Json<DeviceRef>) 
 }
 
 /// Ask the unresolved devices who they are, now rather than on the next pass.
-async fn devices_refresh(State(st): State<AppState>, _body: axum::body::Bytes) -> Json<Vec<crate::health::DeviceStatus>> {
+async fn devices_refresh(
+    State(st): State<AppState>,
+    _body: axum::body::Bytes,
+) -> Json<Vec<crate::health::DeviceStatus>> {
     for d in st.devices.list() {
         if d.resolved.is_some() {
             continue;
@@ -1053,9 +1149,12 @@ async fn player_set(State(st): State<AppState>, Json(req): Json<SetPlayer>) -> A
 /// The control address of a device, or the right refusal.
 fn control_addr(st: &AppState, device: &str) -> ApiResult<std::net::SocketAddr> {
     let record = st.devices.get(device).ok_or_else(|| ApiError::not_found(format!("no device `{device}`")))?;
-    record
-        .control_addr()
-        .ok_or_else(|| ApiError::unreachable(format!("`{}` has not been reached yet, so there is no control port to talk to", record.label())))
+    record.control_addr().ok_or_else(|| {
+        ApiError::unreachable(format!(
+            "`{}` has not been reached yet, so there is no control port to talk to",
+            record.label()
+        ))
+    })
 }
 
 /// Run one control request on a blocking thread, and turn a silent device into
@@ -1094,9 +1193,14 @@ struct SetBrightness {
 /// Set brightness now, and remember it as the policy so a reconnect re-applies
 /// it. The answer is what the device *applied*, which its own cap may make
 /// lower than what was asked for.
-async fn device_brightness(State(st): State<AppState>, Json(req): Json<SetBrightness>) -> ApiResult<Json<serde_json::Value>> {
+async fn device_brightness(
+    State(st): State<AppState>,
+    Json(req): Json<SetBrightness>,
+) -> ApiResult<Json<serde_json::Value>> {
     let level = req.level;
-    let applied = on_device(&st, &req.device, "setting brightness", move |c| c.set_brightness(level).map_err(|e| e.to_string())).await?;
+    let applied =
+        on_device(&st, &req.device, "setting brightness", move |c| c.set_brightness(level).map_err(|e| e.to_string()))
+            .await?;
     if let Some(p) = st.panels.get(&req.device) {
         p.set_brightness(Some(level));
         p.brightness_applied(level, applied);
@@ -1189,7 +1293,10 @@ async fn device_firmware(State(st): State<AppState>, Json(req): Json<Reboot>) ->
 }
 
 /// Telemetry, read now rather than from the five-second poll.
-async fn device_stats(State(st): State<AppState>, Json(req): Json<DeviceRef>) -> ApiResult<Json<crate::devices::Telem>> {
+async fn device_stats(
+    State(st): State<AppState>,
+    Json(req): Json<DeviceRef>,
+) -> ApiResult<Json<crate::devices::Telem>> {
     let t = on_device(&st, &req.device, "asking for telemetry", |c| c.telemetry().map_err(|e| e.to_string())).await?;
     st.devices.heard(&req.device, &t);
     Ok(Json(crate::devices::Telem::of(&t)))

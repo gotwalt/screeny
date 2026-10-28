@@ -110,13 +110,19 @@ pub fn plan(env: &dyn Fn(&str) -> Option<String>, options: Option<&str>) -> Resu
     let peers = match env("SCREENY_APP_INGRESS_PEERS") {
         Some(v) => v
             .split(',')
-            .map(|p| p.trim().parse::<IpAddr>().map_err(|_| format!("SCREENY_APP_INGRESS_PEERS {v}: expected addresses")))
+            .map(|p| {
+                p.trim().parse::<IpAddr>().map_err(|_| format!("SCREENY_APP_INGRESS_PEERS {v}: expected addresses"))
+            })
             .collect::<Result<Vec<_>, _>>()?,
         None => vec![INGRESS_PEER],
     };
     let direct = if options.direct_access {
         if options.direct_port == 0 || options.direct_port == listen.port() {
-            return Err(format!("direct_port {} cannot be used: it is 0 or the port ingress uses ({}).", options.direct_port, listen.port()));
+            return Err(format!(
+                "direct_port {} cannot be used: it is 0 or the port ingress uses ({}).",
+                options.direct_port,
+                listen.port()
+            ));
         }
         Some(SocketAddr::from(([0, 0, 0, 0], options.direct_port)))
     } else {
@@ -134,7 +140,12 @@ pub fn plan(env: &dyn Fn(&str) -> Option<String>, options: Option<&str>) -> Resu
 /// the container on the host network, so it arrives from the gateway address
 /// itself, not from the Supervisor. It says only whether the studio is well,
 /// and the address it is served on exists only inside the Home Assistant host.
-pub async fn only_peers(State(peers): State<Arc<Vec<IpAddr>>>, ConnectInfo(from): ConnectInfo<SocketAddr>, req: Request, next: Next) -> Response {
+pub async fn only_peers(
+    State(peers): State<Arc<Vec<IpAddr>>>,
+    ConnectInfo(from): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
     // A v4 peer on a dual-stack socket arrives as `::ffff:a.b.c.d`.
     let ip = from.ip().to_canonical();
     let health = req.method() == axum::http::Method::GET && req.uri().path() == "/healthz";
@@ -162,7 +173,10 @@ mod tests {
     #[test]
     fn options_json_is_parsed_with_defaults() {
         assert_eq!(parse_options("{}").unwrap(), Options::default());
-        assert_eq!(parse_options(r#"{"direct_access":true,"direct_port":9000}"#).unwrap(), Options { direct_access: true, direct_port: 9000 });
+        assert_eq!(
+            parse_options(r#"{"direct_access":true,"direct_port":9000}"#).unwrap(),
+            Options { direct_access: true, direct_port: 9000 }
+        );
         assert!(parse_options(r#"{"direct_port":"x"}"#).is_err());
         assert!(parse_options("nope").is_err());
         // Keys the Supervisor adds are not ours to refuse.
@@ -183,7 +197,9 @@ mod tests {
         let p = plan(&env(&[("SUPERVISOR_TOKEN", "t")]), Some(r#"{"direct_access":true}"#)).unwrap().unwrap();
         assert_eq!(p.direct.unwrap().to_string(), "0.0.0.0:8787");
         assert_eq!(p.listen.port(), 8099, "ingress is untouched");
-        let p = plan(&env(&[("SUPERVISOR_TOKEN", "t")]), Some(r#"{"direct_access":true,"direct_port":9000}"#)).unwrap().unwrap();
+        let p = plan(&env(&[("SUPERVISOR_TOKEN", "t")]), Some(r#"{"direct_access":true,"direct_port":9000}"#))
+            .unwrap()
+            .unwrap();
         assert_eq!(p.direct.unwrap().port(), 9000);
         // Off: the port is ignored.
         let p = plan(&env(&[("SUPERVISOR_TOKEN", "t")]), Some(r#"{"direct_port":9000}"#)).unwrap().unwrap();
@@ -194,11 +210,19 @@ mod tests {
     #[test]
     fn the_simulation_knobs_are_read() {
         let p = plan(
-            &env(&[("SUPERVISOR_TOKEN", "t"), ("SCREENY_APP_INGRESS_LISTEN", "127.0.0.1:8801"), ("SCREENY_APP_INGRESS_PEERS", "127.0.0.1, 10.0.0.2"), ("SCREENY_SUPERVISOR_URL", "http://127.0.0.1:1")]),
+            &env(&[
+                ("SUPERVISOR_TOKEN", "t"),
+                ("SCREENY_APP_INGRESS_LISTEN", "127.0.0.1:8801"),
+                ("SCREENY_APP_INGRESS_PEERS", "127.0.0.1, 10.0.0.2"),
+                ("SCREENY_SUPERVISOR_URL", "http://127.0.0.1:1"),
+            ]),
             None,
         )
         .unwrap()
         .unwrap();
-        assert_eq!((p.listen.to_string().as_str(), p.peers.len(), p.supervisor.base.as_str()), ("127.0.0.1:8801", 2, "http://127.0.0.1:1"));
+        assert_eq!(
+            (p.listen.to_string().as_str(), p.peers.len(), p.supervisor.base.as_str()),
+            ("127.0.0.1:8801", 2, "http://127.0.0.1:1")
+        );
     }
 }

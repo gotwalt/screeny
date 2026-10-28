@@ -154,7 +154,9 @@ impl HaSettings {
         }
         let prefix = self.discovery_prefix.trim().trim_matches('/').to_string();
         if prefix.is_empty() || prefix.contains(['+', '#']) {
-            return Err(format!("`{prefix}` cannot be a discovery prefix; Home Assistant's own is `{DEFAULT_PREFIX}`."));
+            return Err(format!(
+                "`{prefix}` cannot be a discovery prefix; Home Assistant's own is `{DEFAULT_PREFIX}`."
+            ));
         }
         self.discovery_prefix = prefix;
         let raw = self.instance.trim().to_string();
@@ -212,7 +214,9 @@ pub enum Status {
     Connecting,
     Connected,
     /// Trying again, with the last reason it did not work.
-    Failed { detail: String },
+    Failed {
+        detail: String,
+    },
 }
 
 /// What the page is told: the settings without the password, how the
@@ -258,7 +262,12 @@ impl Ha {
     #[must_use]
     pub fn new(settings: HaSettings) -> Ha {
         let want = watch::Sender::new(settings.connection());
-        Ha { settings: Mutex::new(settings), want, supervised: Mutex::new(None), status: watch::Sender::new(Status::Off) }
+        Ha {
+            settings: Mutex::new(settings),
+            want,
+            supervised: Mutex::new(None),
+            status: watch::Sender::new(Status::Off),
+        }
     }
 
     #[must_use]
@@ -295,7 +304,8 @@ impl Ha {
     /// Whether [`Ha::effective`] is the Supervisor's.
     #[must_use]
     pub fn is_supervised(&self) -> bool {
-        self.settings() == HaSettings::default() && self.supervised.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
+        self.settings() == HaSettings::default()
+            && self.supervised.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_some()
     }
 
     fn retarget(&self) {
@@ -575,7 +585,10 @@ mod tests {
     fn defaults_are_home_assistants_and_off() {
         let s = HaSettings::default();
         assert!(!s.enabled);
-        assert_eq!((s.port, s.discovery_prefix.as_str(), s.instance.as_str(), s.name.as_str()), (1883, "homeassistant", "studio", "Screeny"));
+        assert_eq!(
+            (s.port, s.discovery_prefix.as_str(), s.instance.as_str(), s.name.as_str()),
+            (1883, "homeassistant", "studio", "Screeny")
+        );
         assert_eq!(s.check().unwrap().connection(), None, "off connects nowhere");
     }
 
@@ -592,7 +605,10 @@ mod tests {
         .check()
         .unwrap();
         assert_eq!((s.host.as_str(), s.username.as_str()), ("broker.example", "someone"));
-        assert_eq!((s.discovery_prefix.as_str(), s.instance.as_str(), s.name.as_str()), ("ha", "Living_Room", "Screeny"));
+        assert_eq!(
+            (s.discovery_prefix.as_str(), s.instance.as_str(), s.name.as_str()),
+            ("ha", "Living_Room", "Screeny")
+        );
 
         for bad in [
             on(""),
@@ -608,8 +624,12 @@ mod tests {
 
     #[test]
     fn a_connection_only_when_on_and_somewhere() {
-        let c = HaSettings { username: "someone".into(), password: "password9".into(), ..on("b") }.connection().unwrap();
-        assert_eq!((c.host.as_str(), c.username.as_deref(), c.password.as_deref()), ("b", Some("someone"), Some("password9")));
+        let c =
+            HaSettings { username: "someone".into(), password: "password9".into(), ..on("b") }.connection().unwrap();
+        assert_eq!(
+            (c.host.as_str(), c.username.as_deref(), c.password.as_deref()),
+            ("b", Some("someone"), Some("password9"))
+        );
         assert_eq!(on("b").connection().unwrap().username, None, "empty is anonymous");
         assert_eq!(HaSettings { enabled: false, ..on("b") }.connection(), None);
     }

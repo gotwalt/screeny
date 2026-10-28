@@ -69,14 +69,8 @@ impl<'a> Iterator for Iter<'a> {
                 continue; // empty strings are ignored, not entries
             }
             return Some(match s.iter().position(|&b| b == b'=') {
-                Some(i) => Entry {
-                    key: &s[..i],
-                    value: Some(&s[i + 1..]),
-                },
-                None => Entry {
-                    key: s,
-                    value: None,
-                },
+                Some(i) => Entry { key: &s[..i], value: Some(&s[i + 1..]) },
+                None => Entry { key: s, value: None },
             });
         }
     }
@@ -273,9 +267,7 @@ impl<'a> DeviceInfo<'a> {
     /// skipped, because a sender must tolerate a device newer than itself.
     #[must_use]
     pub fn codec_ids(&self) -> CodecIds<'a> {
-        CodecIds {
-            rest: self.codecs.as_bytes(),
-        }
+        CodecIds { rest: self.codecs.as_bytes() }
     }
 
     /// True if the device advertised this codec id.
@@ -328,19 +320,11 @@ struct Writer<'b> {
 
 impl Writer<'_> {
     fn push(&mut self, key: &[u8], value: &[u8]) -> Result<(), BuildError> {
-        let n = key
-            .len()
-            .checked_add(1)
-            .and_then(|n| n.checked_add(value.len()))
-            .ok_or(BuildError::TooLong)?;
+        let n = key.len().checked_add(1).and_then(|n| n.checked_add(value.len())).ok_or(BuildError::TooLong)?;
         if n > 255 {
             return Err(BuildError::TooLong);
         }
-        let end = self
-            .at
-            .checked_add(1)
-            .and_then(|a| a.checked_add(n))
-            .ok_or(BuildError::TooLong)?;
+        let end = self.at.checked_add(1).and_then(|a| a.checked_add(n)).ok_or(BuildError::TooLong)?;
         if end > self.out.len() {
             return Err(BuildError::BufferTooSmall);
         }

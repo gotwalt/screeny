@@ -64,9 +64,7 @@ impl Ssid {
         if bytes.is_empty() {
             return Err(SettingError::SsidEmpty);
         }
-        Vec::from_slice(bytes)
-            .map(Self)
-            .map_err(|_| SettingError::SsidTooLong)
+        Vec::from_slice(bytes).map(Self).map_err(|_| SettingError::SsidTooLong)
     }
 
     /// The bytes on the wire and in flash.
@@ -110,9 +108,7 @@ impl Psk {
     /// # Errors
     /// [`SettingError::PskTooLong`].
     pub fn new(bytes: &[u8]) -> Result<Self, SettingError> {
-        Vec::from_slice(bytes)
-            .map(Self)
-            .map_err(|_| SettingError::PskTooLong)
+        Vec::from_slice(bytes).map(Self).map_err(|_| SettingError::PskTooLong)
     }
 
     /// An open network.
@@ -163,10 +159,7 @@ impl Wifi {
     /// # Errors
     /// Whatever [`Ssid::new`] or [`Psk::new`] refuse.
     pub fn new(ssid: &[u8], psk: &[u8]) -> Result<Self, SettingError> {
-        Ok(Self {
-            ssid: Ssid::new(ssid)?,
-            psk: Psk::new(psk)?,
-        })
+        Ok(Self { ssid: Ssid::new(ssid)?, psk: Psk::new(psk)? })
     }
 }
 

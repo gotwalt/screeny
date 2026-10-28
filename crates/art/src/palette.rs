@@ -108,9 +108,8 @@ impl Palette {
                 let mut lab = to_oklab(c);
                 lab[0] += dither.threshold(i % W, i / W) * self.step * strength;
                 let dist = |p: &[f32; 3]| (0..3).map(|k| (p[k] - lab[k]).powi(2)).sum::<f32>();
-                (0..self.lab.len())
-                    .min_by(|a, b| dist(&self.lab[*a]).total_cmp(&dist(&self.lab[*b])))
-                    .unwrap_or(0) as u8
+                (0..self.lab.len()).min_by(|a, b| dist(&self.lab[*a]).total_cmp(&dist(&self.lab[*b]))).unwrap_or(0)
+                    as u8
             })
             .collect();
         Frame::Indexed { palette: self.colours.clone(), indices }

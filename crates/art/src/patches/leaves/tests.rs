@@ -235,7 +235,10 @@ fn overflow_fades_rather_than_popping_back_into_flight() {
         assert!(patch.resting.len() <= 1, "cap exceeded: {} resting at t={t}", patch.resting.len());
         for f in &patch.fading {
             saw_fade = true;
-            assert!(f.vanish_at <= t as f32 + FADE_SECONDS + 1e-3, "a fading entry's own vanish time is implausibly far off at t={t}");
+            assert!(
+                f.vanish_at <= t as f32 + FADE_SECONDS + 1e-3,
+                "a fading entry's own vanish time is implausibly far off at t={t}"
+            );
         }
     });
     assert!(saw_fade, "never saw an overflow actually fading in {SMOKE_SECONDS}s");
@@ -367,7 +370,10 @@ fn a_hard_enough_spin_tumbles_all_the_way_through() {
             last_sign = s;
         }
     }
-    assert!(sign_flips >= 2, "a hard spin across the face should tumble through edge-on repeatedly, got {sign_flips} flips");
+    assert!(
+        sign_flips >= 2,
+        "a hard spin across the face should tumble through edge-on repeatedly, got {sign_flips} flips"
+    );
 }
 
 fn correlation(series: &[f32], lag: usize) -> f32 {
@@ -380,10 +386,7 @@ fn correlation(series: &[f32], lag: usize) -> f32 {
     let mean = |s: &[f32]| s.iter().sum::<f32>() / s.len() as f32;
     let (ma, mb) = (mean(a), mean(b));
     let cov: f32 = a.iter().zip(b).map(|(x, y)| (x - ma) * (y - mb)).sum();
-    let (va, vb) = (
-        a.iter().map(|x| (x - ma).powi(2)).sum::<f32>(),
-        b.iter().map(|y| (y - mb).powi(2)).sum::<f32>(),
-    );
+    let (va, vb) = (a.iter().map(|x| (x - ma).powi(2)).sum::<f32>(), b.iter().map(|y| (y - mb).powi(2)).sum::<f32>());
     if va <= 1e-9 || vb <= 1e-9 {
         return 0.0;
     }

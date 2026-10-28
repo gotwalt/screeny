@@ -48,12 +48,7 @@ impl Dumper {
     pub fn new(dir: impl Into<PathBuf>, every: u32) -> io::Result<Self> {
         let dir = dir.into();
         fs::create_dir_all(&dir)?;
-        Ok(Dumper {
-            dir,
-            every: every.max(1),
-            seen: 0,
-            written: 0,
-        })
+        Ok(Dumper { dir, every: every.max(1), seen: 0, written: 0 })
     }
 
     /// Offer a displayed frame. Writes it if it is the Nth.

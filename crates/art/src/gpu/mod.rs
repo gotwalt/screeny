@@ -64,7 +64,13 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| format!("GPU device: {e}"))?;
-        Ok(Gpu { device, queue, adapter: info.name.clone(), backend: format!("{:?}", info.backend), software: info.device_type == wgpu::DeviceType::Cpu })
+        Ok(Gpu {
+            device,
+            queue,
+            adapter: info.name.clone(),
+            backend: format!("{:?}", info.backend),
+            software: info.device_type == wgpu::DeviceType::Cpu,
+        })
     }
 }
 
@@ -234,7 +240,11 @@ fn half_lut() -> &'static [f32] {
                     31 => return if man == 0.0 && h >> 15 == 0 { 64.0 } else { 0.0 },
                     e => (1.0 + man / 1024.0) * 2f32.powi(e as i32 - 15),
                 };
-                if h >> 15 == 1 { 0.0 } else { v.min(64.0) }
+                if h >> 15 == 1 {
+                    0.0
+                } else {
+                    v.min(64.0)
+                }
             })
             .collect()
     })

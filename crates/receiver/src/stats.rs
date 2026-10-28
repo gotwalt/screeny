@@ -169,14 +169,7 @@ impl Stats {
 
     /// Build the 48-byte struct of section 6.7.
     #[must_use]
-    pub fn telemetry(
-        &self,
-        uptime_ms: u32,
-        rssi_dbm: i8,
-        brightness: u8,
-        state: u8,
-        last_codec: u8,
-    ) -> Telemetry {
+    pub fn telemetry(&self, uptime_ms: u32, rssi_dbm: i8, brightness: u8, state: u8, last_codec: u8) -> Telemetry {
         Telemetry {
             uptime_ms,
             frames_rx: self.counters.frames_rx,

@@ -378,9 +378,7 @@ fn snapshot(a: Args) -> Result<(), String> {
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
-    enc.write_header()
-        .and_then(|mut wr| wr.write_image_data(&rgba))
-        .map_err(|e| format!("{path}: {e}"))?;
+    enc.write_header().and_then(|mut wr| wr.write_image_data(&rgba)).map_err(|e| format!("{path}: {e}"))?;
 
     let s = result.stats;
     // With a pinned clock, say what the panel's own clock reads at this frame:

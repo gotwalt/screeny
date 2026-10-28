@@ -6,8 +6,7 @@
 //! server covers it and the README can be checked against it.
 
 use crate::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply,
-    TelemetryReply, WifiReply,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
 };
 use crate::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 
@@ -324,16 +323,10 @@ pub fn parse_activate(query: Option<&str>) -> Result<bool, BadActivate> {
             continue;
         }
         answer = match value {
-            v if v.eq_ignore_ascii_case("1")
-                || v.eq_ignore_ascii_case("true")
-                || v.eq_ignore_ascii_case("yes") =>
-            {
+            v if v.eq_ignore_ascii_case("1") || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes") => {
                 Ok(true)
             }
-            v if v.eq_ignore_ascii_case("0")
-                || v.eq_ignore_ascii_case("false")
-                || v.eq_ignore_ascii_case("no") =>
-            {
+            v if v.eq_ignore_ascii_case("0") || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("no") => {
                 Ok(false)
             }
             _ => Err(BadActivate),
@@ -382,10 +375,7 @@ impl RateLimit {
     /// next one whenever it comes.
     #[must_use]
     pub const fn new(interval_ms: u32) -> Self {
-        RateLimit {
-            interval_ms,
-            last: None,
-        }
+        RateLimit { interval_ms, last: None }
     }
 
     /// The gap this limiter enforces.
@@ -438,11 +428,7 @@ mod tests {
         for (i, a) in ROUTES.iter().enumerate() {
             assert!(a.path.starts_with(PREFIX), "{}", a.path);
             for b in &ROUTES[i + 1..] {
-                assert!(
-                    a.path != b.path || a.method != b.method,
-                    "{} listed twice",
-                    a.path
-                );
+                assert!(a.path != b.path || a.method != b.method, "{} listed twice", a.path);
             }
         }
     }
@@ -499,10 +485,7 @@ mod tests {
         let mut limit = RateLimit::new(SCAN_MIN_INTERVAL_MS);
         assert_eq!(limit.interval_ms(), 10_000);
         assert_eq!(limit.retry_after_ms(0), 0, "nothing has happened yet");
-        assert!(
-            limit.allow(0),
-            "a clock that really is at zero is not special"
-        );
+        assert!(limit.allow(0), "a clock that really is at zero is not special");
         assert!(!limit.allow(0));
         assert!(!limit.allow(9_999));
         assert_eq!(limit.retry_after_ms(9_999), 1);
@@ -530,10 +513,7 @@ mod tests {
         assert!(limit.allow(last));
         // 5 s before the wrap and 4 999 ms after it: both inside the window.
         assert!(!limit.allow(u32::MAX));
-        assert!(
-            !limit.allow(4_998),
-            "wrapped, but only 9 999 ms have passed"
-        );
+        assert!(!limit.allow(4_998), "wrapped, but only 9 999 ms have passed");
         assert_eq!(limit.retry_after_ms(4_998), 1);
         // One more millisecond and the window is open again.
         assert!(limit.allow(4_999));

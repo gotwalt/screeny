@@ -154,7 +154,10 @@ async fn the_picture_and_the_settings_survive_a_restart() {
     let text = std::fs::read_to_string(dir.0.join("state.json")).expect("a state file");
     let file: serde_json::Value = serde_json::from_str(&text).expect("it parses");
     assert_eq!(file["version"], screeny_studio::state::SCHEMA_VERSION, "the schema this build writes");
-    assert_eq!(file["patches"]["metaballs"]["settings"]["Lava"]["params"]["size"], 2.5, "in state.json and nowhere else:\n{text}");
+    assert_eq!(
+        file["patches"]["metaballs"]["settings"]["Lava"]["params"]["size"], 2.5,
+        "in state.json and nowhere else:\n{text}"
+    );
     assert_eq!(file["channels"][0]["patch"], "clocks-dials", "{text}");
     assert_eq!(file["channels"][0]["params"]["dwell"], 90.0, "{text}");
 

@@ -109,9 +109,9 @@ pub fn gpu_status() -> GpuStatus {
 pub use color::Rgb;
 pub use frame::{Frame, WireFrame, H, N, W};
 pub use meter::{Measured, Meter};
+pub use patch::{Clock, Ctx, Params, Patch, PatchDef};
+pub use pipeline::{Output, Pipeline, Stats};
 /// One encoded frame: codec and payload (card 353: what a studio channel sends
 /// every panel on it, byte for byte).
 pub use screeny_encode::Encoded;
-pub use patch::{Clock, Ctx, Params, Patch, PatchDef};
 pub use snapshot::Shot;
-pub use pipeline::{Output, Pipeline, Stats};

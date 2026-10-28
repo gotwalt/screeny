@@ -114,11 +114,7 @@ impl DitherPlan {
             ];
             let i1 = index.nearest(oklab(over)).0;
             if i1 == i0 {
-                per_bin.push(Bracket {
-                    lo: i0 as u8,
-                    hi: i0 as u8,
-                    alpha: 0.0,
-                });
+                per_bin.push(Bracket { lo: i0 as u8, hi: i0 as u8, alpha: 0.0 });
                 continue;
             }
             // Least-squares mix ratio along p0->p1, in linear light.
@@ -130,16 +126,8 @@ impl DitherPlan {
                 num += (cl[k] - p0[k]) * dv;
                 den += dv * dv;
             }
-            let alpha = if den > 1e-9 {
-                (num / den).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            per_bin.push(Bracket {
-                lo: i0 as u8,
-                hi: i1 as u8,
-                alpha,
-            });
+            let alpha = if den > 1e-9 { (num / den).clamp(0.0, 1.0) } else { 0.0 };
+            per_bin.push(Bracket { lo: i0 as u8, hi: i1 as u8, alpha });
         }
         DitherPlan { per_bin }
     }
@@ -151,11 +139,7 @@ impl DitherPlan {
             for x in 0..W {
                 let p = y * W + x;
                 let br = self.per_bin[bin_of[p] as usize];
-                out[p] = if br.lo != br.hi && threshold(d, x, y, t) < br.alpha {
-                    br.hi
-                } else {
-                    br.lo
-                };
+                out[p] = if br.lo != br.hi && threshold(d, x, y, t) < br.alpha { br.hi } else { br.lo };
             }
         }
     }

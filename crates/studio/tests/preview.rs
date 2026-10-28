@@ -90,8 +90,7 @@ async fn a_socket_gets_the_rate_it_asked_for() {
 
     // All three at once, so they are measured over the same window and a slow
     // one cannot be blamed on the bench.
-    let (slow, quiet, fast) =
-        tokio::join!(slow.measure(WINDOW), quiet.measure(WINDOW), fast.measure(WINDOW));
+    let (slow, quiet, fast) = tokio::join!(slow.measure(WINDOW), quiet.measure(WINDOW), fast.measure(WINDOW));
 
     println!(
         "asked 10 -> {:.1} fps, {:.0} B/s; asked nothing -> {:.1} fps, {:.0} B/s; asked 60 -> {:.1} fps, {:.0} B/s",
@@ -229,7 +228,10 @@ async fn the_status_route_says_what_the_preview_costs() {
     let sent = after["sockets"]["bytes_sent"].as_u64().expect("a byte count") - before;
     let frames = after["sockets"]["frames_sent"].as_u64().expect("a frame count");
 
-    println!("server-side: {sent} bytes, {frames} frame packets; the browser saw {} bytes", seen.frame_bytes + seen.text_bytes);
+    println!(
+        "server-side: {sent} bytes, {frames} frame packets; the browser saw {} bytes",
+        seen.frame_bytes + seen.text_bytes
+    );
     assert!(sent >= (seen.frame_bytes + seen.text_bytes) as u64, "the server counted less than the browser received");
     assert!(frames >= seen.frames as u64);
     studio.stop().await;

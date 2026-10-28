@@ -110,18 +110,13 @@ impl Outcome {
 pub fn watch(client: &Client, before: Option<u32>, w: &Watch, say: &mut dyn FnMut(String)) -> Outcome {
     let t0 = Instant::now();
     if before.is_none() {
-        say(
-            "  the device's boot_id could not be read before the upload, so \"it came back\" \
+        say("  the device's boot_id could not be read before the upload, so \"it came back\" \
              here means \"something answered\" and may be the old image still running"
-                .into(),
-        );
+            .into());
     }
 
     // --- 1: wait for a boot_id that is not the one we started with ---------
-    say(format!(
-        "  waiting for the device to restart (up to {:.0} s)...",
-        w.reappear.as_secs_f32()
-    ));
+    say(format!("  waiting for the device to restart (up to {:.0} s)...", w.reappear.as_secs_f32()));
     let deadline = Instant::now() + w.reappear;
     let mut back: Option<StatusReply> = None;
     let mut said_old = false;
@@ -172,10 +167,7 @@ pub fn watch(client: &Client, before: Option<u32>, w: &Watch, say: &mut dyn FnMu
     }
 
     // --- 2: wait for the trial to end --------------------------------------
-    say(format!(
-        "  waiting for the trial to end (up to {:.0} s)...",
-        w.decide.as_secs_f32()
-    ));
+    say(format!("  waiting for the trial to end (up to {:.0} s)...", w.decide.as_secs_f32()));
     let came_back = Instant::now();
     let deadline = came_back + w.decide;
     let mut last = String::new();
@@ -221,19 +213,14 @@ pub fn watch(client: &Client, before: Option<u32>, w: &Watch, say: &mut dyn FnMu
                 return Outcome::Confirmed;
             }
             UpdateOutcome::Reverted => {
-                say(
-                    "  REVERTED: the update did not stick and the previous image is running. \
+                say("  REVERTED: the update did not stick and the previous image is running. \
                      GET /api/v1/panic has the panic record, if there is one."
-                        .into(),
-                );
+                    .into());
                 return Outcome::Reverted;
             }
         }
     }
-    say(format!(
-        "  the trial had not ended after {:.0} s - report that, it should not happen",
-        w.decide.as_secs_f32()
-    ));
+    say(format!("  the trial had not ended after {:.0} s - report that, it should not happen", w.decide.as_secs_f32()));
     Outcome::Undecided
 }
 
@@ -245,12 +232,7 @@ pub fn watch(client: &Client, before: Option<u32>, w: &Watch, say: &mut dyn FnMu
 /// less precisely, and [`watch`] says so.
 #[must_use]
 pub fn boot_id(client: &Client) -> Option<u32> {
-    client
-        .get(route::STATUS)
-        .ok()?
-        .parse::<StatusReply>()
-        .ok()
-        .map(|s| s.boot_id)
+    client.get(route::STATUS).ok()?.parse::<StatusReply>().ok().map(|s| s.boot_id)
 }
 
 #[cfg(test)]

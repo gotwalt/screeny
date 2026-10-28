@@ -653,7 +653,8 @@ impl Cloth {
         // just wrong). Checked against the wrist cuffs' own index list
         // instead, not a column-proximity guess.
         let wrist_idx: std::collections::HashSet<usize> = wrist_kinematic.iter().flatten().map(|&(i, _)| i).collect();
-        let head_kinematic: Vec<usize> = (0..VERTS).filter(|&i| template.kinematic[i] && !wrist_idx.contains(&i)).collect();
+        let head_kinematic: Vec<usize> =
+            (0..VERTS).filter(|&i| template.kinematic[i] && !wrist_idx.contains(&i)).collect();
         let all_kinematic: Vec<usize> = (0..VERTS).filter(|&i| template.kinematic[i]).collect();
         let (edges, bend_edges) = build_edges();
         let positions: Vec<Vector> = template.local.iter().map(|&l| to_rapier(body0.to_world(l))).collect();
@@ -683,13 +684,16 @@ impl Cloth {
         // starts at the neck, so testing against the head's own radius
         // shoved the whole skirt out to the head's equator on first settle.
         let (_, neck_r) = dome_and_neck_radius(shape.head_r);
-        let (head_body, _) =
-            world.insert(RigidBodyBuilder::kinematic_position_based().pose(body0.to_pose()), ColliderBuilder::ball(neck_r).contact_skin(BODY_SKIN));
+        let (head_body, _) = world.insert(
+            RigidBodyBuilder::kinematic_position_based().pose(body0.to_pose()),
+            ColliderBuilder::ball(neck_r).contact_skin(BODY_SKIN),
+        );
 
         let (torso_top, torso_bot) = torso_points(shape);
         let torso_len = torso_bot.sub(torso_top).length();
         let (torso_body, _) = world.insert(
-            RigidBodyBuilder::kinematic_position_based().pose(capsule_pose(body0.to_world(torso_top), body0.to_world(torso_bot))),
+            RigidBodyBuilder::kinematic_position_based()
+                .pose(capsule_pose(body0.to_world(torso_top), body0.to_world(torso_bot))),
             ColliderBuilder::capsule_y(torso_len * 0.5, shape.head_r * 0.85).contact_skin(BODY_SKIN),
         );
 
@@ -710,8 +714,19 @@ impl Cloth {
             mk_capsule(&mut world, arms0.right.1, arms0.right.2),
         ];
 
-        let mut cloth =
-            Cloth { template, faces, head_kinematic, wrist_kinematic, shape, world, body, head_body, torso_body, arm_bodies, warped: 0.0 };
+        let mut cloth = Cloth {
+            template,
+            faces,
+            head_kinematic,
+            wrist_kinematic,
+            shape,
+            world,
+            body,
+            head_body,
+            torso_body,
+            arm_bodies,
+            warped: 0.0,
+        };
         // Card 339: this used to be 450 - most of a whole `render()` call's
         // worth of physics, synchronously, the instant a ghost was first
         // drawn - the direct cause of the pops/clumps the owner saw (see
@@ -744,7 +759,8 @@ impl Cloth {
 
         self.world.bodies[self.head_body].set_next_kinematic_position(body.to_pose());
         let (torso_top, torso_bot) = torso_points(self.shape);
-        self.world.bodies[self.torso_body].set_next_kinematic_position(capsule_pose(body.to_world(torso_top), body.to_world(torso_bot)));
+        self.world.bodies[self.torso_body]
+            .set_next_kinematic_position(capsule_pose(body.to_world(torso_top), body.to_world(torso_bot)));
         self.world.bodies[self.arm_bodies[0]].set_next_kinematic_position(capsule_pose(arms.left.0, arms.left.1));
         self.world.bodies[self.arm_bodies[1]].set_next_kinematic_position(capsule_pose(arms.left.1, arms.left.2));
         self.world.bodies[self.arm_bodies[2]].set_next_kinematic_position(capsule_pose(arms.right.0, arms.right.1));
@@ -978,7 +994,11 @@ mod tests {
     }
 
     fn body(pos: V3, yaw: f32) -> BodyPose {
-        BodyPose { pos, yaw, arms: Arms { left: ArmPose { pitch: -0.15, elbow: 0.16 }, right: ArmPose { pitch: -0.15, elbow: 0.16 } } }
+        BodyPose {
+            pos,
+            yaw,
+            arms: Arms { left: ArmPose { pitch: -0.15, elbow: 0.16 }, right: ArmPose { pitch: -0.15, elbow: 0.16 } },
+        }
     }
 
     /// `RIGHT_COL`/`LEFT_COL` really do land on the world `+X`/`-X` sides -
@@ -1018,7 +1038,11 @@ mod tests {
             let cloth = Cloth::spawn(s, body(V3::ZERO, 0.0), 0.5);
             for p in cloth.all_positions() {
                 assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
-                assert!(p.sub(V3::ZERO).length() < s.total_height() * 4.0 + 20.0, "{p:?} flew away for height={}", s.height);
+                assert!(
+                    p.sub(V3::ZERO).length() < s.total_height() * 4.0 + 20.0,
+                    "{p:?} flew away for height={}",
+                    s.height
+                );
             }
         }
     }
@@ -1235,8 +1259,16 @@ mod tests {
     fn wrist_cuffs_follow_the_arm_gesture() {
         let mut rng = Rng::new(9);
         let s = shape(&mut rng);
-        let raised = BodyPose { pos: V3::ZERO, yaw: 0.0, arms: Arms { left: ArmPose { pitch: -0.15, elbow: 0.16 }, right: ArmPose { pitch: 1.0, elbow: 0.0 } } };
-        let drooped = BodyPose { pos: V3::ZERO, yaw: 0.0, arms: Arms { left: ArmPose { pitch: -0.15, elbow: 0.16 }, right: ArmPose { pitch: -1.0, elbow: 0.0 } } };
+        let raised = BodyPose {
+            pos: V3::ZERO,
+            yaw: 0.0,
+            arms: Arms { left: ArmPose { pitch: -0.15, elbow: 0.16 }, right: ArmPose { pitch: 1.0, elbow: 0.0 } },
+        };
+        let drooped = BodyPose {
+            pos: V3::ZERO,
+            yaw: 0.0,
+            arms: Arms { left: ArmPose { pitch: -0.15, elbow: 0.16 }, right: ArmPose { pitch: -1.0, elbow: 0.0 } },
+        };
         let mut a = Cloth::spawn(s, raised, 0.3);
         let mut b = Cloth::spawn(s, drooped, 0.3);
         // A few real steps at the held pose so the cuff has actually reached

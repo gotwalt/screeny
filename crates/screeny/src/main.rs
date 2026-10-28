@@ -19,8 +19,7 @@ use screeny::panel::TEMPORAL;
 use screeny::proto::control::state;
 use screeny::proto::{dec, NBYTES};
 use screeny::{
-    codec_name, Device, Frame, FrameSource, IndexedSource, Pattern, Pixels, SendStats, Sender,
-    SenderConfig,
+    codec_name, Device, Frame, FrameSource, IndexedSource, Pattern, Pixels, SendStats, Sender, SenderConfig,
 };
 
 /// Stream frames to a screeny panel over UDP.
@@ -139,11 +138,7 @@ impl StreamArgs {
         SenderConfig {
             fps: self.fps,
             budget: self.budget,
-            profile: if self.fast {
-                Profile::Fast
-            } else {
-                Profile::Full
-            },
+            profile: if self.fast { Profile::Fast } else { Profile::Full },
             adapt: !self.no_adapt,
             timestamps: self.timestamps,
             qos: self.qos,
@@ -305,11 +300,7 @@ fn run(cli: &Cli) -> Result<()> {
         Cmd::Discover => cmd_discover(cli),
         Cmd::Improv { port, wait, ask } => cmd_improv(port, *wait, *ask),
         Cmd::Info => cmd_info(cli),
-        Cmd::Stats {
-            interval,
-            count,
-            reset,
-        } => cmd_stats(cli, *interval, *count, *reset),
+        Cmd::Stats { interval, count, reset } => cmd_stats(cli, *interval, *count, *reset),
         Cmd::Brightness { level } => cmd_brightness(cli, *level),
         Cmd::Identify { ms } => cmd_identify(cli, *ms),
         Cmd::Reboot { yes } => cmd_reboot(cli, *yes),
@@ -318,14 +309,9 @@ fn run(cli: &Cli) -> Result<()> {
         Cmd::Fractal { seed, stream } => cmd_fractal(cli, *seed, stream),
         Cmd::Clock { at, stream } => cmd_clock(cli, at.as_deref(), stream),
         Cmd::Pipe { stream } => cmd_pipe(cli, stream),
-        Cmd::EncodeStats {
-            budget,
-            fast,
-            pattern,
-            count,
-            per_frame,
-            quality,
-        } => cmd_encode_stats(*budget, *fast, pattern.as_deref(), *count, *per_frame, *quality),
+        Cmd::EncodeStats { budget, fast, pattern, count, per_frame, quality } => {
+            cmd_encode_stats(*budget, *fast, pattern.as_deref(), *count, *per_frame, *quality)
+        }
     }
 }
 
@@ -351,10 +337,7 @@ fn cmd_discover(cli: &Cli) -> Result<()> {
         screeny::discover::browse(timeout, None).hinted()?
     };
     if found.is_empty() {
-        let e = screeny::Error::NotFound {
-            service: screeny::proto::SERVICE_TYPE,
-            secs: timeout.as_secs_f64(),
-        };
+        let e = screeny::Error::NotFound { service: screeny::proto::SERVICE_TYPE, secs: timeout.as_secs_f64() };
         println!("no devices found.");
         if let Some(h) = e.hint() {
             println!("\n{h}");
@@ -385,11 +368,7 @@ fn print_device(d: &Device, verbose: bool) {
         } else {
             println!(
                 "  codecs   {}",
-                i.codecs
-                    .iter()
-                    .map(|c| format!("{} ({c})", codec_name(*c)))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                i.codecs.iter().map(|c| format!("{} ({c})", codec_name(*c))).collect::<Vec<_>>().join(", ")
             );
         }
         println!("  mtu      {}", i.mtu);
@@ -402,14 +381,7 @@ fn print_device(d: &Device, verbose: bool) {
             println!("  proto    {}", i.proto);
             println!("  txtvers  {}", i.txtvers);
             if d.addresses.len() > 1 {
-                println!(
-                    "  addrs    {}",
-                    d.addresses
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+                println!("  addrs    {}", d.addresses.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "));
             }
         }
     }
@@ -485,11 +457,7 @@ fn cmd_ping(cli: &Cli, count: u32, interval: f64) -> Result<()> {
     for i in 0..count {
         match ctl.ping() {
             Ok((rtt, uptime)) => {
-                println!(
-                    "  seq={i} time={:.2} ms  uptime={}",
-                    rtt.as_secs_f64() * 1000.0,
-                    fmt_ms(uptime)
-                );
+                println!("  seq={i} time={:.2} ms  uptime={}", rtt.as_secs_f64() * 1000.0, fmt_ms(uptime));
                 rtts.push(rtt.as_secs_f64() * 1000.0);
             }
             Err(e) => println!("  seq={i} {e}"),
@@ -538,8 +506,7 @@ fn cmd_stats(cli: &Cli, interval: f64, count: Option<u32>, reset: bool) -> Resul
     println!("{}", d.label());
     println!(
         "{:>8} {:>5} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>9} {:>8} {:>5}",
-        "uptime", "state", "rx/s", "shown/s", "stale", "supers", "decode", "reject", "inter/jit",
-        "decode", "rssi"
+        "uptime", "state", "rx/s", "shown/s", "stale", "supers", "decode", "reject", "inter/jit", "decode", "rssi"
     );
     let stop = install_ctrlc()?;
     let mut prev: Option<screeny::proto::control::Telemetry> = None;
@@ -551,8 +518,7 @@ fn cmd_stats(cli: &Cli, interval: f64, count: Option<u32>, reset: bool) -> Resul
                 t.frames_rx.wrapping_sub(p.frames_rx),
                 t.frames_shown.wrapping_sub(p.frames_shown),
                 t.frames_dropped_stale.wrapping_sub(p.frames_dropped_stale),
-                t.frames_dropped_superseded
-                    .wrapping_sub(p.frames_dropped_superseded),
+                t.frames_dropped_superseded.wrapping_sub(p.frames_dropped_superseded),
                 t.frames_dropped_decode.wrapping_sub(p.frames_dropped_decode),
                 t.frames_rejected.wrapping_sub(p.frames_rejected),
             ),
@@ -601,8 +567,7 @@ fn cmd_stats(cli: &Cli, interval: f64, count: Option<u32>, reset: bool) -> Resul
 fn install_ctrlc() -> Result<Arc<AtomicBool>> {
     let stop = Arc::new(AtomicBool::new(false));
     let s = stop.clone();
-    ctrlc::set_handler(move || s.store(true, Ordering::SeqCst))
-        .context("installing the ctrl-c handler")?;
+    ctrlc::set_handler(move || s.store(true, Ordering::SeqCst)).context("installing the ctrl-c handler")?;
     Ok(stop)
 }
 
@@ -626,11 +591,7 @@ fn cmd_pattern(cli: &Cli, name: &str, list: bool, stream: &StreamArgs) -> Result
     let Some(mut p) = Pattern::from_name(name) else {
         bail!(
             "unknown pattern {name:?}; try one of: {}",
-            Pattern::ALL
-                .iter()
-                .map(|p| p.name())
-                .collect::<Vec<_>>()
-                .join(", ")
+            Pattern::ALL.iter().map(|p| p.name()).collect::<Vec<_>>().join(", ")
         );
     };
     stream_source(cli, stream, &mut p)
@@ -655,11 +616,7 @@ struct PieceSource<P: screeny_demos::Piece> {
 
 impl<P: screeny_demos::Piece> PieceSource<P> {
     fn new(piece: P) -> Self {
-        Self {
-            piece,
-            idx: screeny_demos::Indexed::default(),
-            rgb: screeny_demos::Frame::black(),
-        }
+        Self { piece, idx: screeny_demos::Indexed::default(), rgb: screeny_demos::Frame::black() }
     }
 }
 
@@ -680,9 +637,7 @@ impl<P: screeny_demos::Piece> IndexedSource for PieceSource<P> {
 
 fn cmd_fractal(cli: &Cli, seed: Option<u64>, stream: &StreamArgs) -> Result<()> {
     let seed = seed.unwrap_or_else(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1, |d| d.as_secs())
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_secs())
     });
     eprintln!("screeny: fractal seed {seed}");
     let mut src = PieceSource::new(screeny_demos::fractal::FractalZoom::new(seed));
@@ -805,11 +760,8 @@ fn stream(cli: &Cli, args: &StreamArgs, mut src: Src<'_>) -> Result<()> {
             s.mean_encode().as_secs_f64() * 1000.0,
             s.encode_pct(0.95).as_secs_f64() * 1000.0
         );
-        let codecs: Vec<String> = s
-            .by_codec
-            .iter()
-            .map(|(c, n)| format!("{} {}%", codec_name(*c), n * 100 / s.frames_sent.max(1)))
-            .collect();
+        let codecs: Vec<String> =
+            s.by_codec.iter().map(|(c, n)| format!("{} {}%", codec_name(*c), n * 100 / s.frames_sent.max(1))).collect();
         if !codecs.is_empty() {
             line.push_str(&format!("  [{}]", codecs.join(" ")));
         }
@@ -875,11 +827,7 @@ fn stream(cli: &Cli, args: &StreamArgs, mut src: Src<'_>) -> Result<()> {
         eprintln!(
             "screeny: the device failed to decode {}; those codecs were withdrawn \
              mid-stream. That is a bug in one of the two implementations.",
-            s.codecs_withdrawn
-                .iter()
-                .map(|c| codec_name(*c))
-                .collect::<Vec<_>>()
-                .join(", ")
+            s.codecs_withdrawn.iter().map(|c| codec_name(*c)).collect::<Vec<_>>().join(", ")
         );
     }
     r.hinted()
@@ -904,8 +852,7 @@ fn cmd_encode_stats(
 
     let mut frames: Box<dyn Iterator<Item = Result<Frame>>> = match pattern {
         Some(name) => {
-            let p = Pattern::from_name(name)
-                .ok_or_else(|| anyhow::anyhow!("unknown pattern {name:?}"))?;
+            let p = Pattern::from_name(name).ok_or_else(|| anyhow::anyhow!("unknown pattern {name:?}"))?;
             let n = count.unwrap_or(60);
             Box::new((0..n).map(move |i| Ok(p.frame(i as u64))))
         }
@@ -917,17 +864,19 @@ fn cmd_encode_stats(
                      or use --pattern NAME"
                 );
             }
-            Box::new(RawFrames {
-                r: stdin.lock(),
-                left: count.unwrap_or(usize::MAX),
-            })
+            Box::new(RawFrames { r: stdin.lock(), left: count.unwrap_or(usize::MAX) })
         }
     };
 
     if per_frame {
         println!(
             "{:>5} {:>7} {:>9} {:>6} {:>8}{}",
-            "frame", "colours", "codec", "bytes", "ms", if quality { "      dE" } else { "" }
+            "frame",
+            "colours",
+            "codec",
+            "bytes",
+            "ms",
+            if quality { "      dE" } else { "" }
         );
     }
     let mut n = 0usize;
@@ -947,11 +896,7 @@ fn cmd_encode_stats(
         // Every payload this tool reports has been through the real decoder.
         screeny::proto::decode(out.codec, &out.payload, &mut dst)
             .map_err(|e| anyhow::anyhow!("frame {n}: {} did not decode: {e:?}", codec_name(out.codec)))?;
-        let de = if quality {
-            screeny::encode::score::mean_de(&TEMPORAL, &f, &dst) * 1000.0
-        } else {
-            0.0
-        };
+        let de = if quality { screeny::encode::score::mean_de(&TEMPORAL, &f, &dst) * 1000.0 } else { 0.0 };
         if per_frame {
             let mut line = format!(
                 "{:>5} {:>7} {:>9} {:>6} {:>8.2}",
@@ -983,15 +928,8 @@ fn cmd_encode_stats(
     if n == 0 {
         bail!("no complete frames on stdin");
     }
-    println!(
-        "{n} frames, budget {budget} B, profile {}",
-        if fast { "fast" } else { "full" }
-    );
-    println!(
-        "  bytes   mean {:.0}, {} over budget",
-        bytes as f64 / n as f64,
-        over
-    );
+    println!("{n} frames, budget {budget} B, profile {}", if fast { "fast" } else { "full" });
+    println!("  bytes   mean {:.0}, {} over budget", bytes as f64 / n as f64, over);
     println!(
         "  encode  mean {:.2} ms, max {:.2} ms  ({:.1} fps ceiling, {:.0}% of a 33.3 ms frame)",
         total.as_secs_f64() * 1000.0 / n as f64,
@@ -1001,11 +939,7 @@ fn cmd_encode_stats(
     );
     println!(
         "  codecs  {}",
-        by_codec
-            .iter()
-            .map(|(c, k)| format!("{} {}%", codec_name(*c), k * 100 / n))
-            .collect::<Vec<_>>()
-            .join(", ")
+        by_codec.iter().map(|(c, k)| format!("{} {}%", codec_name(*c), k * 100 / n)).collect::<Vec<_>>().join(", ")
     );
     println!("  exact   {}%", exact * 100 / n);
     if quality {
@@ -1033,10 +967,7 @@ impl<R: Read> Iterator for RawFrames<R> {
                     return if got == 0 {
                         None
                     } else {
-                        Some(Err(anyhow::anyhow!(
-                            "stdin ended {} bytes into a frame",
-                            got
-                        )))
+                        Some(Err(anyhow::anyhow!("stdin ended {} bytes into a frame", got)))
                     }
                 }
                 Ok(n) => got += n,

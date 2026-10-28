@@ -297,15 +297,11 @@ impl<'a> Request<'a> {
                 _ => Err(ErrorCode::BadLength),
             },
             op::SET_IDLE => match body {
-                [mode] => IdleMode::from_u8(*mode)
-                    .map(Request::SetIdle)
-                    .ok_or(ErrorCode::BadArg),
+                [mode] => IdleMode::from_u8(*mode).map(Request::SetIdle).ok_or(ErrorCode::BadArg),
                 _ => Err(ErrorCode::BadLength),
             },
             op::IDENTIFY => match body {
-                [lo, hi] => Ok(Request::Identify {
-                    duration_ms: u16::from_le_bytes([*lo, *hi]),
-                }),
+                [lo, hi] => Ok(Request::Identify { duration_ms: u16::from_le_bytes([*lo, *hi]) }),
                 _ => Err(ErrorCode::BadLength),
             },
             op::REBOOT => match body {
@@ -326,9 +322,7 @@ impl<'a> Request<'a> {
                 if n.len() > MAX_NAME_LEN {
                     return Err(ErrorCode::BadArg);
                 }
-                core::str::from_utf8(n)
-                    .map(Request::SetName)
-                    .map_err(|_| ErrorCode::BadArg)
+                core::str::from_utf8(n).map(Request::SetName).map_err(|_| ErrorCode::BadArg)
             }
             op::SET_WIFI => {
                 let (ssid, rest) = split_u8_prefixed(body).ok_or(ErrorCode::BadLength)?;
@@ -337,11 +331,7 @@ impl<'a> Request<'a> {
                     [f] => *f,
                     _ => return Err(ErrorCode::BadLength),
                 };
-                if ssid.is_empty()
-                    || ssid.len() > MAX_SSID_LEN
-                    || psk.len() > MAX_PSK_LEN
-                    || flags & !0x01 != 0
-                {
+                if ssid.is_empty() || ssid.len() > MAX_SSID_LEN || psk.len() > MAX_PSK_LEN || flags & !0x01 != 0 {
                     return Err(ErrorCode::BadArg);
                 }
                 Ok(Request::SetWifi(SetWifi {
@@ -502,12 +492,7 @@ impl<'a> Reply<'a> {
     #[must_use]
     pub fn body_len(&self) -> usize {
         match self {
-            Reply::Identify
-            | Reply::ResetStats
-            | Reply::Release
-            | Reply::SetName
-            | Reply::SetWifi
-            | Reply::Reboot => 0,
+            Reply::Identify | Reply::ResetStats | Reply::Release | Reply::SetName | Reply::SetWifi | Reply::Reboot => 0,
             Reply::Brightness { .. } | Reply::Idle { .. } | Reply::Err { .. } => 1,
             Reply::Ping { .. } => 4,
             Reply::Busy { .. } => 5,
@@ -548,9 +533,7 @@ impl<'a> Reply<'a> {
         };
         match op {
             op::PING => match body {
-                [a, b, c, d] => Ok(Reply::Ping {
-                    uptime_ms: u32::from_le_bytes([*a, *b, *c, *d]),
-                }),
+                [a, b, c, d] => Ok(Reply::Ping { uptime_ms: u32::from_le_bytes([*a, *b, *c, *d]) }),
                 _ => Err(ErrorCode::BadLength),
             },
             op::GET_INFO => Ok(Reply::Info(body)),
@@ -575,16 +558,12 @@ impl<'a> Reply<'a> {
                     [s] => *s,
                     _ => return Err(ErrorCode::BadLength),
                 };
-                Ok(Reply::Wifi {
-                    ssid: core::str::from_utf8(ssid).map_err(|_| ErrorCode::BadArg)?,
-                    state,
-                })
+                Ok(Reply::Wifi { ssid: core::str::from_utf8(ssid).map_err(|_| ErrorCode::BadArg)?, state })
             }
             op::BUSY => match body {
-                [reason, a, b, c, d] => Ok(Reply::Busy {
-                    reason: *reason,
-                    lock_holder_ms_remaining: u32::from_le_bytes([*a, *b, *c, *d]),
-                }),
+                [reason, a, b, c, d] => {
+                    Ok(Reply::Busy { reason: *reason, lock_holder_ms_remaining: u32::from_le_bytes([*a, *b, *c, *d]) })
+                }
                 _ => Err(ErrorCode::BadLength),
             },
             _ => Err(ErrorCode::UnknownOp),
@@ -607,20 +586,12 @@ impl<'a> Reply<'a> {
         };
         let body = reserve_control(out, op, flags, req_id, n)?;
         match self {
-            Reply::Identify
-            | Reply::ResetStats
-            | Reply::Release
-            | Reply::SetName
-            | Reply::SetWifi
-            | Reply::Reboot => {}
+            Reply::Identify | Reply::ResetStats | Reply::Release | Reply::SetName | Reply::SetWifi | Reply::Reboot => {}
             Reply::Brightness { applied } => body[0] = *applied,
             Reply::Idle { mode } => body[0] = *mode,
             Reply::Err { code } => body[0] = *code,
             Reply::Ping { uptime_ms } => body[..4].copy_from_slice(&uptime_ms.to_le_bytes()),
-            Reply::Busy {
-                reason,
-                lock_holder_ms_remaining,
-            } => {
+            Reply::Busy { reason, lock_holder_ms_remaining } => {
                 body[0] = *reason;
                 body[1..5].copy_from_slice(&lock_holder_ms_remaining.to_le_bytes());
             }
@@ -702,9 +673,7 @@ impl Telemetry {
         if body.len() < TELEMETRY_LEN {
             return Err(ErrorCode::BadLength);
         }
-        let u32at = |o: usize| -> u32 {
-            u32::from_le_bytes([body[o], body[o + 1], body[o + 2], body[o + 3]])
-        };
+        let u32at = |o: usize| -> u32 { u32::from_le_bytes([body[o], body[o + 1], body[o + 2], body[o + 3]]) };
         let u16at = |o: usize| -> u16 { u16::from_le_bytes([body[o], body[o + 1]]) };
         Ok(Telemetry {
             uptime_ms: u32at(0),

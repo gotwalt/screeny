@@ -116,13 +116,7 @@ where
 ///
 /// The timeout message carries the last answer, so a failure on a busy machine
 /// says what the server actually thought rather than only that time ran out.
-pub async fn until_json<F>(
-    at: SocketAddr,
-    patience: Duration,
-    what: &str,
-    path: &str,
-    mut ok: F,
-) -> serde_json::Value
+pub async fn until_json<F>(at: SocketAddr, patience: Duration, what: &str, path: &str, mut ok: F) -> serde_json::Value
 where
     F: FnMut(&serde_json::Value) -> bool,
 {
@@ -146,9 +140,8 @@ pub struct Response {
 
 impl Response {
     pub fn json(&self) -> serde_json::Value {
-        serde_json::from_slice(&self.body).unwrap_or_else(|e| {
-            panic!("expected JSON, got {:?}: {e}", String::from_utf8_lossy(&self.body))
-        })
+        serde_json::from_slice(&self.body)
+            .unwrap_or_else(|e| panic!("expected JSON, got {:?}: {e}", String::from_utf8_lossy(&self.body)))
     }
 }
 

@@ -165,7 +165,11 @@ impl Face {
             Ink::Bits(b) if b.crisp => b.cell(g, x, y),
             Ink::Bits(b) => {
                 const E: f32 = 0.45;
-                b.cell(g, x, y) && b.cell(g, x - E, y) && b.cell(g, x + E, y) && b.cell(g, x, y - E) && b.cell(g, x, y + E)
+                b.cell(g, x, y)
+                    && b.cell(g, x - E, y)
+                    && b.cell(g, x + E, y)
+                    && b.cell(g, x, y - E)
+                    && b.cell(g, x, y + E)
             }
         }
     }
@@ -177,7 +181,8 @@ impl Face {
 /// that anything may have written.
 #[must_use]
 pub fn face(which: f32) -> &'static Face {
-    let i = if which.is_finite() { which.round().clamp(0.0, (FACES.len() - 1) as f32) as usize } else { DEFAULT as usize };
+    let i =
+        if which.is_finite() { which.round().clamp(0.0, (FACES.len() - 1) as f32) as usize } else { DEFAULT as usize };
     &FACES[i]
 }
 
@@ -204,7 +209,11 @@ mod tests {
         for face in FACES {
             let weight = 2.0;
             let (bw, bh) = face.size(weight);
-            assert!(bw <= 13.5 && bh <= 22.5, "{}: {bw} x {bh} LEDs is wider or taller than a module allows", face.name);
+            assert!(
+                bw <= 13.5 && bh <= 22.5,
+                "{}: {bw} x {bh} LEDs is wider or taller than a module allows",
+                face.name
+            );
             // Sample the box at four points per LED, which is finer than any
             // face's own cells, so two faces are compared on shape.
             let map = |ch: char| -> Vec<bool> {

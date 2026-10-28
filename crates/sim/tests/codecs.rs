@@ -35,11 +35,7 @@ fn every_checked_in_vector_arrives_bit_exact() {
             .unwrap_or_else(|| panic!("{}: never displayed", v.name));
         assert_frames_eq(&s.decoded[..], &v.expect, &v.name);
         assert_eq!(s.shown.unwrap().codec, v.codec, "{}", v.name);
-        assert_eq!(
-            s.telemetry.last_codec, v.codec,
-            "{}: telemetry byte 47",
-            v.name
-        );
+        assert_eq!(s.telemetry.last_codec, v.codec, "{}: telemetry byte 47", v.name);
         assert_eq!(s.shown.unwrap().bytes, v.payload.len(), "{}", v.name);
     }
 
@@ -71,22 +67,10 @@ fn hand_built_payloads_arrive_bit_exact() {
     check(codec::SOLID, &p, &e, "SOLID teal", &mut shown);
 
     let f = indexed_runs(32);
-    check(
-        codec::PAL5,
-        &pal5(&f),
-        &f.expect(),
-        "PAL5 32 colours",
-        &mut shown,
-    );
+    check(codec::PAL5, &pal5(&f), &f.expect(), "PAL5 32 colours", &mut shown);
 
     let f = indexed_runs(16);
-    check(
-        codec::PAL4_LZ,
-        &pal4_lz(&f),
-        &f.expect(),
-        "PAL4_LZ 16 colours",
-        &mut shown,
-    );
+    check(codec::PAL4_LZ, &pal4_lz(&f), &f.expect(), "PAL4_LZ 16 colours", &mut shown);
 
     for n in [1usize, 2, 17, 100, 256] {
         let f = indexed_runs(n);
@@ -96,23 +80,11 @@ fn hand_built_payloads_arrive_bit_exact() {
             "PAL8_LZ {n} colours: {} bytes is over budget",
             payload.len()
         );
-        check(
-            codec::PAL8_LZ,
-            &payload,
-            &f.expect(),
-            &format!("PAL8_LZ {n} colours"),
-            &mut shown,
-        );
+        check(codec::PAL8_LZ, &payload, &f.expect(), &format!("PAL8_LZ {n} colours"), &mut shown);
     }
 
     let (p, e) = bc1_mixed();
-    check(
-        codec::BC1_DUAL,
-        &p,
-        &e,
-        "BC1_DUAL, both flag halves",
-        &mut shown,
-    );
+    check(codec::BC1_DUAL, &p, &e, "BC1_DUAL, both flag halves", &mut shown);
 }
 
 #[test]
@@ -152,30 +124,14 @@ fn an_unshowable_frame_leaves_the_previous_one_lit() {
         (codec::SOLID, &[1, 2, 3, 4], "SOLID payload one byte long"),
         (codec::PAL5, &good, "PAL5 payload far too short"),
         (codec::BC1_DUAL, &good, "BC1_DUAL payload far too short"),
-        (
-            codec::PAL8_LZ,
-            &[0u8],
-            "PAL8_LZ with a palette and no stream",
-        ),
+        (codec::PAL8_LZ, &[0u8], "PAL8_LZ with a palette and no stream"),
     ];
     for (c, payload, what) in bad {
         tx.send(*c, F_KEY, payload);
         let ev = sim
-            .wait_for(&mut cursor, T, |e| {
-                matches!(
-                    e,
-                    Event::Dropped {
-                        cause: DropCause::Decode(_),
-                        ..
-                    }
-                )
-            })
+            .wait_for(&mut cursor, T, |e| matches!(e, Event::Dropped { cause: DropCause::Decode(_), .. }))
             .unwrap_or_else(|| panic!("{what}: expected a decode drop"));
-        if let Event::Dropped {
-            cause: DropCause::Decode(e),
-            ..
-        } = ev
-        {
+        if let Event::Dropped { cause: DropCause::Decode(e), .. } = ev {
             assert_ne!(e, DecodeError::Corrupt, "{what}: unexpected error shape");
         }
         let s = sim.snapshot();
@@ -185,11 +141,7 @@ fn an_unshowable_frame_leaves_the_previous_one_lit() {
 
     let t = sim.telemetry();
     assert_eq!(t.frames_dropped_decode, bad.len() as u32);
-    assert_eq!(
-        t.frames_rx,
-        1 + bad.len() as u32,
-        "all of them were accepted"
-    );
+    assert_eq!(t.frames_rx, 1 + bad.len() as u32, "all of them were accepted");
     assert_eq!(t.frames_rejected, 0, "a bad codec is not a bad packet");
 }
 
@@ -225,11 +177,7 @@ fn the_panel_model_is_applied_to_the_panel_and_not_to_the_pixels() {
     let s = sim.wait_for_frames(1, T).expect("displayed");
 
     assert_frames_eq(&s.decoded[..], &e, "decoded is what the sender sent");
-    assert_ne!(
-        &s.panel[..],
-        &s.decoded[..],
-        "the panel quantises to 64 duty steps; these pixels are not on one"
-    );
+    assert_ne!(&s.panel[..], &s.decoded[..], "the panel quantises to 64 duty steps; these pixels are not on one");
     // Still 64x32 and still plausible.
     assert_eq!(s.panel.len(), NBYTES);
     for px in s.panel.chunks(3) {

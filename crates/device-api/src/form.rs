@@ -89,14 +89,12 @@ impl FormError {
     pub const fn code(self) -> ErrorCode {
         match self {
             FormError::TooLong => ErrorCode::PayloadTooLarge,
-            FormError::SsidTooLong
-            | FormError::PskTooLong
-            | FormError::BadPin
-            | FormError::SsidEmpty => ErrorCode::OutOfRange,
-            FormError::BadEscape
-            | FormError::MissingSsid
-            | FormError::BadCounter
-            | FormError::DuplicateKey => ErrorCode::BadForm,
+            FormError::SsidTooLong | FormError::PskTooLong | FormError::BadPin | FormError::SsidEmpty => {
+                ErrorCode::OutOfRange
+            }
+            FormError::BadEscape | FormError::MissingSsid | FormError::BadCounter | FormError::DuplicateKey => {
+                ErrorCode::BadForm
+            }
         }
     }
 
@@ -174,10 +172,7 @@ impl WifiForm {
     /// The PIN and counter, for [`crate::request::check_auth`].
     #[must_use]
     pub fn auth(&self) -> crate::request::Auth<'_> {
-        crate::request::Auth {
-            pin: self.pin.as_deref(),
-            counter: self.counter,
-        }
+        crate::request::Auth { pin: self.pin.as_deref(), counter: self.counter }
     }
 }
 
@@ -318,10 +313,7 @@ pub fn parse_wifi_form(body: &[u8]) -> Result<WifiForm, FormError> {
 ///
 /// The outer `Result` is a malformed escape, which is fatal. The inner one is
 /// "it did not fit", which each caller names differently.
-fn decode_into<const N: usize>(
-    src: &[u8],
-    out: &mut Vec<u8, N>,
-) -> Result<Result<(), ()>, FormError> {
+fn decode_into<const N: usize>(src: &[u8], out: &mut Vec<u8, N>) -> Result<Result<(), ()>, FormError> {
     let mut i = 0;
     while i < src.len() {
         let b = match src[i] {

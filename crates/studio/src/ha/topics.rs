@@ -23,7 +23,8 @@ pub const APP: &str = "screeny";
 /// these and a `/`, `+` or `#` in a topic level is a different topic.
 #[must_use]
 pub fn sanitize(raw: &str) -> String {
-    let kept: String = raw.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    let kept: String =
+        raw.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
     kept.trim_matches(['_', '-']).to_string()
 }
 
@@ -114,7 +115,8 @@ impl Topics {
         let root = format!("{APP}/{}", cfg.instance);
         let base = key.map_or_else(|| root.clone(), |k| format!("{root}/{k}"));
         let pair = |entity: &str| Pair { state: format!("{base}/{entity}/state"), set: format!("{base}/{entity}/set") };
-        let device_id = key.map_or_else(|| format!("{APP}_{}", cfg.instance), |k| format!("{APP}_{}_{k}", cfg.instance));
+        let device_id =
+            key.map_or_else(|| format!("{APP}_{}", cfg.instance), |k| format!("{APP}_{}_{k}", cfg.instance));
         Topics {
             role,
             key: key.map(str::to_string),
@@ -140,7 +142,9 @@ impl Topics {
     #[must_use]
     pub fn command_topics(&self) -> Vec<&str> {
         match self.role {
-            Role::First => vec![&self.brightness.set, &self.level.set, &self.picture.set, &self.channel.set, &self.firmware.set],
+            Role::First => {
+                vec![&self.brightness.set, &self.level.set, &self.picture.set, &self.channel.set, &self.firmware.set]
+            }
             Role::Panel => vec![&self.brightness.set, &self.level.set, &self.channel.set, &self.firmware.set],
             Role::Channel => vec![&self.picture.set],
         }
@@ -170,7 +174,9 @@ impl Topics {
     #[must_use]
     pub fn retired_state_topics(&self) -> Vec<String> {
         match self.role {
-            Role::First => ["schedule", "scheduled", "scene"].iter().map(|e| format!("{}/{e}/state", self.base)).collect(),
+            Role::First => {
+                ["schedule", "scheduled", "scene"].iter().map(|e| format!("{}/{e}/state", self.base)).collect()
+            }
             Role::Panel => vec![self.picture.state.clone(), self.patch.state.clone()],
             Role::Channel => Vec::new(),
         }

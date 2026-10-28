@@ -161,10 +161,28 @@ pub(crate) struct Fixed {
 impl Fixed {
     /// The Living Room's hearth; the woodpile out while the time shows;
     /// the owner's gusts on Office for the time.
-    pub const PINNED: Fixed = Fixed { flue: 0.07, wood: 0.94, expansion: 0.06, headroom: 0.0, dark: DEFAULT_DARK, logs: 0.0, fire: 1.0, gusts: 1.72 };
+    pub const PINNED: Fixed = Fixed {
+        flue: 0.07,
+        wood: 0.94,
+        expansion: 0.06,
+        headroom: 0.0,
+        dark: DEFAULT_DARK,
+        logs: 0.0,
+        fire: 1.0,
+        gusts: 1.72,
+    };
     /// Hearth's defaults, the woodpile always burning.
     #[cfg(test)]
-    pub const HEARTH: Fixed = Fixed { flue: 0.4, wood: 0.0, expansion: 1.0, headroom: 0.0, dark: DEFAULT_DARK, logs: 1.0, fire: 1.0, gusts: 0.6 };
+    pub const HEARTH: Fixed = Fixed {
+        flue: 0.4,
+        wood: 0.0,
+        expansion: 1.0,
+        headroom: 0.0,
+        dark: DEFAULT_DARK,
+        logs: 1.0,
+        fire: 1.0,
+        gusts: 0.6,
+    };
 }
 
 /// The time's showing, seconds: the fire lights it over `EMERGE` - the jet
@@ -357,23 +375,86 @@ pub(crate) const DARK_RAMPS: [[[u32; 3]; FIRE_STEPS]; 3] = [
     // "steady red": card 374's ramp at its nearest levels, green held at 0
     // until it is past half a level - the same look, steadied.
     [
-        [2, 0, 0], [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0], [7, 1, 0], [8, 1, 0], [10, 1, 0],
-        [12, 2, 0], [14, 2, 0], [16, 2, 0], [18, 3, 0], [20, 4, 0], [23, 5, 0], [25, 6, 0], [28, 7, 0],
-        [30, 8, 0], [32, 10, 1], [35, 11, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+        [2, 0, 0],
+        [3, 0, 0],
+        [4, 0, 0],
+        [5, 0, 0],
+        [6, 0, 0],
+        [7, 1, 0],
+        [8, 1, 0],
+        [10, 1, 0],
+        [12, 2, 0],
+        [14, 2, 0],
+        [16, 2, 0],
+        [18, 3, 0],
+        [20, 4, 0],
+        [23, 5, 0],
+        [25, 6, 0],
+        [28, 7, 0],
+        [30, 8, 0],
+        [32, 10, 1],
+        [35, 11, 1],
+        [37, 13, 2],
+        [40, 15, 3],
+        [43, 17, 4],
+        [45, 19, 5],
+        [48, 22, 6],
     ],
     // "deeper red": one level darker at the bottom and pure red for longer,
     // so the tips and the edges fade through deep red rather than orange.
     [
-        [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0], [8, 0, 0], [10, 1, 0],
-        [12, 1, 0], [14, 1, 0], [16, 2, 0], [18, 2, 0], [20, 3, 0], [23, 4, 0], [25, 5, 0], [28, 6, 0],
-        [30, 8, 0], [32, 10, 1], [35, 11, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+        [1, 0, 0],
+        [2, 0, 0],
+        [3, 0, 0],
+        [4, 0, 0],
+        [5, 0, 0],
+        [6, 0, 0],
+        [8, 0, 0],
+        [10, 1, 0],
+        [12, 1, 0],
+        [14, 1, 0],
+        [16, 2, 0],
+        [18, 2, 0],
+        [20, 3, 0],
+        [23, 4, 0],
+        [25, 5, 0],
+        [28, 6, 0],
+        [30, 8, 0],
+        [32, 10, 1],
+        [35, 11, 1],
+        [37, 13, 2],
+        [40, 15, 3],
+        [43, 17, 4],
+        [45, 19, 5],
+        [48, 22, 6],
     ],
     // "warmer": green comes in early, so the cool end is a dim orange
     // rather than a red.
     [
-        [2, 0, 0], [3, 1, 0], [4, 1, 0], [5, 1, 0], [6, 2, 0], [7, 2, 0], [8, 2, 0], [10, 3, 0],
-        [12, 3, 0], [14, 4, 0], [16, 4, 0], [18, 5, 0], [20, 6, 0], [23, 7, 0], [25, 8, 0], [28, 9, 0],
-        [30, 10, 1], [32, 11, 1], [35, 12, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+        [2, 0, 0],
+        [3, 1, 0],
+        [4, 1, 0],
+        [5, 1, 0],
+        [6, 2, 0],
+        [7, 2, 0],
+        [8, 2, 0],
+        [10, 3, 0],
+        [12, 3, 0],
+        [14, 4, 0],
+        [16, 4, 0],
+        [18, 5, 0],
+        [20, 6, 0],
+        [23, 7, 0],
+        [25, 8, 0],
+        [28, 9, 0],
+        [30, 10, 1],
+        [32, 11, 1],
+        [35, 12, 1],
+        [37, 13, 2],
+        [40, 15, 3],
+        [43, 17, 4],
+        [45, 19, 5],
+        [48, 22, 6],
     ],
 ];
 
@@ -802,13 +883,17 @@ impl Flavortime {
             // Sat down into the gap: its axis a little under the tops of
             // the two it rests on, plus its own radius.
             let y = 0.5 * (a.y + a.r + b.y + b.r) + 0.6 * r;
-            let (x, z) = (0.5 * (a.x + a.half * a.yaw.cos() + b.x - b.half * b.yaw.cos()), 0.5 * (a.z + b.z) + rng.range(-3.0, 3.0));
+            let (x, z) = (
+                0.5 * (a.x + a.half * a.yaw.cos() + b.x - b.half * b.yaw.cos()),
+                0.5 * (a.z + b.z) + rng.range(-3.0, 3.0),
+            );
             let (half, yaw) = (rng.range(16.0, 22.0), rng.range(-0.6, 0.6));
             logs.push(log(&mut rng, x, y, z, r, half, yaw));
         }
         // The pile centred and kept off the side walls: the fire is as
         // likely to reach out of frame on the left as on the right.
-        let (lo, hi) = logs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), l| (lo.min(l.x - l.reach()), hi.max(l.x + l.reach())));
+        let (lo, hi) =
+            logs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), l| (lo.min(l.x - l.reach()), hi.max(l.x + l.reach())));
         let squeeze = (2.0 * SPREAD * WIDE / (hi - lo)).min(1.0);
         let mid = 0.5 * (lo + hi);
         for l in &mut logs {
@@ -943,7 +1028,8 @@ impl Flavortime {
         let p = ctx.now.rem_euclid(60.0);
         let minute = ctx.now - p;
         let lead = before + EMERGE;
-        let catch = |t: f64, from: f64, to: f64| smoothstep(0.0, 1.0, ((t - from) / (to - from)).clamp(0.0, 1.0) as f32);
+        let catch =
+            |t: f64, from: f64, to: f64| smoothstep(0.0, 1.0, ((t - from) / (to - from)).clamp(0.0, 1.0) as f32);
         // Which collapse: a new one each minute.
         let salt = self.salt ^ ((minute / 60.0) as u32).wrapping_mul(0x9e37);
         let new = clock::text(minute, hours24);
@@ -968,7 +1054,11 @@ impl Flavortime {
             let (_, place) = clock::mask(&new, middle_row, font, &[whole]);
             let u = ((p - LAUNCH_AT) / LAUNCH).clamp(0.0, 1.0) as f32;
             let below = (H - place.top) as f32 + 1.0;
-            let rising = clock::Shape { reveal: if p >= LAUNCH_AT { 1.0 } else { 0.0 }, lift: below * (1.0 - u).powi(3), ..whole };
+            let rising = clock::Shape {
+                reveal: if p >= LAUNCH_AT { 1.0 } else { 0.0 },
+                lift: below * (1.0 - u).powi(3),
+                ..whole
+            };
             let (b, mut at) = clock::mask(&new, middle_row, font, &[rising]);
             at.moving = clock::both(&at.moving, &flung.moving);
             self.lift = rising.lift;
@@ -976,9 +1066,13 @@ impl Flavortime {
         } else if p < f64::from(clock::COLLAPSE) {
             // The minute turns: the old digits that change fall, the new
             // ones catch where they stood.
-            let gone: Vec<_> = changed.iter().map(|&c| if c { clock::Shape { melt: p as f32 / clock::COLLAPSE, salt, ..whole } } else { whole }).collect();
+            let gone: Vec<_> = changed
+                .iter()
+                .map(|&c| if c { clock::Shape { melt: p as f32 / clock::COLLAPSE, salt, ..whole } } else { whole })
+                .collect();
             // The new digits are there at once, to catch from the jet.
-            let coming: Vec<_> = changed.iter().map(|&c| clock::Shape { reveal: if c { 1.0 } else { 0.0 }, ..whole }).collect();
+            let coming: Vec<_> =
+                changed.iter().map(|&c| clock::Shape { reveal: if c { 1.0 } else { 0.0 }, ..whole }).collect();
             let (a, falling) = clock::mask(&old, middle_row, font, &gone);
             let (b, mut at) = clock::mask(&new, middle_row, font, &coming);
             at.moving = clock::both(&at.moving, &falling.moving);
@@ -1049,7 +1143,11 @@ impl Flavortime {
         let surge_strength = dice.range(0.8, 1.6);
         // The digits that change, as columns, for the morph's jet.
         let spans = clock::spans(&new, font);
-        let morph_cols = spans.iter().zip(&changed).filter(|(_, &c)| c).fold((W as f32, 0.0f32), |(l, r), (&(x, w), _)| (l.min(x as f32), r.max((x + w) as f32)));
+        let morph_cols = spans
+            .iter()
+            .zip(&changed)
+            .filter(|(_, &c)| c)
+            .fold((W as f32, 0.0f32), |(l, r), (&(x, w), _)| (l.min(x as f32), r.max((x + w) as f32)));
         // The jets are timed on the wall clock, but the gas runs `speed`
         // times faster: at 5, the unscaled jet filled the whole frame.
         let fast = ctx.get("speed").max(1.0);
@@ -1159,16 +1257,19 @@ impl Flavortime {
                 self.bed[c.at] = [0.0; 4];
                 continue;
             }
-            let tongues = (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0 + yf / 5.0, gt * 0.7, self.salt)).max(0.0).powf(1.2);
+            let tongues =
+                (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0 + yf / 5.0, gt * 0.7, self.salt)).max(0.0).powf(1.2);
             // Wood (experiment): the gas comes out of the logs in pockets -
             // a crack, an end, a hot gap - each swelling, burning hard and
             // dying in a second or two of gas time, not as a burner's
             // steady sheet.
-            let pocket = smoothstep(0.05, 0.45, noise::fbm3(xf / 9.0, zf / 6.0 + yf / 6.0, gt * 0.9, self.salt ^ 0x9e3d));
+            let pocket =
+                smoothstep(0.05, 0.45, noise::fbm3(xf / 9.0, zf / 6.0 + yf / 6.0, gt * 0.9, self.salt ^ 0x9e3d));
             let wood_release = 1.0 - wood + wood * 1.6 * pocket;
             // Held thinner toward the shell's edge: the surfaces and gaps
             // together give off far more than card 372's sheet otherwise.
-            let level = 1.5 * smoothstep(lo, lo + 0.6, release * (0.35 + tongues) * breath * wood_release) * release.min(1.0);
+            let level =
+                1.5 * smoothstep(lo, lo + 0.6, release * (0.35 + tongues) * breath * wood_release) * release.min(1.0);
             let level = level * self.logs_burn;
             self.bed[c.at] = [level, 0.6 * release.min(1.0) * shimmer * self.logs_burn, 0.0, 0.0];
         }
@@ -1185,7 +1286,8 @@ impl Flavortime {
         let drift = 3.0 * noise::fbm1(t / 21.0, self.salt ^ 0xd1f7) * if stove { 0.3 } else { 1.0 };
         let (gust, surge) = self.gust.as_ref().map_or((0.0, 0.0), |g| {
             let a = ((self.t - g.start) / g.length).clamp(0.0, 1.0) as f32;
-            let env = (std::f32::consts::PI * a).sin().powi(2) * (1.0 + 0.25 * noise::fbm1(t * 0.9, self.salt ^ 0x6057));
+            let env =
+                (std::f32::consts::PI * a).sin().powi(2) * (1.0 + 0.25 * noise::fbm1(t * 0.9, self.salt ^ 0x6057));
             (g.peak * env, env * g.peak.abs() / 18.0)
         });
         let gust = if stove { 0.0 } else { gust };
@@ -1246,7 +1348,10 @@ impl Flavortime {
         self.sparks[4 * slot + 2] = [pos[0], pos[1], pos[2], 0.0];
         self.sparks[4 * slot + 3] = [0.0; 4];
         self.bounces_read[slot] = [0.0; 4];
-        self.spawns.push((slot, [[pos[0], pos[1], pos[2], heat], [v[0], v[1], v[2], cooling], [pos[0], pos[1], pos[2], 0.0], [0.0; 4]]));
+        self.spawns.push((
+            slot,
+            [[pos[0], pos[1], pos[2], heat], [v[0], v[1], v[2], cooling], [pos[0], pos[1], pos[2], 0.0], [0.0; 4]],
+        ));
     }
 
     /// The dice: gusts, log settles, and single sparks.
@@ -1421,8 +1526,11 @@ impl Flavortime {
         let (leds, bare) = leds.split_at(N);
         let mut light: Vec<Rgb> = leds.iter().map(|l| Rgb::new(l[0], l[1], l[2])).collect();
         // How much of each LED's fire the soot in front of it has taken.
-        let soot: Vec<f32> =
-            light.iter().zip(bare).map(|(c, b)| if b[0] > 1e-4 { (1.0 - c.luma() / b[0]).clamp(0.0, 1.0) } else { 0.0 }).collect();
+        let soot: Vec<f32> = light
+            .iter()
+            .zip(bare)
+            .map(|(c, b)| if b[0] > 1e-4 { (1.0 - c.luma() / b[0]).clamp(0.0, 1.0) } else { 0.0 })
+            .collect();
         for k in 0..EMBERS {
             if self.sparks[4 * k][3] > EMBER_OUT {
                 let spark = self.sparks[4 * k..4 * k + 3].to_vec();
@@ -1586,7 +1694,13 @@ impl Patch for Flavortime {
         }
         if self.sim.is_none() {
             self.sim = Some(match Gpu::shared() {
-                Ok(gpu) => Some(Sim::new(gpu, self.grid.dims(), self.grid.bed_rows() as u32, self.grid.sweeps, &self.ramp.table())),
+                Ok(gpu) => Some(Sim::new(
+                    gpu,
+                    self.grid.dims(),
+                    self.grid.bed_rows() as u32,
+                    self.grid.sweeps,
+                    &self.ramp.table(),
+                )),
                 Err(e) => {
                     eprintln!("screeny-art: flavortime: {e}; rendering black");
                     None
@@ -1640,6 +1754,11 @@ impl Patch for Flavortime {
         } else {
             "burning quietly".to_string()
         };
-        Some(Playing { title: format!("a fire of {} logs", self.logs.len()), detail, actions: Vec::new(), notes: Vec::new() })
+        Some(Playing {
+            title: format!("a fire of {} logs", self.logs.len()),
+            detail,
+            actions: Vec::new(),
+            notes: Vec::new(),
+        })
     }
 }

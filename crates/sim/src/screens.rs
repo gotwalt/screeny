@@ -24,9 +24,7 @@ pub struct Canvas {
 
 impl Default for Canvas {
     fn default() -> Self {
-        Canvas {
-            px: Box::new([0u8; NBYTES]),
-        }
+        Canvas { px: Box::new([0u8; NBYTES]) }
     }
 }
 
@@ -312,12 +310,7 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
 
-    fn scene<'a>(
-        decoded: &'a Rgb888Frame,
-        panel: &'a Rgb888Frame,
-        state: State,
-        idle_mode: IdleMode,
-    ) -> Scene<'a> {
+    fn scene<'a>(decoded: &'a Rgb888Frame, panel: &'a Rgb888Frame, state: State, idle_mode: IdleMode) -> Scene<'a> {
         Scene {
             decoded,
             panel,
@@ -397,14 +390,8 @@ mod tests {
         s.now_us = 10_000_000;
         s.have_frame = false;
         render(&s, &mut out);
-        let bright = out
-            .chunks(3)
-            .filter(|px| px[0] > 200 && px[1] > 200)
-            .count();
-        assert!(
-            bright > 10,
-            "expected the name in near-white, got {bright} px"
-        );
+        let bright = out.chunks(3).filter(|px| px[0] > 200 && px[1] > 200).count();
+        assert!(bright > 10, "expected the name in near-white, got {bright} px");
     }
 
     #[test]

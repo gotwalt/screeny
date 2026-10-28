@@ -82,10 +82,9 @@ impl Ui {
                 let bytes = tokio::fs::read(dir.join(name)).await.ok()?;
                 Some((content_type(name).to_owned(), bytes))
             }
-            None => EMBEDDED
-                .iter()
-                .find(|(p, _, _)| *p == name)
-                .map(|(_, ct, bytes)| ((*ct).to_owned(), (*bytes).to_vec())),
+            None => {
+                EMBEDDED.iter().find(|(p, _, _)| *p == name).map(|(_, ct, bytes)| ((*ct).to_owned(), (*bytes).to_vec()))
+            }
         }
     }
 }
@@ -132,7 +131,9 @@ pub async fn serve(axum::extract::State(st): axum::extract::State<crate::AppStat
     }
     match st.ui.file(name).await {
         // No caching: the point of `--ui-dir` is that a reload shows the edit.
-        Some((ct, bytes)) => ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, "no-cache".into())], bytes).into_response(),
+        Some((ct, bytes)) => {
+            ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, "no-cache".into())], bytes).into_response()
+        }
         None => (StatusCode::NOT_FOUND, "not found").into_response(),
     }
 }

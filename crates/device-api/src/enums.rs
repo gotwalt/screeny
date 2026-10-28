@@ -36,8 +36,7 @@ pub enum IdleMode {
 
 impl IdleMode {
     /// The longest serialised form, quotes included.
-    pub(crate) const MAX_JSON_LEN: usize =
-        2 + longest!("status", "hold_forever", "dim", "black");
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("status", "hold_forever", "dim", "black");
 }
 
 impl From<ProtoIdleMode> for IdleMode {
@@ -110,8 +109,7 @@ pub enum WifiState {
 }
 
 impl WifiState {
-    pub(crate) const MAX_JSON_LEN: usize =
-        2 + longest!("disconnected", "connecting", "connected", "failed");
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("disconnected", "connecting", "connected", "failed");
 
     /// The [`screeny_proto::control::wifi_state`] byte.
     #[must_use]
@@ -155,8 +153,7 @@ pub enum StreamState {
 }
 
 impl StreamState {
-    pub(crate) const MAX_JSON_LEN: usize =
-        2 + longest!("idle", "live", "hold", "identify", "provisioning");
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("idle", "live", "hold", "identify", "provisioning");
 
     /// The [`screeny_proto::control::state`] byte.
     #[must_use]
@@ -262,14 +259,8 @@ pub enum FwState {
 }
 
 impl FwState {
-    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!(
-        "new",
-        "pending_verify",
-        "valid",
-        "invalid",
-        "aborted",
-        "undefined",
-    );
+    pub(crate) const MAX_JSON_LEN: usize =
+        2 + longest!("new", "pending_verify", "valid", "invalid", "aborted", "undefined",);
 }
 
 /// Why the chip last restarted. The ESP32's `RESET_REASON`, named.
@@ -420,8 +411,7 @@ pub enum Accepted {
 }
 
 impl Accepted {
-    pub(crate) const MAX_JSON_LEN: usize =
-        2 + longest!("trying", "rebooting", "identifying");
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("trying", "rebooting", "identifying");
 }
 
 #[cfg(test)]
@@ -445,34 +435,20 @@ mod tests {
 
     #[test]
     fn idle_mode_round_trips_through_proto() {
-        for m in [
-            ProtoIdleMode::Status,
-            ProtoIdleMode::HoldForever,
-            ProtoIdleMode::Dim,
-            ProtoIdleMode::Black,
-        ] {
+        for m in [ProtoIdleMode::Status, ProtoIdleMode::HoldForever, ProtoIdleMode::Dim, ProtoIdleMode::Black] {
             assert_eq!(ProtoIdleMode::from(IdleMode::from(m)), m);
         }
     }
 
     #[test]
     fn state_bytes_round_trip() {
-        for s in [
-            StreamState::Idle,
-            StreamState::Live,
-            StreamState::Hold,
-            StreamState::Identify,
-            StreamState::Provisioning,
-        ] {
+        for s in
+            [StreamState::Idle, StreamState::Live, StreamState::Hold, StreamState::Identify, StreamState::Provisioning]
+        {
             assert_eq!(StreamState::from_u8(s.as_u8()), Some(s));
         }
         assert_eq!(StreamState::from_u8(200), None);
-        for s in [
-            WifiState::Disconnected,
-            WifiState::Connecting,
-            WifiState::Connected,
-            WifiState::Failed,
-        ] {
+        for s in [WifiState::Disconnected, WifiState::Connecting, WifiState::Connected, WifiState::Failed] {
             assert_eq!(WifiState::from_u8(s.as_u8()), Some(s));
         }
         assert_eq!(WifiState::from_u8(200), None);

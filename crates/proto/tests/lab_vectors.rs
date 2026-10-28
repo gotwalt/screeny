@@ -41,12 +41,7 @@ fn load() -> Vec<Vector> {
         let expect = std::fs::read(dir.join(format!("{name}.rgb"))).expect("expected frame");
         assert_eq!(payload.len(), want_len, "{name}: manifest length");
         assert_eq!(expect.len(), NBYTES, "{name}: expected frame size");
-        out.push(Vector {
-            name,
-            codec,
-            payload,
-            expect,
-        });
+        out.push(Vector { name, codec, payload, expect });
     }
     assert!(!out.is_empty(), "no vectors");
     out
@@ -63,11 +58,7 @@ fn every_vector_decodes_to_the_lab_s_pixels() {
     for v in &vectors {
         let mut dst = blank();
         dec::decode(v.codec, &v.payload, &mut dst).unwrap_or_else(|e| panic!("{}: {e:?}", v.name));
-        assert!(
-            dst[..] == v.expect[..],
-            "{}: pixels differ from the lab decoder",
-            v.name
-        );
+        assert!(dst[..] == v.expect[..], "{}: pixels differ from the lab decoder", v.name);
         seen[v.codec as usize] = true;
     }
     for c in dec::SUPPORTED_CODECS {
@@ -86,12 +77,9 @@ fn vector_lengths_match_the_spec_table() {
             }
             dec::codec::SOLID => assert_eq!(v.payload.len(), dec::SOLID_LEN, "{}", v.name),
             // Section 4: the variable-rate codecs must still fit one datagram.
-            _ => assert!(
-                v.payload.len() <= screeny_proto::MAX_PIXEL_PAYLOAD,
-                "{} is {} bytes",
-                v.name,
-                v.payload.len()
-            ),
+            _ => {
+                assert!(v.payload.len() <= screeny_proto::MAX_PIXEL_PAYLOAD, "{} is {} bytes", v.name, v.payload.len())
+            }
         }
     }
 }
@@ -102,13 +90,7 @@ fn a_vector_in_a_real_packet_round_trips() {
     // `codec` and `payload` straight to `decode`.
     use screeny_proto::{FramePacket, F_KEY};
     for v in load() {
-        let pkt = FramePacket {
-            codec: v.codec,
-            flags: F_KEY,
-            seq: 1234,
-            timestamp_us: Some(99),
-            payload: &v.payload,
-        };
+        let pkt = FramePacket { codec: v.codec, flags: F_KEY, seq: 1234, timestamp_us: Some(99), payload: &v.payload };
         let mut buf = vec![0u8; screeny_proto::MAX_UDP_PAYLOAD];
         let n = pkt.write(&mut buf).expect("write");
         let back = FramePacket::parse(&buf[..n]).expect("parse");
@@ -141,11 +123,6 @@ fn appending_to_a_real_payload_is_rejected() {
         let mut longer = v.payload.clone();
         longer.push(0);
         let mut dst = blank();
-        assert_eq!(
-            dec::decode(v.codec, &longer, &mut dst),
-            Err(DecodeError::Long),
-            "{}",
-            v.name
-        );
+        assert_eq!(dec::decode(v.codec, &longer, &mut dst), Err(DecodeError::Long), "{}", v.name);
     }
 }

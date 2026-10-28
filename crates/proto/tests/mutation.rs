@@ -66,10 +66,7 @@ fn corpus() -> Vec<(u8, Vec<u8>)> {
         let mut f = line.split('\t');
         let name = f.next().unwrap();
         let codec: u8 = f.next().unwrap().parse().unwrap();
-        out.push((
-            codec,
-            std::fs::read(dir.join(format!("{name}.bin"))).expect("payload"),
-        ));
+        out.push((codec, std::fs::read(dir.join(format!("{name}.bin"))).expect("payload")));
     }
     out
 }
@@ -143,10 +140,7 @@ fn no_payload_can_break_a_decoder() {
         }
         // Reserved and lab-only ids must be refused, never decoded.
         for c in [0x00, 0x01, 0x03, 0x20, 0x30, 0xF0, 0xFF] {
-            assert_eq!(
-                dec::decode(c, &m, &mut dst),
-                Err(dec::DecodeError::UnsupportedCodec)
-            );
+            assert_eq!(dec::decode(c, &m, &mut dst), Err(dec::DecodeError::UnsupportedCodec));
         }
     }
 
@@ -216,10 +210,7 @@ fn lz_streams_always_terminate_and_stay_in_bounds() {
     assert!(produced_exact > 100, "the success path was never exercised");
     // `dst` must be small-but-legal too: inflate must refuse, not index past.
     let mut tiny = [0u8; 8];
-    assert_eq!(
-        lz::inflate(&[0xFF, 1, 2, 3, 4, 5, 6, 7, 8, 9], &mut tiny, 2048),
-        Err(dec::DecodeError::Corrupt)
-    );
+    assert_eq!(lz::inflate(&[0xFF, 1, 2, 3, 4, 5, 6, 7, 8, 9], &mut tiny, 2048), Err(dec::DecodeError::Corrupt));
     assert_eq!(lz::inflate(&[], &mut tiny, 0), Ok(0));
 }
 
@@ -229,24 +220,15 @@ fn lz_rejects_matches_that_reach_before_the_output() {
     // points behind the start of what has been produced.
     let mut dst = blank();
     // flags = 0 -> every item is a match; the first one has nothing behind it.
-    assert_eq!(
-        lz::inflate(&[0x00, 0xFF, 0xFF], &mut dst[..], 2048),
-        Err(dec::DecodeError::Corrupt)
-    );
+    assert_eq!(lz::inflate(&[0x00, 0xFF, 0xFF], &mut dst[..], 2048), Err(dec::DecodeError::Corrupt));
     // One literal, then a match of offset 2 with only 1 byte produced.
-    assert_eq!(
-        lz::inflate(&[0x80, 0x41, 0x00, 0x10], &mut dst[..], 2048),
-        Err(dec::DecodeError::Corrupt)
-    );
+    assert_eq!(lz::inflate(&[0x80, 0x41, 0x00, 0x10], &mut dst[..], 2048), Err(dec::DecodeError::Corrupt));
     // Offset 1, length 3, after one literal: legal, and self-overlapping.
     let used = lz::inflate(&[0x80, 0x41, 0x00, 0x00], &mut dst[..], 4).unwrap();
     assert_eq!(used, 4);
     assert_eq!(&dst[..4], b"AAAA");
     // A match that would overshoot `want`.
-    assert_eq!(
-        lz::inflate(&[0x80, 0x41, 0x00, 0x0F], &mut dst[..], 4),
-        Err(dec::DecodeError::Corrupt)
-    );
+    assert_eq!(lz::inflate(&[0x80, 0x41, 0x00, 0x0F], &mut dst[..], 4), Err(dec::DecodeError::Corrupt));
 }
 
 #[test]
@@ -258,27 +240,14 @@ fn no_datagram_can_break_the_packet_parser() {
     let mut seeds: Vec<Vec<u8>> = Vec::new();
     for (codec, payload) in corpus.iter().take(6) {
         let mut buf = vec![0u8; 1600];
-        let n = FramePacket {
-            codec: *codec,
-            flags: 0x0B,
-            seq: 42,
-            timestamp_us: Some(7),
-            payload,
-        }
-        .write(&mut buf)
-        .unwrap();
+        let n = FramePacket { codec: *codec, flags: 0x0B, seq: 42, timestamp_us: Some(7), payload }
+            .write(&mut buf)
+            .unwrap();
         seeds.push(buf[..n].to_vec());
     }
     for op in 0..0x10u8 {
         let mut buf = [0u8; 128];
-        let n = ControlPacket {
-            op,
-            flags: 0x01,
-            req_id: 3,
-            body: &[1, 2, 3, 4, 5],
-        }
-        .write(&mut buf)
-        .unwrap();
+        let n = ControlPacket { op, flags: 0x01, req_id: 3, body: &[1, 2, 3, 4, 5] }.write(&mut buf).unwrap();
         seeds.push(buf[..n].to_vec());
     }
 
@@ -338,11 +307,7 @@ fn no_body_can_break_a_control_op() {
     let mut rng = Rng(0x0BAD_0005);
     let mut decoded = 0usize;
     for _ in 0..80_000 {
-        let op = if rng.next() & 1 == 0 {
-            (rng.below(0x10)) as u8
-        } else {
-            rng.byte()
-        };
+        let op = if rng.next() & 1 == 0 { (rng.below(0x10)) as u8 } else { rng.byte() };
         let body = rng.bytes_below(120);
 
         if let Ok(req) = Request::decode(op, &body) {
@@ -373,23 +338,14 @@ fn no_body_can_break_a_control_op() {
 fn no_txt_record_can_break_the_parser() {
     let mut rng = Rng(0x7C70_0005);
     let mut good = [0u8; 256];
-    let gn = DeviceInfo {
-        codecs: dec::CODECS_TXT,
-        fw: "0.1.0",
-        id: "a4cf12",
-        name: "Desk panel",
-        ..DeviceInfo::DEFAULT
-    }
-    .write(&mut good)
-    .unwrap();
+    let gn =
+        DeviceInfo { codecs: dec::CODECS_TXT, fw: "0.1.0", id: "a4cf12", name: "Desk panel", ..DeviceInfo::DEFAULT }
+            .write(&mut good)
+            .unwrap();
 
     let mut parsed = 0usize;
     for i in 0..60_000 {
-        let d = if i % 3 == 0 {
-            rng.bytes_below(300)
-        } else {
-            mutate(&mut rng, &good[..gn])
-        };
+        let d = if i % 3 == 0 { rng.bytes_below(300) } else { mutate(&mut rng, &good[..gn]) };
 
         // Iteration must always terminate and stay inside the buffer.
         let mut n = 0;
@@ -423,28 +379,11 @@ fn indexed_frame_expand_refuses_an_index_outside_the_palette() {
     let mut idx = Box::new([0u8; NPIX]);
     let pal = [[1u8, 2, 3], [4, 5, 6]];
     let mut dst = blank();
-    IndexedFrame {
-        palette: &pal,
-        indices: &idx,
-    }
-    .expand(&mut dst)
-    .unwrap();
+    IndexedFrame { palette: &pal, indices: &idx }.expand(&mut dst).unwrap();
     assert_eq!(&dst[..6], &[1, 2, 3, 1, 2, 3]);
 
     idx[NPIX - 1] = 2;
-    assert_eq!(
-        IndexedFrame {
-            palette: &pal,
-            indices: &idx,
-        }
-        .expand(&mut dst),
-        Err(dec::DecodeError::Corrupt)
-    );
+    assert_eq!(IndexedFrame { palette: &pal, indices: &idx }.expand(&mut dst), Err(dec::DecodeError::Corrupt));
     // An empty palette is refused rather than divided by.
-    assert!(IndexedFrame {
-        palette: &[],
-        indices: &idx,
-    }
-    .expand(&mut dst)
-    .is_err());
+    assert!(IndexedFrame { palette: &[], indices: &idx }.expand(&mut dst).is_err());
 }

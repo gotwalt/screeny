@@ -24,12 +24,7 @@ use screeny_device_api::text::text;
 use screeny_device_api::IdleMode;
 
 fn named(name: &str) -> SettingsReply {
-    SettingsReply {
-        name: text(name).unwrap(),
-        brightness: 96,
-        idle_mode: IdleMode::Status,
-        colour_order: None,
-    }
+    SettingsReply { name: text(name).unwrap(), brightness: 96, idle_mode: IdleMode::Status, colour_order: None }
 }
 
 /// picoserve's escaper, transcribed from `src/response/json.rs`. The only
@@ -65,11 +60,8 @@ fn the_two_ordinary_escapes_agree_everywhere() {
         let mut buf = [0u8; 512];
         let n = serde_json_core::to_slice(&value, &mut buf).unwrap();
         assert_eq!(json.as_bytes(), &buf[..n], "{name:?}");
-        let (back, _) = serde_json_core::from_slice_escaped::<SettingsReply>(
-            &buf[..n],
-            &mut [0u8; MIN_UNESCAPE_BUFFER],
-        )
-        .unwrap();
+        let (back, _) =
+            serde_json_core::from_slice_escaped::<SettingsReply>(&buf[..n], &mut [0u8; MIN_UNESCAPE_BUFFER]).unwrap();
         assert_eq!(back, value, "{name:?}");
         assert!(json.contains(&picoserve_escape(name)), "{json}");
     }
@@ -94,10 +86,7 @@ fn a_slash_is_the_one_character_picoserve_writes_differently() {
     assert_eq!(back, value);
     // It is one byte longer, which the size bounds already allow for: they
     // budget six bytes per byte of text.
-    assert_eq!(
-        picoserve_escape("up/down").len(),
-        "up/down".len() + 1
-    );
+    assert_eq!(picoserve_escape("up/down").len(), "up/down".len() + 1);
 }
 
 #[test]
@@ -115,11 +104,8 @@ fn serde_json_core_spells_unicode_escapes_in_upper_case() {
     assert_eq!(json.len(), core.len());
     assert_eq!(wire_len(&value), json.len());
     // ...and both read back to the same value.
-    let (back, _) = serde_json_core::from_slice_escaped::<SettingsReply>(
-        json.as_bytes(),
-        &mut [0u8; MIN_UNESCAPE_BUFFER],
-    )
-    .unwrap();
+    let (back, _) =
+        serde_json_core::from_slice_escaped::<SettingsReply>(json.as_bytes(), &mut [0u8; MIN_UNESCAPE_BUFFER]).unwrap();
     assert_eq!(back, value);
     let back: SettingsReply = serde_json::from_str(core).unwrap();
     assert_eq!(back, value);
@@ -150,8 +136,7 @@ fn serde_json_core_does_not_unescape_without_a_buffer() {
     assert_eq!(wrong.name.len(), 9);
 
     let (right, _) =
-        serde_json_core::from_slice_escaped::<SettingsReply>(body, &mut [0u8; MIN_UNESCAPE_BUFFER])
-            .unwrap();
+        serde_json_core::from_slice_escaped::<SettingsReply>(body, &mut [0u8; MIN_UNESCAPE_BUFFER]).unwrap();
     assert_eq!(right.name.as_str(), "caf\u{e9}");
     assert_eq!(right.name.len(), 5);
 
@@ -167,18 +152,12 @@ fn the_unescape_buffer_is_as_long_as_the_longest_string_a_request_can_hold() {
     // discovering.
     assert_eq!(MIN_UNESCAPE_BUFFER, 32);
 
-    let name = "\"".repeat(32);            // 32 bytes unescaped, 64 escaped
+    let name = "\"".repeat(32); // 32 bytes unescaped, 64 escaped
     let value = named(&name);
     let json = serde_json::to_string(&value).unwrap();
-    let (back, _) =
-        serde_json_core::from_slice_escaped::<SettingsReply>(json.as_bytes(), &mut [0u8; 32])
-            .unwrap();
+    let (back, _) = serde_json_core::from_slice_escaped::<SettingsReply>(json.as_bytes(), &mut [0u8; 32]).unwrap();
     assert_eq!(back, value);
 
     // One byte less and it fails loudly, which is the good case.
-    assert!(serde_json_core::from_slice_escaped::<SettingsReply>(
-        json.as_bytes(),
-        &mut [0u8; 31]
-    )
-    .is_err());
+    assert!(serde_json_core::from_slice_escaped::<SettingsReply>(json.as_bytes(), &mut [0u8; 31]).is_err());
 }

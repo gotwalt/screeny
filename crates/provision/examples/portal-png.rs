@@ -15,45 +15,23 @@
 //! its own picture; this one asks `screeny-provision` for the same frame the
 //! firmware will put on the panel, so the layout no longer exists twice.
 
-use screeny_provision::{render, Layout, Screen, UriForm};
 use screeny_proto::{H, NBYTES, W};
+use screeny_provision::{render, Layout, Screen, UriForm};
 
 const SCALE: usize = 8;
 
 fn main() {
     let out = std::env::args().nth(1).unwrap_or_else(|| {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../docs/research/img")
-            .to_string_lossy()
-            .into_owned()
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/research/img").to_string_lossy().into_owned()
     });
     let out = std::path::Path::new(&out);
     std::fs::create_dir_all(out).expect("mkdir");
 
     let ssid = "screeny-4a00a4";
     let screens: [(&str, Screen); 3] = [
-        (
-            "221-portal-a-qr-and-name",
-            Screen::Portal {
-                ssid,
-                layout: Layout::QrAndName,
-                form: UriForm::NoPass,
-            },
-        ),
-        (
-            "221-portal-c-text-only",
-            Screen::Portal {
-                ssid,
-                layout: Layout::Text,
-                form: UriForm::NoPass,
-            },
-        ),
-        (
-            "221-connected",
-            Screen::Connected {
-                ip: [192, 168, 7, 221],
-            },
-        ),
+        ("221-portal-a-qr-and-name", Screen::Portal { ssid, layout: Layout::QrAndName, form: UriForm::NoPass }),
+        ("221-portal-c-text-only", Screen::Portal { ssid, layout: Layout::Text, form: UriForm::NoPass }),
+        ("221-connected", Screen::Connected { ip: [192, 168, 7, 221] }),
     ];
 
     for (name, screen) in screens {
@@ -80,10 +58,7 @@ fn write_png(path: &std::path::Path, f: &[u8; NBYTES]) {
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
     enc.set_color(png::ColorType::Rgb);
     enc.set_depth(png::BitDepth::Eight);
-    enc.write_header()
-        .expect("png header")
-        .write_image_data(&buf)
-        .expect("png data");
+    enc.write_header().expect("png header").write_image_data(&buf).expect("png data");
 }
 
 fn ascii(f: &[u8; NBYTES]) -> String {

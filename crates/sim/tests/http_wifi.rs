@@ -18,9 +18,7 @@ use common::http;
 use screeny_device_api::reply::{AcceptedReply, StatusReply, WifiReply};
 use screeny_device_api::{route, FailReason, StreamState, WifiState};
 use screeny_proto::control::{wifi_state, Reply, Request, SetWifi};
-use screeny_sim::{
-    Config, Event, Posted, SimDevice, SimHandle, WifiOutcome, WifiPhase, WifiTiming,
-};
+use screeny_sim::{Config, Event, Posted, SimDevice, SimHandle, WifiOutcome, WifiPhase, WifiTiming};
 
 /// Long enough for a scripted join and a few 10 ms ticks, short enough that a
 /// broken test fails rather than hangs.
@@ -83,9 +81,7 @@ fn the_default_simulator_is_online_from_its_first_instant() {
     let ctrl = common::Ctrl::new(sim.control_addr());
     let d = ctrl.call(&Request::GetWifi, 1).expect("GET_WIFI");
     let (_, body) = common::parse_reply(&d);
-    let Ok(Reply::Wifi { ssid, state }) = body else {
-        panic!("expected a Wifi reply")
-    };
+    let Ok(Reply::Wifi { ssid, state }) = body else { panic!("expected a Wifi reply") };
     assert!(!ssid.is_empty());
     assert_eq!(state, wifi_state::CONNECTED);
     dev.shutdown();
@@ -101,11 +97,7 @@ fn a_factory_fresh_device_boots_into_the_portal() {
     assert_eq!(shot.ssid, "", "an empty store has no SSID");
     // Spec section 6.7: `PROVISIONING` is an overlay on the state byte, and
     // it is up while the portal is.
-    assert_eq!(
-        shot.state_byte,
-        screeny_proto::control::state::PROVISIONING,
-        "the portal shows in telemetry"
-    );
+    assert_eq!(shot.state_byte, screeny_proto::control::state::PROVISIONING, "the portal shows in telemetry");
     let status: StatusReply = http::get(api(&dev), route::STATUS).parse();
     assert!(status.portal);
     assert_eq!(status.state, StreamState::Provisioning);
@@ -133,17 +125,12 @@ fn a_failed_trial_join_over_http_leaves_the_store_untouched() {
     // While it is being tried, the page's full-page reload sees `connecting`
     // with the SSID it typed.
     let trying: WifiReply = http::get(addr, route::WIFI).parse();
-    assert!(
-        matches!(trying.state, WifiState::Connecting | WifiState::Failed),
-        "{trying:?}"
-    );
+    assert!(matches!(trying.state, WifiState::Connecting | WifiState::Failed), "{trying:?}");
 
     // ...and it lands on `failed` / `auth`, which is what the portal page
     // shows the person holding the phone.
     assert!(
-        sim.wait_until(T, |s| s.wifi_phase == WifiPhase::Portal
-            && s.wifi_state == wifi_state::FAILED)
-            .is_some(),
+        sim.wait_until(T, |s| s.wifi_phase == WifiPhase::Portal && s.wifi_state == wifi_state::FAILED).is_some(),
         "the trial should have failed back to the portal"
     );
     let failed: WifiReply = http::get(addr, route::WIFI).parse();
@@ -171,25 +158,14 @@ fn a_failed_join_over_udp_set_wifi_takes_the_same_path() {
     let mut cursor = sim.event_cursor();
     let ctrl = common::Ctrl::new(sim.control_addr());
 
-    let d = ctrl
-        .call(
-            &Request::SetWifi(SetWifi {
-                ssid: SSID,
-                psk: PSK,
-                persist: true,
-            }),
-            9,
-        )
-        .expect("SET_WIFI reply");
+    let d = ctrl.call(&Request::SetWifi(SetWifi { ssid: SSID, psk: PSK, persist: true }), 9).expect("SET_WIFI reply");
     // Spec 8.2: the reply comes back before the radio work, and it is the
     // ordinary `SET_WIFI` reply, not an error.
     assert!(matches!(common::parse_reply(&d).1, Ok(Reply::SetWifi)));
 
     // It is logged, with no field for the PSK. That event is unchanged from
     // before card 224.
-    let ev = sim
-        .wait_for(&mut cursor, T, |e| matches!(e, Event::SetWifi { .. }))
-        .expect("SET_WIFI logged");
+    let ev = sim.wait_for(&mut cursor, T, |e| matches!(e, Event::SetWifi { .. })).expect("SET_WIFI logged");
     match ev {
         Event::SetWifi { ssid, persist } => {
             assert_eq!(ssid, SSID);
@@ -199,8 +175,7 @@ fn a_failed_join_over_udp_set_wifi_takes_the_same_path() {
     }
 
     assert!(
-        sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED)
-            .is_some(),
+        sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED).is_some(),
         "SET_WIFI should have driven the same failed trial"
     );
     let reply = sim.wifi_reply();
@@ -239,10 +214,7 @@ fn a_successful_trial_join_commits_once_and_goes_online() {
 
     // The AP is held up for its grace window so the phone standing on the
     // portal can read the new address, then dropped.
-    assert!(
-        sim.wait_until(T, |s| !s.portal).is_some(),
-        "the soft-AP should come down after the grace window"
-    );
+    assert!(sim.wait_until(T, |s| !s.portal).is_some(), "the soft-AP should come down after the grace window");
     dev.shutdown();
 }
 
@@ -255,8 +227,7 @@ fn a_radio_that_never_answers_times_the_attempt_out() {
     let sim = dev.handle();
     let _ = http::post_form(addr, route::WIFI, &format!("ssid={SSID}&psk={PSK}"));
     assert!(
-        sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED)
-            .is_some(),
+        sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED).is_some(),
         "three attempts of 300 ms should have run out"
     );
     let wifi: WifiReply = http::get(addr, route::WIFI).parse();
@@ -274,9 +245,7 @@ fn the_outcome_can_be_changed_between_attempts() {
     let sim = dev.handle();
 
     let _ = http::post_form(addr, route::WIFI, &format!("ssid={SSID}&psk=wrong"));
-    assert!(sim
-        .wait_until(T, |s| s.wifi_state == wifi_state::FAILED)
-        .is_some());
+    assert!(sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED).is_some());
     assert_eq!(sim.stored_ssid(), None);
 
     sim.set_wifi_outcome(WifiOutcome::Ok);
@@ -298,12 +267,8 @@ fn the_outcome_can_be_changed_between_attempts() {
 /// A device that is `Online` with a stored network, with timings compressed
 /// and the scripted radio set to `outcome` for the *next* join.
 fn online(outcome: WifiOutcome) -> SimDevice {
-    let dev = SimDevice::start(Config {
-        wifi_join_ms: 40,
-        wifi_timing: quick_timing(),
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { wifi_join_ms: 40, wifi_timing: quick_timing(), ..Config::for_test() })
+        .expect("bind loopback");
     assert_eq!(dev.handle().wifi_phase(), WifiPhase::Online);
     dev.handle().set_wifi_outcome(outcome);
     dev
@@ -343,11 +308,7 @@ fn a_trial_posted_while_online_that_fails_goes_back_to_the_old_network() {
 
     // The failure is reported, and it is *sticky*: the old network coming
     // back must not read as "your new network worked".
-    assert!(
-        sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED)
-            .is_some(),
-        "an auth error is not retried"
-    );
+    assert!(sim.wait_until(T, |s| s.wifi_state == wifi_state::FAILED).is_some(), "an auth error is not retried");
     let wifi: WifiReply = http::get(addr, route::WIFI).parse();
     assert_eq!(wifi.state, WifiState::Failed);
     assert_eq!(wifi.reason, Some(FailReason::Auth));
@@ -356,15 +317,8 @@ fn a_trial_posted_while_online_that_fails_goes_back_to_the_old_network() {
     // The old credentials are tried again - the portal is *not* raised.
     assert!(!sim.snapshot().portal, "no AP on this path");
     sim.set_wifi_outcome(WifiOutcome::Ok);
-    assert!(
-        wait_phase(&sim, WifiPhase::Online),
-        "back on the old network"
-    );
-    assert_eq!(
-        sim.stored_ssid(),
-        stored_before,
-        "the store was not touched"
-    );
+    assert!(wait_phase(&sim, WifiPhase::Online), "back on the old network");
+    assert_eq!(sim.stored_ssid(), stored_before, "the store was not touched");
     assert_eq!(sim.wifi_commits(), commits_before, "and not written");
 
     // Still `failed`, because the question was about the posted credentials.
@@ -406,14 +360,7 @@ fn udp_set_wifi_while_online_is_still_accepted_and_not_acted_on() {
 
     let ctrl = common::Ctrl::new(sim.control_addr());
     let d = ctrl
-        .call(
-            &Request::SetWifi(SetWifi {
-                ssid: "Typo-Network",
-                psk: "wrong",
-                persist: true,
-            }),
-            7,
-        )
+        .call(&Request::SetWifi(SetWifi { ssid: "Typo-Network", psk: "wrong", persist: true }), 7)
         .expect("a reply");
     assert!(matches!(common::parse_reply(&d).1, Ok(Reply::SetWifi)));
 
@@ -425,11 +372,7 @@ fn udp_set_wifi_while_online_is_still_accepted_and_not_acted_on() {
 
 #[test]
 fn the_button_wipe_forgets_the_network_and_raises_the_portal() {
-    let dev = SimDevice::start(Config {
-        wifi_timing: quick_timing(),
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { wifi_timing: quick_timing(), ..Config::for_test() }).expect("bind loopback");
     let sim = dev.handle();
     assert_eq!(sim.wifi_phase(), WifiPhase::Online);
     assert!(sim.stored_ssid().is_some());
@@ -457,11 +400,7 @@ fn the_link_going_down_releases_the_panel_and_the_idle_screen_says_so() {
         wifi_timing: quick_timing(),
         // The stream timings compressed too: `HOLD_MS` is ten real seconds on
         // a device, and this test is about the transition, not the wait.
-        timing: screeny_sim::Timing {
-            hold_ms: 150,
-            fade_ms: 0,
-            ..screeny_sim::Timing::SPEC
-        },
+        timing: screeny_sim::Timing { hold_ms: 150, fade_ms: 0, ..screeny_sim::Timing::SPEC },
         ..Config::for_test()
     })
     .expect("bind loopback");
@@ -471,10 +410,7 @@ fn the_link_going_down_releases_the_panel_and_the_idle_screen_says_so() {
     // Get the device streaming, so there is a lock to release.
     let (payload, _) = common::solid([200, 30, 60]);
     tx.send(codec::SOLID, F_KEY, &payload);
-    assert!(
-        sim.wait_for_frames(1, T).is_some(),
-        "the simulator should be LIVE"
-    );
+    assert!(sim.wait_for_frames(1, T).is_some(), "the simulator should be LIVE");
     assert_eq!(sim.snapshot().state, State::Live);
 
     // Spec 7.3: "any | WiFi link down | HOLD".
@@ -483,22 +419,15 @@ fn the_link_going_down_releases_the_panel_and_the_idle_screen_says_so() {
 
     // ...and then the idle screen, which says the network is down rather than
     // printing an address the device can no longer be reached at.
-    assert!(
-        sim.wait_until(T, |s| s.state == State::Idle).is_some(),
-        "HOLD -> IDLE after HOLD_MS"
-    );
+    assert!(sim.wait_until(T, |s| s.state == State::Idle).is_some(), "HOLD -> IDLE after HOLD_MS");
     let frame = sim.render_display();
     let lit = frame.chunks(3).filter(|px| px[0] > 180 && px[1] < 200).count();
-    assert!(
-        lit > 5,
-        "expected the amber 'NO NETWORK' line on the idle screen, got {lit} px"
-    );
+    assert!(lit > 5, "expected the amber 'NO NETWORK' line on the idle screen, got {lit} px");
 
     // Research 007 section 5.2: after `link_down_ms` the machine gives up and
     // starts joining again.
     assert!(
-        sim.wait_until(T, |s| s.wifi_phase != WifiPhase::Online)
-            .is_some(),
+        sim.wait_until(T, |s| s.wifi_phase != WifiPhase::Online).is_some(),
         "the machine should go back to joining"
     );
 
@@ -510,10 +439,7 @@ fn the_link_going_down_releases_the_panel_and_the_idle_screen_says_so() {
 #[test]
 fn a_link_that_comes_straight_back_costs_nothing() {
     let dev = SimDevice::start(Config {
-        wifi_timing: WifiTiming {
-            link_down_ms: 60_000,
-            ..quick_timing()
-        },
+        wifi_timing: WifiTiming { link_down_ms: 60_000, ..quick_timing() },
         ..Config::for_test()
     })
     .expect("bind loopback");
@@ -521,11 +447,7 @@ fn a_link_that_comes_straight_back_costs_nothing() {
     sim.set_link_down(true);
     sim.set_link_down(false);
     std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(
-        sim.wifi_phase(),
-        WifiPhase::Online,
-        "a flap under link_down_ms does not cost the join"
-    );
+    assert_eq!(sim.wifi_phase(), WifiPhase::Online, "a flap under link_down_ms does not cost the join");
     assert!(sim.snapshot().wifi_state == wifi_state::CONNECTED);
     dev.shutdown();
 }
@@ -565,10 +487,7 @@ fn in_the_portal_the_panel_is_the_provision_crates_own_screen() {
         &mut a,
     )
     .expect("the portal screen renders");
-    assert!(
-        shown[..] == a[..],
-        "the panel is not screeny_provision's QR portal layout"
-    );
+    assert!(shown[..] == a[..], "the panel is not screeny_provision's QR portal layout");
     // ...and it is not the ordinary status screen.
     assert_ne!(shown[..], [0u8; screeny_proto::NBYTES][..]);
     dev.shutdown();
@@ -590,16 +509,8 @@ fn the_psk_is_in_no_reply_no_event_and_no_log_line() {
     let posted = http::post_form(addr, route::WIFI, &format!("ssid={SSID}&psk={secret}"));
     // ...and over UDP, so both paths are covered by one grep.
     let ctrl = common::Ctrl::new(sim.control_addr());
-    let set_wifi = ctrl
-        .call(
-            &Request::SetWifi(SetWifi {
-                ssid: SSID,
-                psk: secret,
-                persist: true,
-            }),
-            5,
-        )
-        .expect("SET_WIFI reply");
+    let set_wifi =
+        ctrl.call(&Request::SetWifi(SetWifi { ssid: SSID, psk: secret, persist: true }), 5).expect("SET_WIFI reply");
     assert!(wait_phase(&sim, WifiPhase::Online));
 
     // Every byte the simulator produced about it.
@@ -627,9 +538,7 @@ fn the_psk_is_in_no_reply_no_event_and_no_log_line() {
 
     for (i, bytes) in haystack.iter().enumerate() {
         assert!(
-            !bytes
-                .windows(secret.len())
-                .any(|w| w == secret.as_bytes()),
+            !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
             "haystack {i} contains the PSK: {:?}",
             String::from_utf8_lossy(bytes)
         );
@@ -637,10 +546,7 @@ fn the_psk_is_in_no_reply_no_event_and_no_log_line() {
         // next person adding it.
         let lower = String::from_utf8_lossy(bytes).to_ascii_lowercase();
         assert!(!lower.contains("\"psk\""), "haystack {i} has a psk field");
-        assert!(
-            !lower.contains("password9"),
-            "haystack {i} has the fixture password"
-        );
+        assert!(!lower.contains("password9"), "haystack {i} has the fixture password");
     }
 
     // The SSID *is* there, which is the point: the invariant is about the
@@ -657,15 +563,9 @@ fn the_http_event_log_records_the_path_but_never_the_query_or_the_body() {
     let mut cursor = sim.event_cursor();
 
     let _ = http::post_form(addr, route::WIFI, &format!("ssid={SSID}&psk={PSK}"));
-    let ev = sim
-        .wait_for(&mut cursor, T, |e| matches!(e, Event::Http { .. }))
-        .expect("an HTTP event");
+    let ev = sim.wait_for(&mut cursor, T, |e| matches!(e, Event::Http { .. })).expect("an HTTP event");
     match ev {
-        Event::Http {
-            method,
-            path,
-            status,
-        } => {
+        Event::Http { method, path, status } => {
             assert_eq!(method, "POST");
             assert_eq!(path, route::WIFI);
             assert_eq!(status, 200);

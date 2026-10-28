@@ -87,18 +87,15 @@ fn the_http_suite_passes_against_the_simulator() {
 
     let summary = http::run(&opts).expect("the suite ran");
     assert_eq!(
-        summary.failed, 0,
+        summary.failed,
+        0,
         "{} of {} rules failed; the report above says which",
         summary.failed,
         summary.passed + summary.failed + summary.skipped
     );
     // A guard against the catalogue silently emptying itself: every assertion
     // above would still hold if no rule ran at all.
-    assert!(
-        summary.passed >= 30,
-        "only {} rules ran; the catalogue has shrunk",
-        summary.passed
-    );
+    assert!(summary.passed >= 30, "only {} rules ran; the catalogue has shrunk", summary.passed);
 
     dev.shutdown();
 }
@@ -109,34 +106,19 @@ fn the_http_suite_passes_against_the_simulator() {
 fn only_runs_what_it_was_asked_for() {
     let dev = SimDevice::start(Config::for_test()).expect("bind loopback");
     let http_addr = dev.http_addr().expect("the HTTP API is on");
-    let base = http::Opts {
-        ctrl_addr: Some(dev.control_addr()),
-        ..http::Opts::new(http_addr, http_addr.to_string())
-    };
+    let base = http::Opts { ctrl_addr: Some(dev.control_addr()), ..http::Opts::new(http_addr, http_addr.to_string()) };
 
-    let one = http::Opts {
-        only: Some("1".into()),
-        ctrlc: false,
-        ..base.clone()
-    };
+    let one = http::Opts { only: Some("1".into()), ctrlc: false, ..base.clone() };
     let s = http::run(&one).expect("the suite ran");
     assert_eq!(s.passed + s.failed + s.skipped, 1);
     assert_eq!(s.failed, 0);
 
-    let section = http::Opts {
-        only: Some("status".into()),
-        ctrlc: false,
-        ..base.clone()
-    };
+    let section = http::Opts { only: Some("status".into()), ctrlc: false, ..base.clone() };
     let s = http::run(&section).expect("the suite ran");
     assert!(s.passed >= 6, "the status section is eight rules");
     assert_eq!(s.failed, 0);
 
-    let none = http::Opts {
-        only: Some("nothing-is-called-this".into()),
-        ctrlc: false,
-        ..base
-    };
+    let none = http::Opts { only: Some("nothing-is-called-this".into()), ctrlc: false, ..base };
     assert!(http::run(&none).is_err(), "an empty selection is an error");
 
     dev.shutdown();
@@ -147,16 +129,10 @@ fn only_runs_what_it_was_asked_for() {
 /// it with its default name rather than politely writing `probe-228` back.
 #[test]
 fn a_device_left_named_by_a_killed_run_is_not_restored_to_that_name() {
-    let dev = SimDevice::start(Config {
-        name: http::PROBE_NAME.to_string(),
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev =
+        SimDevice::start(Config { name: http::PROBE_NAME.to_string(), ..Config::for_test() }).expect("bind loopback");
     let http_addr = dev.http_addr().expect("the HTTP API is on");
-    assert!(
-        http::name_is_a_leftover(&dev.handle().snapshot().name),
-        "the device starts out wearing the leftover"
-    );
+    assert!(http::name_is_a_leftover(&dev.handle().snapshot().name), "the device starts out wearing the leftover");
 
     let opts = http::Opts {
         // One rule: this is about what the *runner* does at either end, and
@@ -168,11 +144,7 @@ fn a_device_left_named_by_a_killed_run_is_not_restored_to_that_name() {
     let s = http::run(&opts).expect("the suite ran");
     assert_eq!(s.failed, 0);
 
-    assert_eq!(
-        dev.handle().snapshot().name,
-        "",
-        "the run restored the default name (screeny-<id>), not the leftover"
-    );
+    assert_eq!(dev.handle().snapshot().name, "", "the run restored the default name (screeny-<id>), not the leftover");
     dev.shutdown();
 }
 
@@ -186,10 +158,7 @@ fn a_target_that_is_not_there_is_one_clear_error() {
     let addr = free.local_addr().expect("addr");
     drop(free);
 
-    let opts = http::Opts {
-        ctrlc: false,
-        ..http::Opts::new(addr, addr.to_string())
-    };
+    let opts = http::Opts { ctrlc: false, ..http::Opts::new(addr, addr.to_string()) };
     let e = http::run(&opts).expect_err("nothing is there");
     assert!(e.contains("/api/v1/status"), "{e}");
 }
@@ -208,30 +177,18 @@ fn a_target_that_is_not_there_is_one_clear_error() {
 fn the_sticky_failed_result_stays_off_the_status_route() {
     use screeny_proto::control::wifi_state;
 
-    let dev = SimDevice::start(Config {
-        wifi_join_ms: 40,
-        wifi_timing: quick_timing(),
-        ..Config::for_test()
-    })
-    .expect("bind loopback");
+    let dev = SimDevice::start(Config { wifi_join_ms: 40, wifi_timing: quick_timing(), ..Config::for_test() })
+        .expect("bind loopback");
     let http_addr = dev.http_addr().expect("the HTTP API is on");
     let sim = dev.handle();
 
     // A trial that fails...
     sim.set_wifi_outcome(WifiOutcome::Fail);
     assert_eq!(sim.post_wifi("Typo-Network"), screeny_sim::Posted::Trial);
-    assert!(
-        sim.wait_until(TIMEOUT, |s| s.wifi_state == wifi_state::FAILED)
-            .is_some(),
-        "an auth error is not retried"
-    );
+    assert!(sim.wait_until(TIMEOUT, |s| s.wifi_state == wifi_state::FAILED).is_some(), "an auth error is not retried");
     // ...and a fallback onto the stored network that works.
     sim.set_wifi_outcome(WifiOutcome::Ok);
-    assert!(
-        sim.wait_until(TIMEOUT, |s| s.wifi_phase == WifiPhase::Online)
-            .is_some(),
-        "back on the old network"
-    );
+    assert!(sim.wait_until(TIMEOUT, |s| s.wifi_phase == WifiPhase::Online).is_some(), "back on the old network");
     assert_eq!(
         sim.snapshot().wifi_state,
         wifi_state::FAILED,
@@ -297,10 +254,7 @@ fn the_device_is_as_it_was_found_afterwards() {
 
     let after = sim.snapshot();
     assert_eq!(after.name, before.name, "the name came back");
-    assert_eq!(
-        after.brightness, before.brightness,
-        "the brightness came back"
-    );
+    assert_eq!(after.brightness, before.brightness, "the brightness came back");
     assert_eq!(after.idle_mode, before.idle_mode, "the idle mode came back");
 
     dev.shutdown();

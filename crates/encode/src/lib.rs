@@ -36,12 +36,7 @@
 //! [`EncodeConfig::hysteresis`] times the incumbent's score to take over.
 
 #![forbid(unsafe_code)]
-#![allow(
-    clippy::many_single_char_names,
-    clippy::similar_names,
-    clippy::inline_always,
-    clippy::needless_range_loop
-)]
+#![allow(clippy::many_single_char_names, clippy::similar_names, clippy::inline_always, clippy::needless_range_loop)]
 
 pub mod block;
 pub mod hist;
@@ -227,10 +222,7 @@ struct Clock {
 
 impl Clock {
     fn new(on: bool) -> Self {
-        Clock {
-            on,
-            at: Instant::now(),
-        }
+        Clock { on, at: Instant::now() }
     }
     #[inline]
     fn lap(&mut self, slot: &mut Duration) {
@@ -359,15 +351,7 @@ impl Encoder {
         // --- shortcut: one colour ------------------------------------------
         if ncol == 1 && self.allows(codec::SOLID) && budget >= SOLID_LEN {
             let c = self.hist.bins[0].srgb;
-            return self.finish(
-                Encoded {
-                    codec: codec::SOLID,
-                    payload: c.to_vec(),
-                },
-                true,
-                None,
-                t0,
-            );
+            return self.finish(Encoded { codec: codec::SOLID, payload: c.to_vec() }, true, None, t0);
         }
 
         // --- the ladder ----------------------------------------------------
@@ -390,36 +374,17 @@ impl Encoder {
         if self.allows(codec::PAL5) && budget >= PAL5_LEN {
             clock.mark();
             let (seed, prev) = self.seed_for(32);
-            let built = quant::build(
-                &self.hist,
-                32,
-                seed.as_deref(),
-                prev,
-                self.frame_idx,
-                self.cfg.profile.quant(),
-            );
+            let built = quant::build(&self.hist, 32, seed.as_deref(), prev, self.frame_idx, self.cfg.profile.quant());
             clock.lap(&mut self.stats.stages.quantise);
-            pal::map(
-                &self.hist,
-                &built.palette,
-                self.cfg.dither,
-                self.frame_idx,
-                &mut self.idx,
-            );
+            pal::map(&self.hist, &built.palette, self.cfg.dither, self.frame_idx, &mut self.idx);
             clock.lap(&mut self.stats.stages.map);
-            cands.push(Encoded {
-                codec: codec::PAL5,
-                payload: pal::emit_pal5(&built.palette, &self.idx),
-            });
+            cands.push(Encoded { codec: codec::PAL5, payload: pal::emit_pal5(&built.palette, &self.idx) });
             self.remember(32, &built);
         }
 
         if self.allows(codec::BC1_DUAL) && budget >= BC1_DUAL_LEN {
             clock.mark();
-            cands.push(Encoded {
-                codec: codec::BC1_DUAL,
-                payload: block::encode(f, &self.hist),
-            });
+            cands.push(Encoded { codec: codec::BC1_DUAL, payload: block::encode(f, &self.hist) });
             clock.lap(&mut self.stats.stages.block);
         }
 
@@ -472,11 +437,7 @@ impl Encoder {
     /// # Errors
     ///
     /// [`DecodeError::Corrupt`] if an index falls outside the palette.
-    pub fn encode_indexed(
-        &mut self,
-        f: &IndexedFrame<'_>,
-        budget: usize,
-    ) -> Result<Encoded, DecodeError> {
+    pub fn encode_indexed(&mut self, f: &IndexedFrame<'_>, budget: usize) -> Result<Encoded, DecodeError> {
         let n = f.palette.len();
         if n == 0 || n > 256 {
             return Err(DecodeError::Corrupt);
@@ -494,29 +455,13 @@ impl Encoder {
         if n <= 16 && self.allows(codec::PAL4_LZ) {
             let v = lz::emit_pal4_lz(f.palette, f.indices, &mut self.lz, chain);
             if v.len() <= budget {
-                return Ok(self.finish(
-                    Encoded {
-                        codec: codec::PAL4_LZ,
-                        payload: v,
-                    },
-                    true,
-                    Some(0.0),
-                    t0,
-                ));
+                return Ok(self.finish(Encoded { codec: codec::PAL4_LZ, payload: v }, true, Some(0.0), t0));
             }
         }
         if self.allows(codec::PAL8_LZ) {
             let v = lz::emit_pal8_lz(f.palette, f.indices, &mut self.lz, chain);
             if v.len() <= budget {
-                return Ok(self.finish(
-                    Encoded {
-                        codec: codec::PAL8_LZ,
-                        payload: v,
-                    },
-                    true,
-                    Some(0.0),
-                    t0,
-                ));
+                return Ok(self.finish(Encoded { codec: codec::PAL8_LZ, payload: v }, true, Some(0.0), t0));
             }
         }
         if n <= 32 && self.allows(codec::PAL5) && budget >= PAL5_LEN {
@@ -525,10 +470,7 @@ impl Encoder {
             let pal = Palette::from_srgb(srgb);
             self.idx.copy_from_slice(f.indices);
             return Ok(self.finish(
-                Encoded {
-                    codec: codec::PAL5,
-                    payload: pal::emit_pal5(&pal, &self.idx),
-                },
+                Encoded { codec: codec::PAL5, payload: pal::emit_pal5(&pal, &self.idx) },
                 true,
                 Some(0.0),
                 t0,
@@ -556,13 +498,7 @@ impl Encoder {
         }
     }
 
-    fn finish(
-        &mut self,
-        out: Encoded,
-        exact: bool,
-        score: Option<f64>,
-        t0: Instant,
-    ) -> Encoded {
+    fn finish(&mut self, out: Encoded, exact: bool, score: Option<f64>, t0: Instant) -> Encoded {
         self.prev_codec = Some(out.codec);
         self.frame_idx = self.frame_idx.wrapping_add(1);
         self.stats.codec = out.codec;
@@ -595,13 +531,7 @@ impl Encoder {
                 let v = lz::emit_pal4_lz(&pal, &self.idx, &mut self.lz, chain);
                 clock.lap(&mut self.stats.stages.lz);
                 if v.len() <= budget {
-                    return (
-                        Encoded {
-                            codec: codec::PAL4_LZ,
-                            payload: v,
-                        },
-                        true,
-                    );
+                    return (Encoded { codec: codec::PAL4_LZ, payload: v }, true);
                 }
             }
             if self.allows(codec::PAL8_LZ) {
@@ -609,13 +539,7 @@ impl Encoder {
                 let v = lz::emit_pal8_lz(&pal, &self.idx, &mut self.lz, chain);
                 clock.lap(&mut self.stats.stages.lz);
                 if v.len() <= budget {
-                    return (
-                        Encoded {
-                            codec: codec::PAL8_LZ,
-                            payload: v,
-                        },
-                        true,
-                    );
+                    return (Encoded { codec: codec::PAL8_LZ, payload: v }, true);
                 }
             }
             // An incompressible 32-colour frame can overflow both LZ rungs.
@@ -625,13 +549,7 @@ impl Encoder {
                 let mut srgb = pal;
                 srgb.resize(32, [0, 0, 0]);
                 let p = Palette::from_srgb(srgb);
-                return (
-                    Encoded {
-                        codec: codec::PAL5,
-                        payload: pal::emit_pal5(&p, &self.idx),
-                    },
-                    true,
-                );
+                return (Encoded { codec: codec::PAL5, payload: pal::emit_pal5(&p, &self.idx) }, true);
             }
         }
 
@@ -646,14 +564,7 @@ impl Encoder {
             }
             clock.mark();
             let (seed, prev) = self.seed_for(k);
-            let built = quant::build(
-                &self.hist,
-                k,
-                seed.as_deref(),
-                prev,
-                self.frame_idx,
-                self.cfg.profile.quant(),
-            );
+            let built = quant::build(&self.hist, k, seed.as_deref(), prev, self.frame_idx, self.cfg.profile.quant());
             clock.lap(&mut self.stats.stages.quantise);
             let per_bin = quant::nearest_per_bin(&self.hist, &built.palette);
             for p in 0..NPIX {
@@ -664,13 +575,7 @@ impl Encoder {
             clock.lap(&mut self.stats.stages.lz);
             self.remember(k, &built);
             if v.len() <= budget {
-                return (
-                    Encoded {
-                        codec: codec::PAL8_LZ,
-                        payload: v,
-                    },
-                    false,
-                );
+                return (Encoded { codec: codec::PAL8_LZ, payload: v }, false);
             }
         }
 
@@ -678,14 +583,7 @@ impl Encoder {
         if self.allows(codec::PAL4_LZ) {
             clock.mark();
             let (seed, prev) = self.seed_for(16);
-            let built = quant::build(
-                &self.hist,
-                16,
-                seed.as_deref(),
-                prev,
-                self.frame_idx,
-                self.cfg.profile.quant(),
-            );
+            let built = quant::build(&self.hist, 16, seed.as_deref(), prev, self.frame_idx, self.cfg.profile.quant());
             clock.lap(&mut self.stats.stages.quantise);
             let per_bin = quant::nearest_per_bin(&self.hist, &built.palette);
             for p in 0..NPIX {
@@ -696,13 +594,7 @@ impl Encoder {
             clock.lap(&mut self.stats.stages.lz);
             self.remember(16, &built);
             if v.len() <= budget {
-                return (
-                    Encoded {
-                        codec: codec::PAL4_LZ,
-                        payload: v,
-                    },
-                    false,
-                );
+                return (Encoded { codec: codec::PAL4_LZ, payload: v }, false);
             }
         }
 
@@ -710,44 +602,19 @@ impl Encoder {
         if self.allows(codec::PAL5) && budget >= PAL5_LEN {
             clock.mark();
             let (seed, prev) = self.seed_for(32);
-            let built = quant::build(
-                &self.hist,
-                32,
-                seed.as_deref(),
-                prev,
-                self.frame_idx,
-                self.cfg.profile.quant(),
-            );
+            let built = quant::build(&self.hist, 32, seed.as_deref(), prev, self.frame_idx, self.cfg.profile.quant());
             clock.lap(&mut self.stats.stages.quantise);
-            pal::map(
-                &self.hist,
-                &built.palette,
-                self.cfg.dither,
-                self.frame_idx,
-                &mut self.idx,
-            );
+            pal::map(&self.hist, &built.palette, self.cfg.dither, self.frame_idx, &mut self.idx);
             clock.lap(&mut self.stats.stages.map);
             let payload = pal::emit_pal5(&built.palette, &self.idx);
             self.remember(32, &built);
-            return (
-                Encoded {
-                    codec: codec::PAL5,
-                    payload,
-                },
-                false,
-            );
+            return (Encoded { codec: codec::PAL5, payload }, false);
         }
         if self.allows(codec::BC1_DUAL) && budget >= BC1_DUAL_LEN {
             clock.mark();
             let payload = block::encode(f, &self.hist);
             clock.lap(&mut self.stats.stages.block);
-            return (
-                Encoded {
-                    codec: codec::BC1_DUAL,
-                    payload,
-                },
-                false,
-            );
+            return (Encoded { codec: codec::BC1_DUAL, payload }, false);
         }
         // Last resort: the frame's mean colour. Three bytes, always legal.
         let mut acc = [0f64; 3];
@@ -758,17 +625,7 @@ impl Encoder {
             }
             n += b.count as f64;
         }
-        let c = [
-            (acc[0] / n).round() as u8,
-            (acc[1] / n).round() as u8,
-            (acc[2] / n).round() as u8,
-        ];
-        (
-            Encoded {
-                codec: codec::SOLID,
-                payload: c.to_vec(),
-            },
-            false,
-        )
+        let c = [(acc[0] / n).round() as u8, (acc[1] / n).round() as u8, (acc[2] / n).round() as u8];
+        (Encoded { codec: codec::SOLID, payload: c.to_vec() }, false)
     }
 }

@@ -193,8 +193,10 @@ async fn the_server_survives_a_bounded_soak() {
     post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","name":"soak","play":true}}"#)).await;
     // The typed address is provisional until the panel says who it is, and
     // only then is there a device id to configure a player against.
-    until_json(at, WAIT, "the soak panel to say who it is", "/api/v1/status", |v| v["devices"][0]["id"] == DEVICE).await;
-    let set = post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"flock","seed":1,"fps":30}}"#)).await;
+    until_json(at, WAIT, "the soak panel to say who it is", "/api/v1/status", |v| v["devices"][0]["id"] == DEVICE)
+        .await;
+    let set =
+        post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"flock","seed":1,"fps":30}}"#)).await;
     assert_eq!(set.status, 200, "{}", String::from_utf8_lossy(&set.body));
     until_json(at, WAIT, "the soak panel to start playing", "/api/v1/status", |v| {
         v["devices"][0]["player"]["panel"]["connected"] == true
@@ -250,12 +252,20 @@ async fn the_server_survives_a_bounded_soak() {
                 let (new_sim, new_port) = start_sim(port + 2);
                 sim = new_sim;
                 port = new_port;
-                let moved = post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","device":"{DEVICE}"}}"#)).await;
+                let moved =
+                    post(at, "/api/v1/devices/add", &format!(r#"{{"to":"127.0.0.1:{port}","device":"{DEVICE}"}}"#))
+                        .await;
                 assert_eq!(moved.status, 200, "{}", String::from_utf8_lossy(&moved.body));
-                until_json(at, WAIT, &format!("the moved panel to be found again at 127.0.0.1:{port}"), "/api/v1/status", |v| {
-                    let d = &v["devices"][0];
-                    d["resolved"] == true && d["frame_addr"] == format!("127.0.0.1:{port}")
-                })
+                until_json(
+                    at,
+                    WAIT,
+                    &format!("the moved panel to be found again at 127.0.0.1:{port}"),
+                    "/api/v1/status",
+                    |v| {
+                        let d = &v["devices"][0];
+                        d["resolved"] == true && d["frame_addr"] == format!("127.0.0.1:{port}")
+                    },
+                )
                 .await;
                 rebased += recovered(at, "the panel moving to another address").await;
                 let d = device(at).await;
@@ -267,7 +277,12 @@ async fn the_server_survives_a_bounded_soak() {
             //    leak in the render core or the state store would show.
             _ => {
                 for (patch, fps) in [("flock", 60), ("clocks-numerals", 30), ("metaballs", 10)] {
-                    post(at, "/api/v1/player/set", &format!(r#"{{"device":"{DEVICE}","patch":"{patch}","fps":{fps}}}"#)).await;
+                    post(
+                        at,
+                        "/api/v1/player/set",
+                        &format!(r#"{{"device":"{DEVICE}","patch":"{patch}","fps":{fps}}}"#),
+                    )
+                    .await;
                     post(at, "/api/v1/set_patch", &format!(r#"{{"id":"{patch}"}}"#)).await;
                     post(at, "/api/v1/set_seed", r#"{"seed":null}"#).await;
                     tokio::time::sleep(Duration::from_millis(700)).await;

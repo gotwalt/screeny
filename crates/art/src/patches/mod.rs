@@ -21,11 +21,11 @@ pub(crate) mod physarum;
 // the picture, not avoid it), so it needs the adapter exactly as knot,
 // lattice and overland do, and is gated the same way.
 #[cfg(feature = "gpu")]
-pub(crate) mod leaves;
-#[cfg(feature = "gpu")]
 mod knot;
 #[cfg(feature = "gpu")]
 mod lattice;
+#[cfg(feature = "gpu")]
+pub(crate) mod leaves;
 mod metaballs;
 #[cfg(feature = "gpu")]
 mod overland;
@@ -213,10 +213,19 @@ mod tests {
             let dt = 1.0 / crate::FPS;
             for i in 0..4 {
                 let t = f64::from(i) * dt;
-                let frame = patch.render(&Ctx { t, dt: if i == 0 { 0.0 } else { dt }, now: 1_700_000_000.0 + t, params: &params });
+                let frame = patch.render(&Ctx {
+                    t,
+                    dt: if i == 0 { 0.0 } else { dt },
+                    now: 1_700_000_000.0 + t,
+                    params: &params,
+                });
                 for k in 0..crate::frame::N {
                     let c = frame.pixel(k);
-                    assert!(c.r.is_finite() && c.g.is_finite() && c.b.is_finite(), "`{}` frame {i} pixel {k}: {c:?}", def.id);
+                    assert!(
+                        c.r.is_finite() && c.g.is_finite() && c.b.is_finite(),
+                        "`{}` frame {i} pixel {k}: {c:?}",
+                        def.id
+                    );
                 }
             }
         }
@@ -235,7 +244,8 @@ mod tests {
             software: true,
             error: None,
         };
-        let hardware = GpuStatus { software: false, adapter: "Apple M3".into(), backend: "Metal".into(), ..software.clone() };
+        let hardware =
+            GpuStatus { software: false, adapter: "Apple M3".into(), backend: "Metal".into(), ..software.clone() };
         for def in ALL {
             let n = need(def.id);
             assert!(playable(def.id, &hardware).is_ok(), "{} on hardware", def.id);

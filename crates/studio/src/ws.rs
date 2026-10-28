@@ -120,8 +120,8 @@ use crate::api::{Changed, StateEvent, StatusEvent};
 use crate::channel::{Channel, ChannelId};
 use crate::page::{SocketMeter, Viewer, HEADER};
 use crate::panel::Panel;
-use crate::{Overview, StatusBoard};
 use crate::AppState;
+use crate::{Overview, StatusBoard};
 
 /// How long one message may take to reach a browser before the connection is
 /// treated as dead. A client that cannot take 6 KB in this long is not
@@ -424,7 +424,8 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
 
     // What the browser would otherwise have to ask for on connecting.
     let hello = state_message(&st, &channel, from.as_ref(), &st.stamp(None));
-    let [first_panels, first_channels] = if want_overview { overview_messages(&overview.borrow_and_update()) } else { [None, None] };
+    let [first_panels, first_channels] =
+        if want_overview { overview_messages(&overview.borrow_and_update()) } else { [None, None] };
     for msg in [hello, first_panels, first_channels].into_iter().flatten() {
         if !send(&mut socket, msg, &meter, false).await {
             return;

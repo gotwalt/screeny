@@ -77,7 +77,14 @@ const PARAMS: &[ParamSpec] = &[
     param("eye_light", "Eye luminance (0 = true-black holes, 1 = a soft glow)", 0.0, 1.0, 0.01, 0.0),
     param("eye_hue", "Eye tint, once eye_light > 0", 0.0, 360.0, 1.0, 205.0),
     param("mouth", "Mouth size (0 = none)", 0.0, 2.0, 0.05, 1.0),
-    param("arms", "Arm height (-1 hanging down, 0 straight out, 1 raised); gestures move relative to it", -1.0, 1.0, 0.05, -0.15),
+    param(
+        "arms",
+        "Arm height (-1 hanging down, 0 straight out, 1 raised); gestures move relative to it",
+        -1.0,
+        1.0,
+        0.05,
+        -0.15,
+    ),
 ];
 
 /// Same cap the `ghosts` param allows, and the size every per-frame array
@@ -368,7 +375,9 @@ where
         std::thread::scope(|scope| {
             let handles: Vec<_> = jobs
                 .into_iter()
-                .map(|(cloth, target, sway, mut body_at)| scope.spawn(move || cloth.advance(target, sway, &mut body_at)))
+                .map(|(cloth, target, sway, mut body_at)| {
+                    scope.spawn(move || cloth.advance(target, sway, &mut body_at))
+                })
                 .collect();
             for h in handles {
                 h.join().expect("a ghost's cloth step panicked");
@@ -439,8 +448,9 @@ impl Ghosts {
             .map(|pose| {
                 let key = pose.key;
                 let head = head_of(pose);
-                let body_at =
-                    move |tt: f64| director.poses_at(tt).into_iter().find(|p| p.key == key).map(|p| head_of(&p)).unwrap_or(head);
+                let body_at = move |tt: f64| {
+                    director.poses_at(tt).into_iter().find(|p| p.key == key).map(|p| head_of(&p)).unwrap_or(head)
+                };
                 (refs.remove(&key).expect("just ensured to exist above"), sub_t, sway, body_at)
             })
             .collect();
@@ -543,7 +553,8 @@ impl Ghosts {
         self.clothes.retain(|k, _| seen.contains(k) || warming.contains(k));
 
         let norm = 1.0 / times.len() as f32;
-        let px: Vec<crate::color::Rgb> = sum.unwrap_or_else(|| vec![crate::color::Rgb::BLACK; N]).iter().map(|c| c.scale(norm)).collect();
+        let px: Vec<crate::color::Rgb> =
+            sum.unwrap_or_else(|| vec![crate::color::Rgb::BLACK; N]).iter().map(|c| c.scale(norm)).collect();
         let mut px = bloom(&px, ctx.get("glow").clamp(0.0, 1.0));
 
         // The face: stamped in panel space, after the cloth render and its
@@ -656,7 +667,12 @@ mod tests {
     }
 
     fn colours(frame: &Frame) -> Vec<[f32; 3]> {
-        (0..crate::frame::N).map(|i| { let c = frame.pixel(i); [c.r, c.g, c.b] }).collect()
+        (0..crate::frame::N)
+            .map(|i| {
+                let c = frame.pixel(i);
+                [c.r, c.g, c.b]
+            })
+            .collect()
     }
 
     /// How many LEDs are genuinely lit (well above the true-black floor) -
@@ -711,7 +727,10 @@ mod tests {
     #[test]
     fn the_face_is_a_solid_dark_block_against_a_bright_sheet() {
         let px = colours(&frame_at(4, 0.5, &[]));
-        assert!(has_a_dark_pixel_embedded_in_bright_cloth(&px), "expected a real dark eye/mouth block in the lit sheet");
+        assert!(
+            has_a_dark_pixel_embedded_in_bright_cloth(&px),
+            "expected a real dark eye/mouth block in the lit sheet"
+        );
     }
 
     /// `eye_light` really does lighten the eyes end to end, through the whole
@@ -806,7 +825,12 @@ mod tests {
                 assert_eq!(da.key, db.key, "different ghost order at t={t}");
                 assert_eq!(da.mesh.len(), db.mesh.len(), "t={t} key={:x}", da.key);
                 for (va, vb) in da.mesh.iter().zip(db.mesh.iter()) {
-                    assert_eq!((va.pos.x, va.pos.y, va.pos.z), (vb.pos.x, vb.pos.y, vb.pos.z), "t={t} key={:x}", da.key);
+                    assert_eq!(
+                        (va.pos.x, va.pos.y, va.pos.z),
+                        (vb.pos.x, vb.pos.y, vb.pos.z),
+                        "t={t} key={:x}",
+                        da.key
+                    );
                 }
             }
         }
@@ -844,7 +868,10 @@ mod tests {
                 let drawn = patch.frame_at_ex(t, sway, parallel);
                 max_ghosts = max_ghosts.max(drawn.len());
             }
-            eprintln!("parallel={parallel}: {:?} for {steps} steps, up to {max_ghosts} ghosts at once", start.elapsed());
+            eprintln!(
+                "parallel={parallel}: {:?} for {steps} steps, up to {max_ghosts} ghosts at once",
+                start.elapsed()
+            );
         }
     }
 
@@ -882,7 +909,10 @@ mod tests {
             let px = colours(&frame);
             let apl = px.iter().map(|c| (c[0] + c[1] + c[2]) / 3.0).sum::<f32>() / px.len() as f32;
             assert!(apl < 0.16, "at {at}s: average picture level {apl}");
-            assert!(px.iter().all(|c| c[0] < 0.97 && c[1] < 0.97 && c[2] < 0.97), "at {at}s: something is at full white");
+            assert!(
+                px.iter().all(|c| c[0] < 0.97 && c[1] < 0.97 && c[2] < 0.97),
+                "at {at}s: something is at full white"
+            );
         }
     }
 
@@ -896,7 +926,10 @@ mod tests {
         for at in [0.5, 1.5] {
             let frame = frame_at(1, at, &[("ghosts", 2.0), ("glow", 1.0), ("eye_light", 1.0), ("eyes", 2.0)]);
             let px = colours(&frame);
-            assert!(px.iter().all(|c| c[0] < 0.97 && c[1] < 0.97 && c[2] < 0.97), "at {at}s: something is at full white");
+            assert!(
+                px.iter().all(|c| c[0] < 0.97 && c[1] < 0.97 && c[2] < 0.97),
+                "at {at}s: something is at full white"
+            );
         }
     }
 

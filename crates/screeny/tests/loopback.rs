@@ -15,22 +15,14 @@ use screeny::proto::{F_FINAL, F_KEY, F_STATS_REQ};
 use screeny::{ControlClient, FrameTime, Pattern, Sender, SenderConfig};
 
 fn cfg(fps: f64) -> SenderConfig {
-    SenderConfig {
-        fps,
-        stats_interval: Duration::from_millis(200),
-        ..SenderConfig::default()
-    }
+    SenderConfig { fps, stats_interval: Duration::from_millis(200), ..SenderConfig::default() }
 }
 
 #[test]
 fn handshake_learns_the_device_metadata() {
     let rx = Receiver::start(RxConfig::default());
     let sender = Sender::connect(rx.device(), cfg(30.0)).expect("connect");
-    let info = sender
-        .device()
-        .info
-        .as_ref()
-        .expect("GET_INFO should have filled this in");
+    let info = sender.device().info.as_ref().expect("GET_INFO should have filled this in");
     assert_eq!(info.w, 64);
     assert_eq!(info.h, 32);
     assert_eq!(info.codecs, screeny::proto::dec::SUPPORTED_CODECS.to_vec());
@@ -61,12 +53,7 @@ fn a_short_stream_arrives_intact() {
 
     let state = rx.shutdown();
     assert!(state.decode_errors.is_empty(), "{:?}", state.decode_errors);
-    assert_eq!(
-        state.frames.len() as u64,
-        sent,
-        "sent {sent}, received {}",
-        state.frames.len()
-    );
+    assert_eq!(state.frames.len() as u64, sent, "sent {sent}, received {}", state.frames.len());
     assert!(state.frames.len() >= 19);
 
     // Sequence numbers increment by one and every frame is a keyframe: all
@@ -78,10 +65,7 @@ fn a_short_stream_arrives_intact() {
     }
     // The last frame carries FINAL, so the device can release the lock at
     // once instead of waiting out STREAM_TIMEOUT_MS (spec 7.4).
-    assert!(
-        state.frames.last().unwrap().flags & F_FINAL != 0,
-        "no FINAL frame"
-    );
+    assert!(state.frames.last().unwrap().flags & F_FINAL != 0, "no FINAL frame");
     assert_eq!(state.telemetry.frames_dropped_decode, 0);
 }
 
@@ -132,12 +116,11 @@ fn the_reported_rate_is_the_same_at_any_stream_length() {
         let mut sender = Sender::connect(rx.device(), cfg(fps)).expect("connect");
         let stop = AtomicBool::new(false);
         let mut n = 0u64;
-        let mut src =
-            screeny::FnSource::new("bars", move |t: FrameTime, out: &mut screeny::Frame| {
-                Pattern::Bars.render_at(t.index, out);
-                n += 1;
-                n <= slots
-            });
+        let mut src = screeny::FnSource::new("bars", move |t: FrameTime, out: &mut screeny::Frame| {
+            Pattern::Bars.render_at(t.index, out);
+            n += 1;
+            n <= slots
+        });
         sender.run(&mut src, &stop).expect("run");
 
         let s = sender.stats().clone();
@@ -188,23 +171,13 @@ fn stats_requests_are_piggybacked_and_answered() {
     drop(sender);
 
     let state = rx.shutdown();
-    let asked = state
-        .frames
-        .iter()
-        .filter(|f| f.flags & F_STATS_REQ != 0)
-        .count();
-    assert!(
-        (3..=8).contains(&asked),
-        "{asked} frames asked for stats over ~1 s at a 200 ms interval"
-    );
+    let asked = state.frames.iter().filter(|f| f.flags & F_STATS_REQ != 0).count();
+    assert!((3..=8).contains(&asked), "{asked} frames asked for stats over ~1 s at a 200 ms interval");
     // Spec 6.4: never more than one STATS_REQ in 100 ms.
     let mut prev: Option<std::time::Instant> = None;
     for f in state.frames.iter().filter(|f| f.flags & F_STATS_REQ != 0) {
         if let Some(p) = prev {
-            assert!(
-                f.at.duration_since(p) >= Duration::from_millis(95),
-                "two stats requests within 100 ms"
-            );
+            assert!(f.at.duration_since(p) >= Duration::from_millis(95), "two stats requests within 100 ms");
         }
         prev = Some(f.at);
     }
@@ -217,18 +190,10 @@ fn stats_requests_are_piggybacked_and_answered() {
 /// 6.9's network-limited rule).
 #[test]
 fn survives_loss_and_steps_the_rate_down() {
-    let rx = Receiver::start(RxConfig {
-        drop_one_in: 4,
-        keep_pixels: false,
-        ..RxConfig::default()
-    });
+    let rx = Receiver::start(RxConfig { drop_one_in: 4, keep_pixels: false, ..RxConfig::default() });
     let mut sender = Sender::connect(
         rx.device(),
-        SenderConfig {
-            fps: 60.0,
-            stats_interval: Duration::from_millis(100),
-            ..SenderConfig::default()
-        },
+        SenderConfig { fps: 60.0, stats_interval: Duration::from_millis(100), ..SenderConfig::default() },
     )
     .expect("connect");
 
@@ -263,17 +228,10 @@ fn survives_loss_and_steps_the_rate_down() {
 /// frame rate alone.
 #[test]
 fn a_clean_link_does_not_trigger_adaptation() {
-    let rx = Receiver::start(RxConfig {
-        keep_pixels: false,
-        ..RxConfig::default()
-    });
+    let rx = Receiver::start(RxConfig { keep_pixels: false, ..RxConfig::default() });
     let mut sender = Sender::connect(
         rx.device(),
-        SenderConfig {
-            fps: 60.0,
-            stats_interval: Duration::from_millis(100),
-            ..SenderConfig::default()
-        },
+        SenderConfig { fps: 60.0, stats_interval: Duration::from_millis(100), ..SenderConfig::default() },
     )
     .expect("connect");
     let stop = Arc::new(AtomicBool::new(false));
@@ -312,8 +270,7 @@ fn control_client_speaks_every_op_the_receiver_implements() {
     assert_eq!(c.set_brightness(10).expect("brightness"), 10);
 
     c.identify(1000).expect("identify");
-    c.set_idle(screeny::proto::control::IdleMode::Dim)
-        .expect("set idle");
+    c.set_idle(screeny::proto::control::IdleMode::Dim).expect("set idle");
     c.set_name("bench panel").expect("set name");
     c.reset_stats().expect("reset stats");
     c.release().expect("release");
@@ -355,24 +312,16 @@ fn control_requests_time_out() {
 #[test]
 fn a_budget_below_the_device_mtu_is_honoured() {
     let rx = Receiver::start(RxConfig::default());
-    let mut sender = Sender::connect(
-        rx.device(),
-        SenderConfig {
-            fps: 120.0,
-            budget: Some(1376),
-            ..cfg(120.0)
-        },
-    )
-    .expect("connect");
+    let mut sender =
+        Sender::connect(rx.device(), SenderConfig { fps: 120.0, budget: Some(1376), ..cfg(120.0) }).expect("connect");
     assert_eq!(sender.budget(), 1376);
     let stop = AtomicBool::new(false);
     let mut n = 0u64;
-    let mut src =
-        screeny::FnSource::new("gradient", move |t: FrameTime, out: &mut screeny::Frame| {
-            Pattern::Gradient.render_at(t.index, out);
-            n += 1;
-            n <= 10
-        });
+    let mut src = screeny::FnSource::new("gradient", move |t: FrameTime, out: &mut screeny::Frame| {
+        Pattern::Gradient.render_at(t.index, out);
+        n += 1;
+        n <= 10
+    });
     sender.run(&mut src, &stop).expect("run");
     drop(sender);
     let state = rx.shutdown();

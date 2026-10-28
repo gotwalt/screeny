@@ -219,8 +219,7 @@ mod tests {
         // the table that duplicated a glyph would be invisible otherwise.
         let five: std::collections::BTreeSet<_> = ('0'..='9').map(glyph_5x7).collect();
         assert_eq!(five.len(), 10);
-        let three: std::collections::BTreeSet<_> =
-            ('0'..='9').map(|c| glyph_3x5(c).unwrap()).collect();
+        let three: std::collections::BTreeSet<_> = ('0'..='9').map(|c| glyph_3x5(c).unwrap()).collect();
         assert_eq!(three.len(), 10);
     }
 
@@ -242,12 +241,7 @@ mod tests {
     fn nothing_in_the_5x7_font_spills_out_of_seven_rows() {
         for (i, g) in FONT_5X7.iter().enumerate() {
             for col in g {
-                assert_eq!(
-                    col & !0x7F,
-                    0,
-                    "glyph {:?} spills out of seven rows",
-                    (FIRST5 + i as u8) as char
-                );
+                assert_eq!(col & !0x7F, 0, "glyph {:?} spills out of seven rows", (FIRST5 + i as u8) as char);
             }
         }
     }

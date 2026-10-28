@@ -47,8 +47,7 @@ fn the_answer_does_not_depend_on_how_the_bytes_arrive() {
     let image = Builder::good().build();
     let reference = scan_in_chunks(&image, SLOT, SECTOR).unwrap();
     for chunk in [1, 3, 7, 16, 23, 64, 1460, 4095, 4096, 4097, 65536] {
-        let out = scan_in_chunks(&image, SLOT, chunk)
-            .unwrap_or_else(|e| panic!("chunk {chunk}: {e:?}"));
+        let out = scan_in_chunks(&image, SLOT, chunk).unwrap_or_else(|e| panic!("chunk {chunk}: {e:?}"));
         assert_eq!(out, reference, "chunk {chunk}");
     }
 }
@@ -74,20 +73,14 @@ fn bytes_past_the_end_of_the_image_are_counted_and_allowed() {
 fn a_body_that_is_not_an_image_is_bad_magic() {
     let mut b = Builder::good();
     b.magic = 0x7F; // an ELF, which is what somebody uploads by accident
-    assert_eq!(
-        scan_in_chunks(&b.build(), SLOT, SECTOR),
-        Err(FirmwareError::BadMagic)
-    );
+    assert_eq!(scan_in_chunks(&b.build(), SLOT, SECTOR), Err(FirmwareError::BadMagic));
 }
 
 /// Probe rule 24's body, and the reason it is safe to run against the device:
 /// it fails on byte 0, long before anything is erased.
 #[test]
 fn sixty_four_zero_bytes_are_bad_magic() {
-    assert_eq!(
-        scan_in_chunks(&[0u8; 64], SLOT, SECTOR),
-        Err(FirmwareError::BadMagic)
-    );
+    assert_eq!(scan_in_chunks(&[0u8; 64], SLOT, SECTOR), Err(FirmwareError::BadMagic));
 }
 
 /// Probe rule 23's body.
@@ -110,10 +103,7 @@ fn an_empty_body_is_bad_magic() {
 fn an_image_for_another_chip_is_wrong_chip() {
     let mut b = Builder::good();
     b.chip_id = CHIP_ID_ESP32C3;
-    assert_eq!(
-        scan_in_chunks(&b.build(), SLOT, SECTOR),
-        Err(FirmwareError::WrongChip)
-    );
+    assert_eq!(scan_in_chunks(&b.build(), SLOT, SECTOR), Err(FirmwareError::WrongChip));
 }
 
 #[test]
@@ -140,10 +130,7 @@ fn the_chip_is_decided_from_the_first_twenty_four_bytes() {
 fn an_image_with_no_appended_hash_is_bad_sha256() {
     let mut b = Builder::good();
     b.hash_appended = false;
-    assert_eq!(
-        scan_in_chunks(&b.build(), SLOT, SECTOR),
-        Err(FirmwareError::BadSha256)
-    );
+    assert_eq!(scan_in_chunks(&b.build(), SLOT, SECTOR), Err(FirmwareError::BadSha256));
 }
 
 // ---------------------------------------------------------------------------
@@ -154,20 +141,14 @@ fn an_image_with_no_appended_hash_is_bad_sha256() {
 fn somebody_elses_app_is_wrong_project() {
     let mut b = Builder::good();
     b.project = "esp-idf-blink";
-    assert_eq!(
-        scan_in_chunks(&b.build(), SLOT, SECTOR),
-        Err(FirmwareError::WrongProject)
-    );
+    assert_eq!(scan_in_chunks(&b.build(), SLOT, SECTOR), Err(FirmwareError::WrongProject));
 }
 
 #[test]
 fn an_image_with_no_app_descriptor_at_all_is_wrong_project() {
     let mut b = Builder::good();
     b.desc_magic = 0;
-    assert_eq!(
-        scan_in_chunks(&b.build(), SLOT, SECTOR),
-        Err(FirmwareError::WrongProject)
-    );
+    assert_eq!(scan_in_chunks(&b.build(), SLOT, SECTOR), Err(FirmwareError::WrongProject));
 }
 
 /// The point of `check_front`: all four cheap checks are answerable from the
@@ -199,30 +180,21 @@ fn a_flipped_bit_in_a_segment_is_bad_checksum() {
     let mut image = Builder::good().build();
     // Somewhere in segment 1's data, past the descriptor.
     image[2000] ^= 0x01;
-    assert_eq!(
-        scan_in_chunks(&image, SLOT, SECTOR),
-        Err(FirmwareError::BadChecksum)
-    );
+    assert_eq!(scan_in_chunks(&image, SLOT, SECTOR), Err(FirmwareError::BadChecksum));
 }
 
 #[test]
 fn a_segment_that_is_not_a_whole_number_of_words_is_bad_checksum() {
     let mut b = Builder::good();
     b.segments[1].data.truncate(2045); // not a multiple of 4
-    assert_eq!(
-        scan_in_chunks(&b.build(), SLOT, SECTOR),
-        Err(FirmwareError::BadChecksum)
-    );
+    assert_eq!(scan_in_chunks(&b.build(), SLOT, SECTOR), Err(FirmwareError::BadChecksum));
 }
 
 #[test]
 fn a_header_claiming_more_segments_than_the_rom_allows_is_bad_checksum() {
     let mut image = Builder::good().build();
     image[1] = 17; // MAX_SEGMENTS is 16
-    assert_eq!(
-        scan_in_chunks(&image, SLOT, SECTOR),
-        Err(FirmwareError::BadChecksum)
-    );
+    assert_eq!(scan_in_chunks(&image, SLOT, SECTOR), Err(FirmwareError::BadChecksum));
 }
 
 // ---------------------------------------------------------------------------
@@ -239,10 +211,7 @@ fn a_flipped_bit_the_checksum_cannot_see_is_bad_sha256() {
     // The byte just before the checksum byte is padding.
     let pad = broken.len() - 32 - 2;
     broken[pad] ^= 0xFF;
-    assert_eq!(
-        scan_in_chunks(&broken, SLOT, SECTOR),
-        Err(FirmwareError::BadSha256)
-    );
+    assert_eq!(scan_in_chunks(&broken, SLOT, SECTOR), Err(FirmwareError::BadSha256));
 }
 
 #[test]
@@ -250,10 +219,7 @@ fn an_image_whose_appended_digest_is_wrong_is_bad_sha256() {
     let mut image = Builder::good().build();
     let n = image.len();
     image[n - 1] ^= 0x01;
-    assert_eq!(
-        scan_in_chunks(&image, SLOT, SECTOR),
-        Err(FirmwareError::BadSha256)
-    );
+    assert_eq!(scan_in_chunks(&image, SLOT, SECTOR), Err(FirmwareError::BadSha256));
 }
 
 /// The one research 006 names: a connection that dies mid-upload.
@@ -261,11 +227,7 @@ fn an_image_whose_appended_digest_is_wrong_is_bad_sha256() {
 fn a_truncated_upload_is_bad_sha256() {
     let image = Builder::good().build();
     for cut in [HEADER_LEN + 1, 200, 1024, image.len() - 33, image.len() - 1] {
-        assert_eq!(
-            scan_in_chunks(&image[..cut], SLOT, SECTOR),
-            Err(FirmwareError::BadSha256),
-            "cut at {cut}"
-        );
+        assert_eq!(scan_in_chunks(&image[..cut], SLOT, SECTOR), Err(FirmwareError::BadSha256), "cut at {cut}");
     }
 }
 
@@ -286,16 +248,10 @@ fn a_body_that_stops_inside_the_header_is_bad_magic_not_something_else() {
 #[test]
 fn an_image_longer_than_the_slot_is_too_large() {
     let mut b = Builder::good();
-    b.segments.push(Segment {
-        load_addr: 0x3F40_0000,
-        data: vec![0x11; 300_000],
-    });
+    b.segments.push(Segment { load_addr: 0x3F40_0000, data: vec![0x11; 300_000] });
     let image = b.build();
     // A 64 KB slot could never hold it.
-    assert_eq!(
-        scan_in_chunks(&image, 64 * 1024, SECTOR),
-        Err(FirmwareError::TooLarge)
-    );
+    assert_eq!(scan_in_chunks(&image, 64 * 1024, SECTOR), Err(FirmwareError::TooLarge));
     // The real slot can.
     assert!(scan_in_chunks(&image, SLOT, SECTOR).is_ok());
 }
@@ -333,20 +289,14 @@ fn a_write_outside_the_slot_is_refused() {
     // The last sector of a 2 MB slot is fine.
     assert_eq!(plan_write(SLOT, SLOT - SECTOR as u32, SECTOR), Ok(()));
     // One sector past the end is not.
-    assert_eq!(
-        plan_write(SLOT, SLOT, SECTOR),
-        Err(FirmwareError::TooLarge)
-    );
+    assert_eq!(plan_write(SLOT, SLOT, SECTOR), Err(FirmwareError::TooLarge));
     // Neither is a chunk that starts inside and runs over the end.
     assert_eq!(
         plan_write(SLOT, SLOT - 16, 16),
         Err(FirmwareError::Flash),
         "not sector aligned, and it is refused for that before anything else"
     );
-    assert_eq!(
-        plan_write(SLOT, SLOT - SECTOR as u32 + 4096, SECTOR),
-        Err(FirmwareError::TooLarge)
-    );
+    assert_eq!(plan_write(SLOT, SLOT - SECTOR as u32 + 4096, SECTOR), Err(FirmwareError::TooLarge));
     // An offset that has wrapped or drifted off the sector grid.
     assert_eq!(plan_write(SLOT, 1, SECTOR), Err(FirmwareError::Flash));
     assert_eq!(plan_write(SLOT, 0, SECTOR + 1), Err(FirmwareError::Flash));
@@ -391,11 +341,7 @@ fn stress_sector_stays_inside_the_slot() {
     assert_eq!(sectors, 512);
     for cycle in 0..sectors * 4 {
         let off = stress_sector(SLOT, cycle).expect("a 2 MB slot holds sectors");
-        assert_eq!(
-            plan_write(SLOT, off, SECTOR),
-            Ok(()),
-            "cycle {cycle} produced {off:#x}"
-        );
+        assert_eq!(plan_write(SLOT, off, SECTOR), Ok(()), "cycle {cycle} produced {off:#x}");
         // Forwards, one sector at a time, wrapping at the end: erase wear is
         // spread over the slot rather than landing on one sector.
         assert_eq!(off, (cycle % sectors) * SECTOR as u32);
@@ -470,8 +416,7 @@ fn a_real_espflash_image_passes() {
         return;
     };
     let bytes = std::fs::read(&path).expect("read the image");
-    let out = scan_in_chunks(&bytes, SLOT, SECTOR)
-        .unwrap_or_else(|e| panic!("{path}: {e:?}"));
+    let out = scan_in_chunks(&bytes, SLOT, SECTOR).unwrap_or_else(|e| panic!("{path}: {e:?}"));
     eprintln!(
         "{path}: {} bytes on the wire, image {} + {} trailing, {} segments, version {:?}",
         bytes.len(),
@@ -561,8 +506,7 @@ fn somebody_elses_app_still_names_its_version() {
     b.version = "1.2.3";
     let image = b.build();
     assert_eq!(
-        screeny_fwimage::version_of(&image[..HEAD_LEN])
-            .and_then(|v| v.as_str().map(str::to_owned)),
+        screeny_fwimage::version_of(&image[..HEAD_LEN]).and_then(|v| v.as_str().map(str::to_owned)),
         Some("1.2.3".to_owned())
     );
 }

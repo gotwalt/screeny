@@ -72,8 +72,8 @@ impl DeviceInfo {
     /// [`Error::Metadata`] if a required key is missing or malformed. Spec 5.2
     /// requires ignoring such a service rather than guessing.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let d = txt::DeviceInfo::parse(bytes)
-            .map_err(|e| Error::Metadata(format!("{e:?} while parsing TXT record")))?;
+        let d =
+            txt::DeviceInfo::parse(bytes).map_err(|e| Error::Metadata(format!("{e:?} while parsing TXT record")))?;
         Ok(DeviceInfo {
             txtvers: d.txtvers,
             proto: d.proto.to_string(),
@@ -126,11 +126,7 @@ impl DeviceInfo {
         let codecs = if self.codecs.is_empty() {
             self.codecs_raw.clone()
         } else {
-            self.codecs
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
+            self.codecs.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")
         };
         let d = txt::DeviceInfo {
             txtvers: self.txtvers,
@@ -145,9 +141,7 @@ impl DeviceInfo {
             name: &self.name,
         };
         let mut out = vec![0u8; 512];
-        let n = d
-            .write(&mut out)
-            .map_err(|e| Error::Metadata(format!("{e:?} while writing TXT record")))?;
+        let n = d.write(&mut out).map_err(|e| Error::Metadata(format!("{e:?} while writing TXT record")))?;
         out.truncate(n);
         Ok(out)
     }
@@ -168,11 +162,7 @@ impl DeviceInfo {
     /// Codecs both sides can do, in the device's preference order.
     #[must_use]
     pub fn common_codecs(&self, mine: &[u8]) -> Vec<u8> {
-        self.codecs
-            .iter()
-            .copied()
-            .filter(|c| mine.contains(c))
-            .collect()
+        self.codecs.iter().copied().filter(|c| mine.contains(c)).collect()
     }
 
     /// The pixel-payload budget to use: the device's `mtu`, never above the
@@ -194,11 +184,7 @@ impl fmt::Display for DeviceInfo {
         write!(
             f,
             "{} ({}x{}, fw {}, mtu {}, codecs {:?})",
-            if self.name.is_empty() {
-                &self.id
-            } else {
-                &self.name
-            },
+            if self.name.is_empty() { &self.id } else { &self.name },
             self.w,
             self.h,
             self.fw,
@@ -234,21 +220,10 @@ impl Device {
     #[must_use]
     pub fn from_addr(addr: SocketAddr) -> Self {
         let frame = addr;
-        let ctrl = if frame.port() == DEFAULT_FRAME_PORT {
-            DEFAULT_CONTROL_PORT
-        } else {
-            frame.port().wrapping_add(1)
-        };
+        let ctrl = if frame.port() == DEFAULT_FRAME_PORT { DEFAULT_CONTROL_PORT } else { frame.port().wrapping_add(1) };
         let mut control = frame;
         control.set_port(ctrl);
-        Device {
-            instance: frame.to_string(),
-            host: None,
-            frame,
-            control,
-            addresses: vec![frame.ip()],
-            info: None,
-        }
+        Device { instance: frame.to_string(), host: None, frame, control, addresses: vec![frame.ip()], info: None }
     }
 
     /// Adopt metadata learned from `GET_INFO`, including the authoritative
@@ -333,10 +308,7 @@ mod tests {
         const KEYS: [&str; 5] = ["proto=1", "w=64", "h=32", "ctrl=49375", "codecs=16"];
         for dropped in KEYS {
             let kept: Vec<&str> = KEYS.into_iter().filter(|k| *k != dropped).collect();
-            assert!(
-                DeviceInfo::parse(&txt(&kept)).is_err(),
-                "accepted a record with no {dropped}"
-            );
+            assert!(DeviceInfo::parse(&txt(&kept)).is_err(), "accepted a record with no {dropped}");
         }
     }
 
@@ -350,10 +322,7 @@ mod tests {
 
         let mut d = Device::from_addr("192.0.2.9:6000".parse().unwrap());
         assert_eq!(d.control.port(), 6001, "the port above, by convention");
-        let info = DeviceInfo {
-            ctrl: 7777,
-            ..DeviceInfo::default()
-        };
+        let info = DeviceInfo { ctrl: 7777, ..DeviceInfo::default() };
         d.apply(info);
         assert_eq!(d.control.port(), 7777);
     }

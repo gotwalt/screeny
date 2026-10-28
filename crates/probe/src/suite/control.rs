@@ -167,11 +167,7 @@ fn info_is_txt(cx: &mut Ctx) -> Result<Outcome, String> {
     // already proves.
     let first_ok = keys.first().map(|k| k == "txtvers").unwrap_or(false);
     let required = ["txtvers", "proto", "w", "h", "codecs", "mtu", "ctrl"];
-    let missing: Vec<&str> = required
-        .iter()
-        .copied()
-        .filter(|r| !keys.iter().any(|k| k == r))
-        .collect();
+    let missing: Vec<&str> = required.iter().copied().filter(|r| !keys.iter().any(|k| k == r)).collect();
     verdict(
         first_ok && missing.is_empty(),
         format!(
@@ -179,11 +175,7 @@ fn info_is_txt(cx: &mut Ctx) -> Result<Outcome, String> {
             body.len(),
             keys.len(),
             keys.first().map(String::as_str).unwrap_or(""),
-            if missing.is_empty() {
-                String::new()
-            } else {
-                format!(", missing {missing:?}")
-            }
+            if missing.is_empty() { String::new() } else { format!(", missing {missing:?}") }
         ),
     )
 }
@@ -195,9 +187,7 @@ fn info_contents(cx: &mut Ctx) -> Result<Outcome, String> {
         Err(e) => return verdict(false, format!("TXT did not parse: {e:?}")),
     };
     // Section 4.7: "A v1 device MUST support all five."
-    let all_five = screeny_proto::dec::SUPPORTED_CODECS
-        .iter()
-        .all(|&c| info.supports(c));
+    let all_five = screeny_proto::dec::SUPPORTED_CODECS.iter().all(|&c| info.supports(c));
     let geometry = info.w == screeny_proto::W as u16 && info.h == screeny_proto::H as u16;
     let mtu = info.mtu == screeny_proto::MAX_PIXEL_PAYLOAD as u16;
     // Section 5.2: ctrl= is the port a sender can actually reach, and we are
@@ -223,9 +213,7 @@ fn every_safe_opcode(cx: &mut Ctx) -> Result<Outcome, String> {
     // anything. Section 6.3 persists it, and a suite that renamed the panel
     // would be leaving a mess behind.
     let body = cx.get_info()?;
-    let name = txt::DeviceInfo::parse(&body)
-        .map(|i| i.name.to_string())
-        .unwrap_or_default();
+    let name = txt::DeviceInfo::parse(&body).map(|i| i.name.to_string()).unwrap_or_default();
     let brightness = cx.brightness_found;
 
     let mut bad: Vec<String> = Vec::new();
@@ -255,11 +243,7 @@ fn every_safe_opcode(cx: &mut Ctx) -> Result<Outcome, String> {
 
     verdict(
         bad.is_empty(),
-        if bad.is_empty() {
-            format!("10 opcodes answered; name left as {name:?}")
-        } else {
-            bad.join("; ")
-        },
+        if bad.is_empty() { format!("10 opcodes answered; name left as {name:?}") } else { bad.join("; ") },
     )
 }
 
@@ -282,27 +266,15 @@ fn req_id_zero_is_silence(cx: &mut Ctx) -> Result<Outcome, String> {
     let c = cx.ctrl.raw(&control_dgram(op::PING, 0, 0, &[1, 2, 3]))?;
     verdict(
         a.is_none() && b.is_none() && c.is_none(),
-        format!(
-            "PING {}, unknown op {}, bad length {}",
-            describe(&a),
-            describe(&b),
-            describe(&c)
-        ),
+        format!("PING {}, unknown op {}, bad length {}", describe(&a), describe(&b), describe(&c)),
     )
 }
 
 fn reply_bit_discarded(cx: &mut Ctx) -> Result<Outcome, String> {
     // Section 6.1: requests and replies are told apart by this bit and by
     // nothing else, so a device that answered replies would answer its own.
-    let a = cx
-        .ctrl
-        .raw(&control_dgram(op::PING, screeny_proto::C_REPLY, 5, &[]))?;
-    let b = cx.ctrl.raw(&control_dgram(
-        op::PING,
-        screeny_proto::C_REPLY | screeny_proto::C_ERROR,
-        6,
-        &[2],
-    ))?;
+    let a = cx.ctrl.raw(&control_dgram(op::PING, screeny_proto::C_REPLY, 5, &[]))?;
+    let b = cx.ctrl.raw(&control_dgram(op::PING, screeny_proto::C_REPLY | screeny_proto::C_ERROR, 6, &[2]))?;
     // And the device is still there afterwards.
     let alive = cx.ctrl.request(Request::Ping).is_ok();
     verdict(
@@ -326,20 +298,12 @@ fn unknown_op(cx: &mut Ctx) -> Result<Outcome, String> {
     }
     verdict(
         bad.is_empty(),
-        if bad.is_empty() {
-            "7 opcodes, all ERR_UNKNOWN_OP echoing op and req_id".into()
-        } else {
-            bad.join("; ")
-        },
+        if bad.is_empty() { "7 opcodes, all ERR_UNKNOWN_OP echoing op and req_id".into() } else { bad.join("; ") },
     )
 }
 
 /// `(op, body, what)` triples that must earn one particular error code.
-fn expect_error(
-    cx: &mut Ctx,
-    code: ErrorCode,
-    cases: &[(u8, &[u8], &str)],
-) -> Result<Outcome, String> {
+fn expect_error(cx: &mut Ctx, code: ErrorCode, cases: &[(u8, &[u8], &str)]) -> Result<Outcome, String> {
     let mut bad = Vec::new();
     for (o, body, what) in cases {
         let r = cx.ctrl.raw(&control_dgram(*o, 0, 0x901, body))?;
@@ -352,11 +316,7 @@ fn expect_error(
     }
     verdict(
         bad.is_empty(),
-        if bad.is_empty() {
-            format!("{} cases, all {:?}", cases.len(), code)
-        } else {
-            bad.join("; ")
-        },
+        if bad.is_empty() { format!("{} cases, all {:?}", cases.len(), code) } else { bad.join("; ") },
     )
 }
 
@@ -433,10 +393,7 @@ fn err_version(cx: &mut Ctx) -> Result<Outcome, String> {
     d0[1] = (9 << 4) | screeny_proto::TYPE_CONTROL;
     let silent = cx.ctrl.raw(&d0)?.is_none();
 
-    verdict(
-        ok && silent,
-        format!("{}, req_id 0 silent: {silent}", describe(&r)),
-    )
+    verdict(ok && silent, format!("{}, req_id 0 silent: {silent}", describe(&r)))
 }
 
 fn reboot_is_guarded(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -451,10 +408,7 @@ fn reboot_is_guarded(cx: &mut Ctx) -> Result<Outcome, String> {
     let after = cx.telemetry()?.uptime_ms;
     // A reboot would send uptime backwards.
     let alive = after >= before;
-    verdict(
-        errored && alive,
-        format!("{}, uptime {before} -> {after} ms", describe(&r)),
-    )
+    verdict(errored && alive, format!("{}, uptime {before} -> {after} ms", describe(&r)))
 }
 
 fn brightness_applies(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -462,9 +416,7 @@ fn brightness_applies(cx: &mut Ctx) -> Result<Outcome, String> {
     // steps *down* and back. The cap itself is the opt-in rule below.
     let found = cx.brightness_found;
     if found < 4 {
-        return Ok(Outcome::Skip(format!(
-            "found at brightness {found}: nothing below it to test with"
-        )));
+        return Ok(Outcome::Skip(format!("found at brightness {found}: nothing below it to test with")));
     }
     let low = found / 2;
     // Card 136: `low` is not necessarily what comes back. `SET_BRIGHTNESS`
@@ -485,9 +437,7 @@ fn brightness_applies(cx: &mut Ctx) -> Result<Outcome, String> {
     };
     verdict(
         applied == expected && reported == expected && back == found,
-        format!(
-            "{found} -> {low}: applied {applied} (expected {expected}), telemetry {reported}, back to {back}"
-        ),
+        format!("{found} -> {low}: applied {applied} (expected {expected}), telemetry {reported}, back to {back}"),
     )
 }
 
@@ -503,25 +453,13 @@ fn brightness_cap(cx: &mut Ctx) -> Result<Outcome, String> {
 
 fn set_idle(cx: &mut Ctx) -> Result<Outcome, String> {
     let mut bad = Vec::new();
-    for m in [
-        IdleMode::Black,
-        IdleMode::Dim,
-        IdleMode::HoldForever,
-        IdleMode::Status,
-    ] {
+    for m in [IdleMode::Black, IdleMode::Dim, IdleMode::HoldForever, IdleMode::Status] {
         match cx.ctrl.request(Request::SetIdle(m))? {
             OwnedReply::Idle { mode } if mode == m.as_u8() => {}
             other => bad.push(format!("{m:?} -> {other:?}")),
         }
     }
-    verdict(
-        bad.is_empty(),
-        if bad.is_empty() {
-            "0..=3 all echoed; left at STATUS".into()
-        } else {
-            bad.join("; ")
-        },
-    )
+    verdict(bad.is_empty(), if bad.is_empty() { "0..=3 all echoed; left at STATUS".into() } else { bad.join("; ") })
 }
 
 fn identify_overlay(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -534,13 +472,8 @@ fn identify_overlay(cx: &mut Ctx) -> Result<Outcome, String> {
     std::thread::sleep(Duration::from_millis(150));
     let after = cx.telemetry()?.state;
     verdict(
-        during == screeny_proto::control::state::IDENTIFY
-            && after != screeny_proto::control::state::IDENTIFY,
-        format!(
-            "{} then {}",
-            crate::state_name(during),
-            crate::state_name(after)
-        ),
+        during == screeny_proto::control::state::IDENTIFY && after != screeny_proto::control::state::IDENTIFY,
+        format!("{} then {}", crate::state_name(during), crate::state_name(after)),
     )
 }
 
@@ -549,10 +482,9 @@ fn get_wifi(cx: &mut Ctx) -> Result<Outcome, String> {
     // `u8 n`, `n` bytes of SSID, `u8 state` and nothing else, so a body
     // longer than that would be the place a PSK could hide.
     match cx.ctrl.request(Request::GetWifi)? {
-        OwnedReply::Wifi { ssid, state } => verdict(
-            !ssid.is_empty() && state <= 3,
-            format!("{} byte SSID, state {state}", ssid.len()),
-        ),
+        OwnedReply::Wifi { ssid, state } => {
+            verdict(!ssid.is_empty() && state <= 3, format!("{} byte SSID, state {state}", ssid.len()))
+        }
         other => verdict(false, format!("expected a wifi reply, got {other:?}")),
     }
 }

@@ -19,10 +19,7 @@ use screeny::proto::{decode, IndexedFrame, NBYTES, NPIX};
 use screeny::{codec_name, Frame, Pattern};
 
 fn encoder(profile: Profile) -> Encoder {
-    Encoder::new(EncodeConfig {
-        profile,
-        ..EncodeConfig::default()
-    })
+    Encoder::new(EncodeConfig { profile, ..EncodeConfig::default() })
 }
 
 /// Encode, decode through proto, return the decoded frame.
@@ -36,11 +33,7 @@ fn round_trip(enc: &mut Encoder, f: &Frame, budget: usize) -> (u8, usize, Frame)
     );
     let mut dst = Box::new([0u8; NBYTES]);
     decode(out.codec, &out.payload, &mut dst).unwrap_or_else(|e| {
-        panic!(
-            "{} payload of {} bytes did not decode: {e:?}",
-            codec_name(out.codec),
-            out.payload.len()
-        )
+        panic!("{} payload of {} bytes did not decode: {e:?}", codec_name(out.codec), out.payload.len())
     });
     (out.codec, out.payload.len(), Frame::from_bytes(&dst[..]).unwrap())
 }
@@ -56,11 +49,7 @@ fn every_pattern_round_trips_at_every_budget() {
             for t in 0..4u64 {
                 let f = p.frame(t);
                 let (c, n, _) = round_trip(&mut enc, &f, budget);
-                assert!(
-                    screeny::proto::dec::is_supported(c),
-                    "{}: unsupported codec {c:#04x}",
-                    p.name()
-                );
+                assert!(screeny::proto::dec::is_supported(c), "{}: unsupported codec {c:#04x}", p.name());
                 assert!(n <= budget);
             }
         }
@@ -76,12 +65,7 @@ fn adversarial_frames_never_exceed_the_budget() {
             let mut enc = encoder(profile);
             for (name, f) in &frames {
                 let (c, n, _) = round_trip(&mut enc, f, budget);
-                assert!(
-                    n <= budget,
-                    "{name} at budget {budget}: {} bytes of {}",
-                    n,
-                    codec_name(c)
-                );
+                assert!(n <= budget, "{name} at budget {budget}: {} bytes of {}", n, codec_name(c));
             }
         }
     }
@@ -95,9 +79,7 @@ fn random_frames_never_exceed_the_budget() {
         // A spread of colour counts, because that is what decides which rung
         // of the ladder is reached.
         let k = [2usize, 3, 16, 17, 32, 33, 64, 200, 256, 257, 1024, 2048][i % 12];
-        let pal: Vec<[u8; 3]> = (0..k)
-            .map(|_| [rng.byte(), rng.byte(), rng.byte()])
-            .collect();
+        let pal: Vec<[u8; 3]> = (0..k).map(|_| [rng.byte(), rng.byte(), rng.byte()]).collect();
         let mut f = Frame::black();
         for p in 0..NPIX {
             f.set_at(p, pal[rng.below(k as u32) as usize]);
@@ -115,9 +97,7 @@ fn random_frames_never_exceed_the_budget() {
 fn low_colour_frames_are_always_exact() {
     let mut rng = Rng(0xdead_beef);
     for k in [1usize, 2, 8, 16, 17, 32] {
-        let pal: Vec<[u8; 3]> = (0..k)
-            .map(|_| [rng.byte(), rng.byte(), rng.byte()])
-            .collect();
+        let pal: Vec<[u8; 3]> = (0..k).map(|_| [rng.byte(), rng.byte(), rng.byte()]).collect();
         // Random placement, so the index plane does not compress at all.
         let mut f = Frame::black();
         for p in 0..NPIX {
@@ -126,23 +106,14 @@ fn low_colour_frames_are_always_exact() {
         let mut enc = encoder(Profile::Full);
         let (c, n, back) = round_trip(&mut enc, &f, 1464);
         let st = enc.last_stats();
-        assert_eq!(
-            back.as_bytes(),
-            f.as_bytes(),
-            "k={k}: {} of {n} bytes was not lossless",
-            codec_name(c)
-        );
+        assert_eq!(back.as_bytes(), f.as_bytes(), "k={k}: {} of {n} bytes was not lossless", codec_name(c));
         assert!(st.exact, "k={k}: the encoder did not know it was exact");
         // And it should not have bothered scoring anything.
         assert_eq!(st.candidates, 0, "k={k}: scored candidates unnecessarily");
         match k {
             1 => assert_eq!(c, codec::SOLID),
             2..=16 => assert_eq!(c, codec::PAL4_LZ, "k={k}"),
-            _ => assert!(
-                c == codec::PAL8_LZ || c == codec::PAL5,
-                "k={k}: got {}",
-                codec_name(c)
-            ),
+            _ => assert!(c == codec::PAL8_LZ || c == codec::PAL5, "k={k}: got {}", codec_name(c)),
         }
     }
 }
@@ -155,9 +126,7 @@ fn low_colour_frames_are_always_exact() {
 fn repeating_frames_up_to_256_colours_are_exact() {
     let mut rng = Rng(0xc0ff_ee11);
     for k in [33usize, 64, 200, 256] {
-        let pal: Vec<[u8; 3]> = (0..k)
-            .map(|_| [rng.byte(), rng.byte(), rng.byte()])
-            .collect();
+        let pal: Vec<[u8; 3]> = (0..k).map(|_| [rng.byte(), rng.byte(), rng.byte()]).collect();
         let mut f = Frame::black();
         for p in 0..NPIX {
             f.set_at(p, pal[p % k]);
@@ -176,9 +145,7 @@ fn repeating_frames_up_to_256_colours_are_exact() {
 fn incompressible_many_colour_frames_are_lossy_but_legal() {
     let mut rng = Rng(0x00c0_ffee);
     for k in [64usize, 200, 256, 2048] {
-        let pal: Vec<[u8; 3]> = (0..k)
-            .map(|_| [rng.byte(), rng.byte(), rng.byte()])
-            .collect();
+        let pal: Vec<[u8; 3]> = (0..k).map(|_| [rng.byte(), rng.byte(), rng.byte()]).collect();
         let mut f = Frame::black();
         for p in 0..NPIX {
             f.set_at(p, pal[rng.below(k as u32) as usize]);
@@ -186,10 +153,7 @@ fn incompressible_many_colour_frames_are_lossy_but_legal() {
         let mut enc = encoder(Profile::Full);
         let (_, n, _) = round_trip(&mut enc, &f, 1464);
         assert!(n <= 1464);
-        assert!(
-            enc.last_stats().candidates > 1,
-            "k={k}: the chooser did not consider alternatives"
-        );
+        assert!(enc.last_stats().candidates > 1, "k={k}: the chooser did not consider alternatives");
     }
 }
 
@@ -231,25 +195,14 @@ fn honours_the_advertised_codec_list() {
         ("block only", vec![codec::BC1_DUAL]),
         ("pal5 only", vec![codec::PAL5]),
         ("solid only", vec![codec::SOLID]),
-        (
-            "no pal8",
-            vec![codec::PAL4_LZ, codec::PAL5, codec::BC1_DUAL, codec::SOLID],
-        ),
+        ("no pal8", vec![codec::PAL4_LZ, codec::PAL5, codec::BC1_DUAL, codec::SOLID]),
     ];
     for (name, codecs) in sets {
-        let mut enc = Encoder::new(EncodeConfig {
-            codecs: codecs.clone(),
-            ..EncodeConfig::default()
-        });
+        let mut enc = Encoder::new(EncodeConfig { codecs: codecs.clone(), ..EncodeConfig::default() });
         for p in Pattern::ALL {
             let f = p.frame(3);
             let out = enc.encode(&f, 1464);
-            assert!(
-                codecs.contains(&out.codec),
-                "{name}/{}: emitted {}",
-                p.name(),
-                codec_name(out.codec)
-            );
+            assert!(codecs.contains(&out.codec), "{name}/{}: emitted {}", p.name(), codec_name(out.codec));
             let mut dst = Box::new([0u8; NBYTES]);
             decode(out.codec, &out.payload, &mut dst).expect("decodes");
         }
@@ -266,17 +219,11 @@ fn honours_the_advertised_codec_list() {
 fn fixed_rate_codecs_give_way_to_the_next_one_down() {
     let f = Pattern::Gradient.frame(0);
 
-    let mut enc = Encoder::new(EncodeConfig {
-        codecs: vec![codec::PAL5, codec::SOLID],
-        ..EncodeConfig::default()
-    });
+    let mut enc = Encoder::new(EncodeConfig { codecs: vec![codec::PAL5, codec::SOLID], ..EncodeConfig::default() });
     assert_eq!(enc.encode(&f, PAL5_LEN).codec, codec::PAL5);
     assert_eq!(enc.encode(&f, PAL5_LEN - 1).codec, codec::SOLID);
 
-    let mut enc = Encoder::new(EncodeConfig {
-        codecs: vec![codec::BC1_DUAL, codec::SOLID],
-        ..EncodeConfig::default()
-    });
+    let mut enc = Encoder::new(EncodeConfig { codecs: vec![codec::BC1_DUAL, codec::SOLID], ..EncodeConfig::default() });
     assert_eq!(enc.encode(&f, BC1_DUAL_LEN).codec, codec::BC1_DUAL);
     assert_eq!(enc.encode(&f, BC1_DUAL_LEN - 1).codec, codec::SOLID);
 }
@@ -304,9 +251,7 @@ fn every_budget_from_three_bytes_upwards_is_respected() {
 fn indexed_frames_skip_the_chooser() {
     let mut rng = Rng(0x5eed_1234);
     for k in [1usize, 16, 32, 200, 256] {
-        let pal: Vec<[u8; 3]> = (0..k)
-            .map(|_| [rng.byte(), rng.byte(), rng.byte()])
-            .collect();
+        let pal: Vec<[u8; 3]> = (0..k).map(|_| [rng.byte(), rng.byte(), rng.byte()]).collect();
         // Repeating rather than random, so the LZ rung fits for the larger
         // palettes; `low_colour_frames_are_always_exact` covers the random
         // case, where only 32 colours or fewer can be promised.
@@ -314,10 +259,7 @@ fn indexed_frames_skip_the_chooser() {
         for p in 0..NPIX {
             idx[p] = (p % k) as u8;
         }
-        let f = IndexedFrame {
-            palette: &pal,
-            indices: &idx,
-        };
+        let f = IndexedFrame { palette: &pal, indices: &idx };
         let mut enc = encoder(Profile::Full);
         let out = enc.encode_indexed(&f, 1464).expect("encodes");
         assert!(enc.last_stats().exact, "k={k} was not exact");
@@ -335,10 +277,7 @@ fn indexed_frames_reject_out_of_range_indices() {
     let pal = [[1u8, 2, 3], [4, 5, 6]];
     let mut idx = Box::new([0u8; NPIX]);
     idx[7] = 9;
-    let f = IndexedFrame {
-        palette: &pal,
-        indices: &idx,
-    };
+    let f = IndexedFrame { palette: &pal, indices: &idx };
     let mut enc = encoder(Profile::Full);
     assert!(enc.encode_indexed(&f, 1464).is_err());
 }
@@ -374,16 +313,10 @@ fn hysteresis_keeps_the_codec_stable() {
 #[test]
 fn fixed_rate_payloads_are_exactly_the_right_size() {
     let f = Pattern::Gradient.frame(0);
-    let mut enc = Encoder::new(EncodeConfig {
-        codecs: vec![codec::PAL5],
-        ..EncodeConfig::default()
-    });
+    let mut enc = Encoder::new(EncodeConfig { codecs: vec![codec::PAL5], ..EncodeConfig::default() });
     assert_eq!(enc.encode(&f, 1464).payload.len(), PAL5_LEN);
 
-    let mut enc = Encoder::new(EncodeConfig {
-        codecs: vec![codec::BC1_DUAL],
-        ..EncodeConfig::default()
-    });
+    let mut enc = Encoder::new(EncodeConfig { codecs: vec![codec::BC1_DUAL], ..EncodeConfig::default() });
     assert_eq!(enc.encode(&f, 1464).payload.len(), BC1_DUAL_LEN);
 }
 
@@ -409,8 +342,5 @@ fn fast_profile_stays_close_to_full() {
         }
     }
     let (full_de, fast_de) = (sf / f64::from(n) * 1000.0, sq / f64::from(n) * 1000.0);
-    assert!(
-        fast_de <= full_de * 1.6 + 0.5,
-        "fast profile dE {fast_de:.2} against full {full_de:.2}"
-    );
+    assert!(fast_de <= full_de * 1.6 + 0.5, "fast profile dE {fast_de:.2} against full {full_de:.2}");
 }

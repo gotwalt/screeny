@@ -157,11 +157,9 @@ impl fmt::Debug for Rpc<'_> {
     // Lengths only: a derived Debug would print the password bytes.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Rpc::WifiSettings { ssid, password } => f
-                .debug_struct("WifiSettings")
-                .field("ssid_len", &ssid.len())
-                .field("psk_len", &password.len())
-                .finish(),
+            Rpc::WifiSettings { ssid, password } => {
+                f.debug_struct("WifiSettings").field("ssid_len", &ssid.len()).field("psk_len", &password.len()).finish()
+            }
             Rpc::GetCurrentState => f.write_str("GetCurrentState"),
             Rpc::GetDeviceInfo => f.write_str("GetDeviceInfo"),
             Rpc::GetWifiNetworks => f.write_str("GetWifiNetworks"),
@@ -377,10 +375,7 @@ pub enum Scan<'a> {
 pub fn scan_frame(buf: &[u8]) -> Scan<'_> {
     let Some(i) = buf.windows(6).position(|w| w == HEADER) else {
         // Keep a tail that could be the start of a header.
-        let keep = buf
-            .iter()
-            .rposition(|&b| b == HEADER[0])
-            .map_or(0, |p| buf.len() - p);
+        let keep = buf.iter().rposition(|&b| b == HEADER[0]).map_or(0, |p| buf.len() - p);
         return Scan::Need { skip: buf.len() - keep };
     };
     let f = &buf[i..];
@@ -440,11 +435,7 @@ pub fn encode_error(out: &mut [u8], e: ErrorCode) -> Result<usize, EncodeError> 
 
 /// Encode an RPC result for command `command` carrying `strings`, each with a
 /// one-byte length prefix. No strings is the scan terminator.
-pub fn encode_rpc_result(
-    out: &mut [u8],
-    command: u8,
-    strings: &[&[u8]],
-) -> Result<usize, EncodeError> {
+pub fn encode_rpc_result(out: &mut [u8], command: u8, strings: &[&[u8]]) -> Result<usize, EncodeError> {
     let mut inner = 0usize;
     for s in strings {
         if s.len() > 255 {
@@ -469,11 +460,7 @@ pub fn encode_rpc_result(
 
 /// Encode a client-to-device RPC command, for host tools and tests. `payload`
 /// is the command's own bytes (empty for the three queries).
-pub fn encode_rpc_command(
-    out: &mut [u8],
-    command: u8,
-    payload: &[u8],
-) -> Result<usize, EncodeError> {
+pub fn encode_rpc_command(out: &mut [u8], command: u8, payload: &[u8]) -> Result<usize, EncodeError> {
     if payload.len() > 253 {
         return Err(EncodeError);
     }
@@ -487,11 +474,7 @@ pub fn encode_rpc_command(
 
 /// Encode a `WIFI_SETTINGS` command, for tests and for a host client that
 /// reads the password from a prompt.
-pub fn encode_wifi_settings(
-    out: &mut [u8],
-    ssid: &[u8],
-    password: &[u8],
-) -> Result<usize, EncodeError> {
+pub fn encode_wifi_settings(out: &mut [u8], ssid: &[u8], password: &[u8]) -> Result<usize, EncodeError> {
     if 2 + ssid.len() + password.len() > 253 {
         return Err(EncodeError);
     }
@@ -557,11 +540,7 @@ impl Observed {
     /// Read the facts off a machine.
     #[must_use]
     pub fn from_machine(p: &crate::Provisioner) -> Self {
-        Observed {
-            state: p.state(),
-            trial: p.trial().map(|t| t.outcome),
-            ip: p.ip(),
-        }
+        Observed { state: p.state(), trial: p.trial().map(|t| t.outcome), ip: p.ip() }
     }
 }
 
@@ -592,12 +571,7 @@ impl Reply {
             Reply::DeviceInfo => encode_rpc_result(
                 out,
                 cmd::GET_DEVICE_INFO,
-                &[
-                    info.firmware.as_bytes(),
-                    info.version.as_bytes(),
-                    info.chip.as_bytes(),
-                    info.name.as_bytes(),
-                ],
+                &[info.firmware.as_bytes(), info.version.as_bytes(), info.chip.as_bytes(), info.name.as_bytes()],
             ),
             Reply::ScanEnd => encode_rpc_result(out, cmd::GET_WIFI_NETWORKS, &[]),
             Reply::Url(ip, c) => {
@@ -659,10 +633,7 @@ pub struct Submit<'a> {
 
 impl fmt::Debug for Submit<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Submit")
-            .field("ssid_len", &self.ssid.len())
-            .field("psk_len", &self.password.len())
-            .finish()
+        f.debug_struct("Submit").field("ssid_len", &self.ssid.len()).field("psk_len", &self.password.len()).finish()
     }
 }
 
@@ -680,9 +651,13 @@ pub const GIVE_UP_MS: u32 = 90_000;
 enum Phase {
     Idle,
     /// Submitted; waiting for the machine to enter `Trial`.
-    Submitted { at: u32 },
+    Submitted {
+        at: u32,
+    },
     /// The machine is in `Trial`.
-    Trying { since: u32 },
+    Trying {
+        since: u32,
+    },
 }
 
 /// The Improv conversation: RPC commands in, replies out, one submit at a time.

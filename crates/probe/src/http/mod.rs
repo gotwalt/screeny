@@ -296,17 +296,8 @@ impl Ctx {
     ///
     /// # Errors
     /// Anything that stops a response coming back.
-    pub fn post_bytes_declaring(
-        &mut self,
-        path: &str,
-        declared: usize,
-        body: &[u8],
-    ) -> Result<Res, String> {
-        self.record(
-            "POST",
-            path,
-            self.http.post_bytes_declaring(path, declared, body),
-        )
+    pub fn post_bytes_declaring(&mut self, path: &str, declared: usize, body: &[u8]) -> Result<Res, String> {
+        self.record("POST", path, self.http.post_bytes_declaring(path, declared, body))
     }
 
     /// Any method at all, recorded. For the verbs this API has no
@@ -344,12 +335,7 @@ impl Ctx {
     pub fn status(&mut self) -> Result<StatusReply, String> {
         let res = self.get(route::STATUS)?;
         if res.status != 200 {
-            return Err(format!(
-                "GET {} answered {}: {}",
-                route::STATUS,
-                res.status,
-                res.snippet(80)
-            ));
+            return Err(format!("GET {} answered {}: {}", route::STATUS, res.status, res.snippet(80)));
         }
         res.parse()
     }
@@ -359,10 +345,7 @@ impl Ctx {
     /// # Errors
     /// Whatever the control link says.
     pub fn telemetry(&mut self) -> Result<Telemetry, String> {
-        let ctrl = self
-            .ctrl
-            .as_mut()
-            .ok_or("no UDP control port for this target")?;
+        let ctrl = self.ctrl.as_mut().ok_or("no UDP control port for this target")?;
         match ctrl.request(Request::Telemetry)? {
             OwnedReply::Telemetry(t) => Ok(t),
             other => Err(format!("expected telemetry, got {other:?}")),
@@ -387,10 +370,7 @@ impl Ctx {
             }
             std::thread::sleep(Duration::from_secs(1));
         }
-        Err(format!(
-            "nothing answered in {:.0} s (last: {last})",
-            patience.as_secs_f32()
-        ))
+        Err(format!("nothing answered in {:.0} s (last: {last})", patience.as_secs_f32()))
     }
 
     /// Put one settings value back, for a rule that changed it.
@@ -400,12 +380,7 @@ impl Ctx {
     pub fn set_settings(&mut self, body: &str) -> Result<SettingsReply, String> {
         let res = self.post_json(route::SETTINGS, body)?;
         if res.status != 200 {
-            return Err(format!(
-                "POST {} {body} answered {}: {}",
-                route::SETTINGS,
-                res.status,
-                res.snippet(80)
-            ));
+            return Err(format!("POST {} {body} answered {}: {}", route::SETTINGS, res.status, res.snippet(80)));
         }
         res.parse()
     }
@@ -456,9 +431,7 @@ impl Restore {
     pub fn apply(&self) -> Result<SettingsReply, String> {
         // The overlay first: it is the one thing a person watching the panel
         // would notice, and it costs one request whether or not it is up.
-        let _ = self
-            .client
-            .post_json(route::IDENTIFY, r#"{"duration_ms":0}"#);
+        let _ = self.client.post_json(route::IDENTIFY, r#"{"duration_ms":0}"#);
         let body = format!(
             r#"{{"name":{},"brightness":{},"idle_mode":"{}"}}"#,
             json_string(&self.name),
@@ -593,25 +566,15 @@ impl Summary {
 pub fn run(opts: &Opts) -> Result<Summary, String> {
     let rules: Vec<Rule> = all().into_iter().filter(|r| selected(r, opts)).collect();
     if rules.is_empty() {
-        return Err(format!(
-            "no rules match --only {:?}",
-            opts.only.clone().unwrap_or_default()
-        ));
+        return Err(format!("no rules match --only {:?}", opts.only.clone().unwrap_or_default()));
     }
 
     let http = Client::new(opts.http_addr, opts.host.clone());
     // One round trip before anything else, so "the device is not there" is a
     // clear error rather than forty failures.
-    let first = http
-        .get(route::STATUS)
-        .map_err(|e| format!("GET http://{}{}: {e}", opts.host, route::STATUS))?;
+    let first = http.get(route::STATUS).map_err(|e| format!("GET http://{}{}: {e}", opts.host, route::STATUS))?;
     if first.status != 200 {
-        return Err(format!(
-            "GET {} answered {}: {}",
-            route::STATUS,
-            first.status,
-            first.snippet(120)
-        ));
+        return Err(format!("GET {} answered {}: {}", route::STATUS, first.status, first.snippet(120)));
     }
     let found: StatusReply = first.parse()?;
     // **Card 246, item 4.** A device still wearing one of this suite's names
@@ -622,11 +585,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
     // name means `screeny-<id>`, which is what it was before that run.
     let leftover = name_is_a_leftover(found.name.as_str());
     let found = Found {
-        name: if leftover {
-            String::new()
-        } else {
-            found.name.as_str().to_string()
-        },
+        name: if leftover { String::new() } else { found.name.as_str().to_string() },
         brightness: found.brightness,
         idle_mode: found.idle_mode,
         fw: found.fw.as_str().to_string(),
@@ -655,11 +614,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         "screeny-probe http: {} rules against {} ({})",
         rules.len(),
         base_url(opts),
-        if opts.http_addr.ip().is_loopback() {
-            "loopback"
-        } else {
-            "remote"
-        }
+        if opts.http_addr.ip().is_loopback() { "loopback" } else { "remote" }
     );
     println!(
         "  fw {} id {}, name {:?}, brightness {}, idle {}; estimated {:.0} s",
@@ -721,10 +676,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         brightness: found.brightness,
         idle_mode: found.idle_mode,
     };
-    let mut guard = RestoreGuard {
-        inner: restore.clone(),
-        armed: true,
-    };
+    let mut guard = RestoreGuard { inner: restore.clone(), armed: true };
     if opts.ctrlc {
         let on_interrupt = restore;
         // SIGINT, SIGTERM and SIGHUP, the last two through the crate's
@@ -742,20 +694,9 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         }
     }
 
-    let mut cx = Ctx {
-        http,
-        ctrl,
-        found,
-        cap_probe: opts.cap_probe,
-        seen: Vec::new(),
-    };
+    let mut cx = Ctx { http, ctrl, found, cap_probe: opts.cap_probe, seen: Vec::new() };
 
-    let mut s = Summary {
-        passed: 0,
-        failed: 0,
-        skipped: 0,
-        refused: 0,
-    };
+    let mut s = Summary { passed: 0, failed: 0, skipped: 0, refused: 0 };
     let total = rules.len();
     for (i, r) in rules.iter().enumerate() {
         let outcome = if r.flags & ALLOW_REBOOT != 0 && !opts.allow_reboot {
@@ -776,9 +717,9 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         // difference rather than as a failure, until card 223 lands. A *pass*
         // is still a pass, so the simulator is held to it today.
         let outcome = match outcome {
-            Outcome::Fail(why) if r.flags & KNOWN_223 != 0 && !CARD_223_LANDED => Outcome::Skip(
-                format!("known difference, card 223 (flip CARD_223_LANDED): {why}"),
-            ),
+            Outcome::Fail(why) if r.flags & KNOWN_223 != 0 && !CARD_223_LANDED => {
+                Outcome::Skip(format!("known difference, card 223 (flip CARD_223_LANDED): {why}"))
+            }
             other => other,
         };
         let (tag, detail) = match &outcome {
@@ -791,14 +732,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
             Outcome::Fail(_) => s.failed += 1,
             Outcome::Skip(_) => s.skipped += 1,
         }
-        println!(
-            "[{:>2}/{}] #{:02} {:<9} {:<58} {tag}  {detail}",
-            i + 1,
-            total,
-            r.n,
-            r.section,
-            r.name
-        );
+        println!("[{:>2}/{}] #{:02} {:<9} {:<58} {tag}  {detail}", i + 1, total, r.n, r.section, r.name);
     }
 
     println!();
@@ -835,10 +769,7 @@ pub fn run(opts: &Opts) -> Result<Summary, String> {
         if s.refused == 0 {
             String::new()
         } else {
-            format!(
-                " (retried up to {} times each; the device had no worker in accept)",
-                client::CONNECT_TRIES
-            )
+            format!(" (retried up to {} times each; the device had no worker in accept)", client::CONNECT_TRIES)
         }
     );
     Ok(s)
@@ -874,12 +805,7 @@ mod tests {
         let rules = all();
         assert!(rules.len() >= 30, "the catalogue has shrunk");
         for w in rules.windows(2) {
-            assert!(
-                w[0].n < w[1].n,
-                "rule {} comes after {}",
-                w[1].n,
-                w[0].n
-            );
+            assert!(w[0].n < w[1].n, "rule {} comes after {}", w[1].n, w[0].n);
         }
     }
 

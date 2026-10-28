@@ -17,11 +17,7 @@ use common::{Receiver, RxConfig};
 use screeny::{FrameTime, LinkConfig, Pattern, Pixels, Sender, SenderConfig, UDP_OVERHEAD};
 
 fn cfg(fps: f64) -> SenderConfig {
-    SenderConfig {
-        fps,
-        stats_interval: Duration::from_millis(100),
-        ..SenderConfig::default()
-    }
+    SenderConfig { fps, stats_interval: Duration::from_millis(100), ..SenderConfig::default() }
 }
 
 /// The frame port, both ways.
@@ -55,18 +51,11 @@ fn a_stream_counts_every_datagram_it_sent_and_every_one_that_came_back() {
 
     // The header, and only the header, is the difference from the pixel count.
     // 8 bytes: this config sets no timestamps, so there is no extension.
-    assert_eq!(
-        s.frames.out.bytes,
-        s.bytes + 8 * s.frames_sent,
-        "the datagram is the pixels plus an 8-byte header"
-    );
+    assert_eq!(s.frames.out.bytes, s.bytes + 8 * s.frames_sent, "the datagram is the pixels plus an 8-byte header");
 
     // The IP and UDP headers are *not* in the counter - they are the caller's
     // to add, because they are the one part of this user space cannot see.
-    assert_eq!(
-        s.frames.out.on_the_wire(UDP_OVERHEAD),
-        s.frames.out.bytes + UDP_OVERHEAD * s.frames.out.packets
-    );
+    assert_eq!(s.frames.out.on_the_wire(UDP_OVERHEAD), s.frames.out.bytes + UDP_OVERHEAD * s.frames.out.packets);
 
     // Telemetry came back on the frame port (spec 6.4) and is counted as
     // received: a small number of small packets against a large number of
@@ -92,11 +81,7 @@ fn a_stream_counts_every_datagram_it_sent_and_every_one_that_came_back() {
 #[test]
 fn without_a_handshake_the_control_port_costs_nothing() {
     let rx = Receiver::start(RxConfig::default());
-    let sender = Sender::connect(
-        rx.device(),
-        SenderConfig { handshake: false, ..cfg(30.0) },
-    )
-    .expect("connect");
+    let sender = Sender::connect(rx.device(), SenderConfig { handshake: false, ..cfg(30.0) }).expect("connect");
     assert_eq!(sender.stats().control, screeny::Traffic::default());
     drop(sender);
     rx.shutdown();
@@ -158,10 +143,7 @@ fn a_link_keeps_its_totals_across_a_reconnect() {
 #[test]
 fn a_link_to_nobody_counts_nothing() {
     // Port 1 on loopback: nothing is listening and nothing can be.
-    let mut link = screeny::Link::open_deferred(
-        screeny::Target::parse("127.0.0.1:1"),
-        LinkConfig::default(),
-    );
+    let mut link = screeny::Link::open_deferred(screeny::Target::parse("127.0.0.1:1"), LinkConfig::default());
     let frame = vec![0u8; screeny::proto::NPIX * 3];
     for _ in 0..5 {
         link.send(Pixels::rgb(&frame)).expect("the network cannot fail a send");

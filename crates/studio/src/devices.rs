@@ -603,11 +603,7 @@ impl DeviceFacts {
         let unasked_reboots = previous.map_or(0, |p| p.unasked_reboots) + u32::from(unasked);
 
         let link_up = reply.ip.is_some();
-        let heap = if reply.heap_size == 0 {
-            0.0
-        } else {
-            reply.heap_used as f32 / reply.heap_size as f32
-        };
+        let heap = if reply.heap_size == 0 { 0.0 } else { reply.heap_used as f32 / reply.heap_size as f32 };
         let stack_fault = reply.stack_free < STACK_FAULT;
         DeviceFacts {
             heard_unix: unix_now(),
@@ -806,10 +802,7 @@ impl Registry {
             if s.id.is_empty() {
                 continue;
             }
-            devices.insert(
-                s.id.clone(),
-                DeviceRecord { stored: s, ..DeviceRecord::default() },
-            );
+            devices.insert(s.id.clone(), DeviceRecord { stored: s, ..DeviceRecord::default() });
         }
     }
 
@@ -832,7 +825,8 @@ impl Registry {
             if let Some(d) = devices.get_mut(&s.id) {
                 d.stored.name = s.name.trim().to_string();
             } else {
-                let stored = StoredDevice { id: s.id.clone(), name: s.name.trim().to_string(), ..StoredDevice::default() };
+                let stored =
+                    StoredDevice { id: s.id.clone(), name: s.name.trim().to_string(), ..StoredDevice::default() };
                 devices.insert(s.id.clone(), DeviceRecord { stored, ..DeviceRecord::default() });
                 added.push(s.id.clone());
             }
@@ -1016,7 +1010,9 @@ impl Registry {
                     .find(|(_, d)| {
                         (!d.stored.instance.is_empty() && d.stored.instance == dev.instance)
                             || (!d.stored.address.is_empty()
-                                && (d.stored.address == typed_addr || d.stored.address == ip_only || d.stored.address == dev.instance))
+                                && (d.stored.address == typed_addr
+                                    || d.stored.address == ip_only
+                                    || d.stored.address == dev.instance))
                     })
                     .map(|(k, _)| k)
             })
@@ -1499,7 +1495,13 @@ pub fn identify_at_counted(frame: SocketAddr) -> (screeny::Traffic, Result<Devic
     };
     let info = client.info().map_err(|e| e.to_string());
     let cost = client.traffic();
-    (cost, info.map(|i| { dev.apply(i); dev }))
+    (
+        cost,
+        info.map(|i| {
+            dev.apply(i);
+            dev
+        }),
+    )
 }
 
 /// **Run one control request and say what it cost** (card 164).
@@ -1508,7 +1510,10 @@ pub fn identify_at_counted(frame: SocketAddr) -> (screeny::Traffic, Result<Devic
 /// [`identify_at_counted`], so "what has this panel cost me" has one answer
 /// rather than one per caller. The cost is reported however the request went:
 /// a request that timed out is four datagrams the network carried.
-pub fn control_call<T>(addr: SocketAddr, f: impl FnOnce(&mut ControlClient) -> Result<T, String>) -> (screeny::Traffic, Result<T, String>) {
+pub fn control_call<T>(
+    addr: SocketAddr,
+    f: impl FnOnce(&mut ControlClient) -> Result<T, String>,
+) -> (screeny::Traffic, Result<T, String>) {
     let mut c = match control(addr) {
         Ok(c) => c,
         Err(e) => return (screeny::Traffic::default(), Err(e)),
@@ -1650,7 +1655,8 @@ mod tests {
 
         // Rebooted, and we asked: counted as a reboot, not as a mystery, and
         // the ask is used up.
-        let rebooted = StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Software, ..status() };
+        let rebooted =
+            StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Software, ..status() };
         let mut ask = Some(Instant::now());
         let second = DeviceFacts::of(rebooted.clone(), Some(&first), &mut ask);
         assert_eq!(second.reboots, 1);
@@ -1675,7 +1681,8 @@ mod tests {
         // A machine whose clock has not been up that long: nothing to test.
         let Some(stale) = stale else { return };
         let mut ask = Some(stale);
-        let rebooted = StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Software, ..status() };
+        let rebooted =
+            StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Software, ..status() };
         let second = DeviceFacts::of(rebooted, Some(&first), &mut ask);
         assert_eq!(second.unasked_reboots, 1, "an ask from before the window is not an excuse");
         assert!(ask.is_none(), "and it is cleared rather than left lying around");
@@ -1687,7 +1694,8 @@ mod tests {
     #[test]
     fn a_brownout_is_not_an_unasked_for_software_reboot() {
         let first = DeviceFacts::of(status(), None, &mut None);
-        let rebooted = StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Brownout, ..status() };
+        let rebooted =
+            StatusReply { boot_id: first.reply.boot_id + 1, reset_reason: ResetReason::Brownout, ..status() };
         let second = DeviceFacts::of(rebooted, Some(&first), &mut None);
         assert_eq!(second.reboots, 1);
         assert_eq!(second.unasked_reboots, 0, "it is not a mystery: the panel says what happened");
@@ -2091,7 +2099,10 @@ mod tests {
         // wins over its own stale responder.
         reg.browsed(&[device("screeny-4a00a4", "4a00a4", OLD)], None);
         let d = reg.get("4a00a4").expect("there");
-        assert!(matches!(d.reach(), Reach::Resolved(r) if r.frame.to_string() == NEW), "a stale browse does not undo it");
+        assert!(
+            matches!(d.reach(), Reach::Resolved(r) if r.frame.to_string() == NEW),
+            "a stale browse does not undo it"
+        );
         assert!(d.followed.is_some());
 
         // And a second probe while it is answering where it is followed is

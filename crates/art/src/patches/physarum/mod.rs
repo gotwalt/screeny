@@ -56,12 +56,12 @@
 
 mod gpu;
 
-use crate::color::{oklch, smoothstep, srgb8_to_linear, to_oklab, Rgb};
+use crate::color::{oklch, smoothstep, to_oklab, Rgb};
 use crate::dither::Dither;
 use crate::faces::stroked;
 use crate::frame::{Frame, H, W};
 use crate::gpu::Gpu;
-use crate::panel::{level_code, level_triple};
+use crate::panel::aligned_ramp;
 use crate::patch::{choice, param, toggle, Ctx, ParamSpec, Patch, PatchDef, Playing};
 use crate::rng::Rng;
 use gpu::{Params, Sim};
@@ -84,7 +84,14 @@ const PARAMS: &[ParamSpec] = &[
     toggle("time", "Draw the time once a minute", true),
     toggle("24h", "24-hour time", false),
     param("hold", "How long the time's food lasts at most, seconds", 5.0, 50.0, 1.0, 25.0),
-    param("gather", "How far the colony changes its habit to write the time (0: writes as it lives)", 0.0, 1.0, 0.01, 0.85),
+    param(
+        "gather",
+        "How far the colony changes its habit to write the time (0: writes as it lives)",
+        0.0,
+        1.0,
+        0.01,
+        0.85,
+    ),
     param("spacing", "How far apart the time's morsels are, LEDs (closer: a steadier numeral)", 1.2, 5.0, 0.1, 2.0),
     param("erode", "How fast the colony eats the time (1: a well-fed morsel lasts about 20 s)", 0.0, 4.0, 0.05, 1.0),
     param("scale", "World cells per LED: finer veins below, bolder above", 3.0, 7.0, 0.1, 6.0),
@@ -160,21 +167,46 @@ const HABIT_NAMES: &[&str] = &["veins", "rivers", "worms"];
 
 const HABITS: [Habit; 3] = [
     // Jones's classic network: narrow sensors, a wider turn.
-    Habit { sd: Law::k(9.0), sa: Law::k(0.39), ra: Law::k(0.78), md: Law::k(1.0), decay: 0.06, diffuse: 0.6, wobble: 0.05 },
+    Habit {
+        sd: Law::k(9.0),
+        sa: Law::k(0.39),
+        ra: Law::k(0.78),
+        md: Law::k(1.0),
+        decay: 0.06,
+        diffuse: 0.6,
+        wobble: 0.05,
+    },
     // Long sensors, small turns: long flowing arcs. Takes the place of
     // "searching" (Jenson's turn-harder-where-thick law), which at a gentle
     // tempo circled in place into bright clumps and could not hold a
     // numeral (the owner: "has the problem of the clock being illegible").
-    Habit { sd: Law(14.0, 4.0, 0.5), sa: Law::k(0.3), ra: Law::k(0.16), md: Law::k(1.0), decay: 0.05, diffuse: 0.6, wobble: 0.03 },
+    Habit {
+        sd: Law(14.0, 4.0, 0.5),
+        sa: Law::k(0.3),
+        ra: Law::k(0.16),
+        md: Law::k(1.0),
+        decay: 0.05,
+        diffuse: 0.6,
+        wobble: 0.03,
+    },
     // Faster where it is dense: travelling worms. Calmed (the owner:
     // "super frenetic and busy"): a gentler surge, less wobble.
-    Habit { sd: Law::k(11.0), sa: Law::k(0.5), ra: Law::k(0.22), md: Law(0.5, 0.6, 1.0), decay: 0.07, diffuse: 0.5, wobble: 0.03 },
+    Habit {
+        sd: Law::k(11.0),
+        sa: Law::k(0.5),
+        ra: Law::k(0.22),
+        md: Law(0.5, 0.6, 1.0),
+        decay: 0.07,
+        diffuse: 0.5,
+        wobble: 0.03,
+    },
 ];
 
 /// The palette's hues, around the loop of orientations: muted, mineral.
 /// (OKLCH hue in degrees, chroma.) A vein wears the one nearest its
 /// orientation; `palette` and `drift` turn which orientation is which.
-const ANCHORS: [(f32, f32); 6] = [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)];
+const ANCHORS: [(f32, f32); 6] =
+    [(35.0, 0.085), (78.0, 0.08), (122.0, 0.065), (178.0, 0.055), (240.0, 0.05), (318.0, 0.055)];
 /// Stone: where the orientation is mixed. A warm grey.
 const STONE: (f32, f32) = (80.0, 0.02);
 /// Hues around the loop, and lightness steps per hue.
@@ -275,7 +307,9 @@ fn agent_count(millions: f32) -> u32 {
 
 fn agents_for(n: u32, seed: u64) -> Vec<[f32; 4]> {
     let mut rng = Rng::new(seed);
-    (0..n).map(|_| [rng.f32() * WORLD_W as f32, rng.f32() * WORLD_H as f32, rng.f32() * std::f32::consts::TAU, 0.0]).collect()
+    (0..n)
+        .map(|_| [rng.f32() * WORLD_W as f32, rng.f32() * WORLD_H as f32, rng.f32() * std::f32::consts::TAU, 0.0])
+        .collect()
 }
 
 /// The panel's window on the world: its top-left cell, at `scale` cells per
@@ -288,7 +322,13 @@ fn window(scale: f32) -> (f32, f32) {
 fn time_text(now: f64, h24: bool) -> Vec<char> {
     let minutes = (now / 60.0).floor() as i64;
     let (h, m) = ((minutes / 60).rem_euclid(24), minutes.rem_euclid(60));
-    let h = if h24 { h } else if h % 12 == 0 { 12 } else { h % 12 };
+    let h = if h24 {
+        h
+    } else if h % 12 == 0 {
+        12
+    } else {
+        h % 12
+    };
     let text = if h24 { format!("{h:02}:{m:02}") } else { format!("{h}:{m:02}") };
     text.chars().collect()
 }
@@ -347,7 +387,13 @@ fn morsels(text: &[char], spacing: f32, dice: &mut Rng, now: f64) -> Vec<Node> {
     kept.into_iter()
         .map(|(x, y)| {
             let arrive = ARRIVE * x / W as f32 + dice.range(0.0, ARRIVE_JITTER);
-            Node { x: x + dice.range(-0.3, 0.3), y: y + dice.range(-0.3, 0.3), r: MORSEL, left: 1.0, born: now + f64::from(arrive) }
+            Node {
+                x: x + dice.range(-0.3, 0.3),
+                y: y + dice.range(-0.3, 0.3),
+                r: MORSEL,
+                left: 1.0,
+                born: now + f64::from(arrive),
+            }
         })
         .collect()
 }
@@ -385,7 +431,8 @@ impl Physarum {
                 let mut sum = 0.0;
                 for dy in -1..=1 {
                     for dx in -1..=1 {
-                        let (x, y) = ((cx + dx).clamp(0, W as i32 - 1) as usize, (cy + dy).clamp(0, H as i32 - 1) as usize);
+                        let (x, y) =
+                            ((cx + dx).clamp(0, W as i32 - 1) as usize, (cy + dy).clamp(0, H as i32 - 1) as usize);
                         sum += leds[y * W + x][0];
                     }
                 }
@@ -420,9 +467,19 @@ impl Physarum {
                 }
             }
             let left = if first { self.dice.range(0.4, 1.0) } else { 1.0 };
-            self.nodes.push(Node { x: best.1, y: best.2, r: self.dice.range(0.7, 1.4) * 6.0 / scale, left, born: self.t });
+            self.nodes.push(Node {
+                x: best.1,
+                y: best.2,
+                r: self.dice.range(0.7, 1.4) * 6.0 / scale,
+                left,
+                born: self.t,
+            });
             // At the start, all at once; after, one at a time.
-            self.next_node = if self.nodes.len() < want && self.t < 1.0 { self.t } else { self.t + f64::from(self.dice.range(2.0, 10.0)) };
+            self.next_node = if self.nodes.len() < want && self.t < 1.0 {
+                self.t
+            } else {
+                self.t + f64::from(self.dice.range(2.0, 10.0))
+            };
         }
     }
 
@@ -458,9 +515,7 @@ impl Physarum {
         }
     }
 
-    /// The palette: black, then for each colour (the `HUES` anchors, then
-    /// stone) `LIGHTS` steps of lightness, every one a panel level triple
-    /// ([`aligned`]). Worked out once per `mute`.
+    /// [`palette_for`] at this frame's `mute`, worked out once per `mute`.
     fn palette(&mut self, ctx: &Ctx) -> Vec<Rgb> {
         let mute = ctx.get("mute");
         if let Some((m, p)) = &self.palette {
@@ -468,30 +523,9 @@ impl Physarum {
                 return p.clone();
             }
         }
-        let mut palette = vec![Rgb::BLACK];
-        let ramp = |palette: &mut Vec<Rgb>, hue: f32, chroma: f32| {
-            let mut floor = 0.0;
-            for i in 0..LIGHTS {
-                let t = i as f32 / (LIGHTS - 1) as f32;
-                let l = L_DARK + (L_BRIGHT - L_DARK) * t;
-                // Chroma is let in as the ramp rises (the bottom levels
-                // cannot hold a hue anyway), and the densest veins pale
-                // toward bone.
-                let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
-                let (rgb, l) = aligned(oklch(l, c, hue), floor);
-                floor = l;
-                palette.push(rgb);
-            }
-        };
-        for (hue, chroma) in ANCHORS {
-            ramp(&mut palette, hue, chroma);
-        }
-        ramp(&mut palette, STONE.0, STONE.1 / mute.max(0.5));
+        let palette = palette_for(mute);
         if std::env::var_os("PHYSARUM_PALETTE").is_some() {
-            for (k, c) in palette.iter().enumerate().skip(1) {
-                let [r, g, b] = c.to_srgb8();
-                eprintln!("physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}", (k - 1) / LIGHTS, (k - 1) % LIGHTS, to_oklab(*c)[0]);
-            }
+            eprint!("{}", palette_dump(&palette));
         }
         self.palette = Some((mute, palette.clone()));
         palette
@@ -528,53 +562,38 @@ impl Physarum {
     }
 }
 
-/// The panel level triple nearest `target` in OKLab whose lightness is
-/// above `floor`, and that lightness: a colour the panel shows exactly the
-/// same on every refresh (brief 2.1.1), so nothing in the ramp is made by
-/// the firmware alternating two levels - which near black is a visible
-/// shimmer up close, and drifts a muted hue as each channel rounds its own
-/// way. The search is the levels either side of each channel's value and
-/// one more each way, 64 triples.
-fn aligned(target: Rgb, floor: f32) -> (Rgb, f32) {
-    static LIN: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
-    let lin = LIN.get_or_init(|| (0..64).map(|l| srgb8_to_linear(level_code(l))).collect());
-    let near = |v: f32| {
-        let at = lin.iter().rposition(|x| *x <= v).unwrap_or(0) as i32;
-        [at - 1, at, at + 1, at + 2].map(|l| l.clamp(0, 63) as u32)
+/// The palette: black, then for each colour (the `HUES` anchors, then
+/// stone) `LIGHTS` steps of lightness, every one a panel level triple
+/// ([`aligned_ramp`]).
+fn palette_for(mute: f32) -> Vec<Rgb> {
+    let ramp = |hue: f32, chroma: f32| {
+        aligned_ramp((0..LIGHTS).map(|i| {
+            let t = i as f32 / (LIGHTS - 1) as f32;
+            let l = L_DARK + (L_BRIGHT - L_DARK) * t;
+            // Chroma is let in as the ramp rises (the bottom levels
+            // cannot hold a hue anyway), and the densest veins pale
+            // toward bone.
+            let c = chroma * mute * smoothstep(0.0, 0.35, t) * (1.0 - 0.55 * t.powi(3));
+            oklch(l, c, hue)
+        }))
     };
-    let want = to_oklab(target);
-    let mut best: Option<(f32, Rgb, f32)> = None;
-    for r in near(target.r) {
-        for g in near(target.g) {
-            for b in near(target.b) {
-                if r + g + b == 0 {
-                    continue;
-                }
-                let c = level_triple([r, g, b]);
-                let lab = to_oklab(c);
-                if lab[0] <= floor + 0.004 {
-                    continue;
-                }
-                // Hue and chroma weigh a little more than lightness: a
-                // step that is a shade off is fine, one that changes
-                // colour is not.
-                let e = (lab[0] - want[0]).powi(2) + 1.5 * ((lab[1] - want[1]).powi(2) + (lab[2] - want[2]).powi(2));
-                if best.is_none_or(|(be, _, _)| e < be) {
-                    best = Some((e, c, lab[0]));
-                }
-            }
-        }
+    let ramps = ANCHORS.into_iter().chain([(STONE.0, STONE.1 / mute.max(0.5))]);
+    std::iter::once(Rgb::BLACK).chain(ramps.flat_map(|(hue, chroma)| ramp(hue, chroma)).map(|a| a.rgb)).collect()
+}
+
+/// The `PHYSARUM_PALETTE` dump: one line per entry after black.
+fn palette_dump(palette: &[Rgb]) -> String {
+    let mut out = String::new();
+    for (k, c) in palette.iter().enumerate().skip(1) {
+        let [r, g, b] = c.to_srgb8();
+        out += &format!(
+            "physarum palette {:>2}/{:>2}: sRGB {r:>3} {g:>3} {b:>3}  L {:.3}\n",
+            (k - 1) / LIGHTS,
+            (k - 1) % LIGHTS,
+            to_oklab(*c)[0]
+        );
     }
-    match best {
-        Some((_, c, l)) => (c, l),
-        // Nothing lighter in reach: hold the step below's lightness with
-        // the nearest triple a level up on every channel.
-        None => {
-            let [r, g, b] = [target.r, target.g, target.b].map(|v| near(v)[2]);
-            let c = level_triple([r, g, b]);
-            (c, to_oklab(c)[0])
-        }
-    }
+    out
 }
 
 impl Patch for Physarum {
@@ -690,7 +709,37 @@ impl Patch for Physarum {
 
     fn playing(&self) -> Option<Playing> {
         let title = format!("{} food source{}", self.nodes.len(), if self.nodes.len() == 1 { "" } else { "s" });
-        let detail = if self.t - self.time_at < 40.0 { format!("drawing {}", self.time_text.iter().collect::<String>()) } else { "foraging".to_string() };
+        let detail = if self.t - self.time_at < 40.0 {
+            format!("drawing {}", self.time_text.iter().collect::<String>())
+        } else {
+            "foraging".to_string()
+        };
         Some(Playing { title, detail, actions: Vec::new(), notes: Vec::new() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The palette's sRGB bytes, pinned as a 64-bit FNV-1a per `mute`: what
+    /// physarum looks like must not move when the search behind it does. On
+    /// a mismatch the dump is printed, so the diff is readable.
+    #[test]
+    fn the_palette_is_pinned() {
+        let fnv = |palette: &[Rgb]| {
+            palette
+                .iter()
+                .flat_map(|c| c.to_srgb8())
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+        };
+        for (mute, want) in
+            [(0.0, 0x8b26_b305_3308_4b88u64), (1.0, 0x98e0_adb5_2e82_f4ee), (2.0, 0x454d_e693_0c5f_d1a1)]
+        {
+            let palette = palette_for(mute);
+            assert_eq!(palette.len(), 1 + (HUES + 1) * LIGHTS);
+            let got = fnv(&palette);
+            assert_eq!(got, want, "mute {mute}: palette hash {got:#018x}\n{}", palette_dump(&palette));
+        }
     }
 }

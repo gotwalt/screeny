@@ -64,8 +64,7 @@ fn dim() -> Vec<u8> {
 
 /// Send one frame with an explicit `seq` and wait for the drain to close.
 fn one(cx: &mut Ctx, link: &crate::link::FrameLink, seq: u16) -> Result<(), String> {
-    link.send_seq(codec::SOLID, F_KEY, seq, &dim())
-        .map_err(|e| e.to_string())?;
+    link.send_seq(codec::SOLID, F_KEY, seq, &dim()).map_err(|e| e.to_string())?;
     cx.settle();
     Ok(())
 }
@@ -78,10 +77,7 @@ fn wrap(cx: &mut Ctx) -> Result<Outcome, String> {
     let t = cx.telemetry()?;
     verdict(
         t.frames_shown == 4 && t.frames_dropped_stale == 0 && t.seq_gaps == 0,
-        format!(
-            "shown {} stale {} gaps {}",
-            t.frames_shown, t.frames_dropped_stale, t.seq_gaps
-        ),
+        format!("shown {} stale {} gaps {}", t.frames_shown, t.frames_dropped_stale, t.seq_gaps),
     )
 }
 
@@ -102,11 +98,7 @@ fn stale(cx: &mut Ctx) -> Result<Outcome, String> {
             && t.seq_gaps == base.seq_gaps,
         format!(
             "stale {} shown {} -> {} rejected {} gaps {}",
-            t.frames_dropped_stale,
-            base.frames_shown,
-            t.frames_shown,
-            t.frames_rejected,
-            t.seq_gaps
+            t.frames_dropped_stale, base.frames_shown, t.frames_shown, t.frames_rejected, t.seq_gaps
         ),
     )
 }
@@ -143,8 +135,7 @@ fn gaps_across_the_wrap(cx: &mut Ctx) -> Result<Outcome, String> {
     one(cx, &link, 2)?; // 0 and 1 were skipped
     let t = cx.telemetry()?;
     verdict(
-        t.seq_gaps.wrapping_sub(base.seq_gaps) == 2
-            && t.frames_shown.wrapping_sub(base.frames_shown) == 1,
+        t.seq_gaps.wrapping_sub(base.seq_gaps) == 2 && t.frames_shown.wrapping_sub(base.frames_shown) == 1,
         format!(
             "0xFFFF -> 2: gaps +{}, shown +{}",
             t.seq_gaps.wrapping_sub(base.seq_gaps),
@@ -159,25 +150,18 @@ fn new_source_resets_seq(cx: &mut Ctx) -> Result<Outcome, String> {
     // a second sender starting at seq 0 after a five-figure first sender must
     // not be stale, and the counters must not have gone back to zero.
     let a = cx.claim()?;
-    a.send_seq(codec::SOLID, F_KEY, 50_000, &dim())
-        .map_err(|e| e.to_string())?;
+    a.send_seq(codec::SOLID, F_KEY, 50_000, &dim()).map_err(|e| e.to_string())?;
     cx.settle();
     let base = cx.telemetry()?;
 
     // Let A's lock lapse so B is a takeover and not a lockout.
-    std::thread::sleep(std::time::Duration::from_millis(
-        screeny_proto::LOCK_MS as u64 + 150,
-    ));
+    std::thread::sleep(std::time::Duration::from_millis(screeny_proto::LOCK_MS as u64 + 150));
     let b = cx.second_source()?;
-    b.send_seq(codec::SOLID, F_KEY, 0, &dim())
-        .map_err(|e| e.to_string())?;
+    b.send_seq(codec::SOLID, F_KEY, 0, &dim()).map_err(|e| e.to_string())?;
     cx.settle();
     let t = cx.telemetry()?;
     verdict(
-        base.frames_shown == 1
-            && t.frames_shown == 2
-            && t.frames_dropped_stale == 0
-            && t.frames_rx == 2,
+        base.frames_shown == 1 && t.frames_shown == 2 && t.frames_dropped_stale == 0 && t.frames_rx == 2,
         format!(
             "50000 then 0 from a new socket: shown {} stale {} rx {}",
             t.frames_shown, t.frames_dropped_stale, t.frames_rx
@@ -192,19 +176,14 @@ fn identity(cx: &mut Ctx) -> Result<Outcome, String> {
     // non-zero on any device fast enough to draw everything.
     let mut link = cx.claim()?;
     for _ in 0..12 {
-        link.send(codec::SOLID, F_KEY, &dim())
-            .map_err(|e| e.to_string())?;
+        link.send(codec::SOLID, F_KEY, &dim()).map_err(|e| e.to_string())?;
     }
     cx.settle();
-    link.send(codec::SOLID, F_KEY, &[1, 2])
-        .map_err(|e| e.to_string())?; // one byte short
+    link.send(codec::SOLID, F_KEY, &[1, 2]).map_err(|e| e.to_string())?; // one byte short
     cx.settle();
     cx.settle();
     let t = cx.telemetry()?;
-    let rhs = t
-        .frames_shown
-        .wrapping_add(t.frames_dropped_superseded)
-        .wrapping_add(t.frames_dropped_decode);
+    let rhs = t.frames_shown.wrapping_add(t.frames_dropped_superseded).wrapping_add(t.frames_dropped_decode);
     verdict(
         t.frames_rx == rhs && t.frames_dropped_decode == 1 && t.frames_rejected == 0,
         format!(

@@ -89,9 +89,7 @@ impl Drop for ImprovServer {
 fn send(s: &mut TcpStream, replies: &mut Replies, info: &DeviceInfo<'_>) -> io::Result<()> {
     let mut out = [0u8; REPLY_MAX + 1];
     for r in replies.iter() {
-        let n = r
-            .encode(info, &mut out[..REPLY_MAX])
-            .map_err(|_| io::Error::other("improv reply did not fit"))?;
+        let n = r.encode(info, &mut out[..REPLY_MAX]).map_err(|_| io::Error::other("improv reply did not fit"))?;
         out[n] = b'\n';
         s.write_all(&out[..=n])?;
     }
@@ -99,12 +97,7 @@ fn send(s: &mut TcpStream, replies: &mut Replies, info: &DeviceInfo<'_>) -> io::
     Ok(())
 }
 
-fn serve(
-    mut s: TcpStream,
-    handle: &SimHandle,
-    instance: &str,
-    stop: &AtomicBool,
-) -> io::Result<()> {
+fn serve(mut s: TcpStream, handle: &SimHandle, instance: &str, stop: &AtomicBool) -> io::Result<()> {
     s.set_read_timeout(Some(TICK))?;
     s.set_nodelay(true)?;
     let info = DeviceInfo { firmware: "screeny-sim", version: "sim", chip: "sim", name: instance };
@@ -122,8 +115,7 @@ fn serve(
         let now_ms = (handle.now_us() / 1000) as u32;
         for &b in &buf[..n] {
             let Some(parsed) = parser.push(b) else { continue };
-            if let Some(sub) = session.handle(parsed, &handle.wifi_observed(), now_ms, &mut replies)
-            {
+            if let Some(sub) = session.handle(parsed, &handle.wifi_observed(), now_ms, &mut replies) {
                 // The password stops here: the model takes the SSID only.
                 handle.post_wifi(&String::from_utf8_lossy(sub.ssid));
             }

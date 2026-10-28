@@ -26,7 +26,11 @@ fn groups(rules: &[suite::Rule]) -> Vec<String> {
         .iter()
         .map(|r| {
             let major = r.section.split('.').next().unwrap_or(r.section);
-            if bare.contains(&major) { major.to_string() } else { r.section.to_string() }
+            if bare.contains(&major) {
+                major.to_string()
+            } else {
+                r.section.to_string()
+            }
         })
         .collect();
     out.sort();
@@ -63,7 +67,8 @@ fn the_wire_level_suite_passes_against_the_simulator() {
                         cap_probe: false,
                         restore_idle: 0,
                     };
-                    let summary = suite::run(&opts).unwrap_or_else(|e| panic!("section {only}: the suite did not run: {e}"));
+                    let summary =
+                        suite::run(&opts).unwrap_or_else(|e| panic!("section {only}: the suite did not run: {e}"));
                     dev.shutdown();
                     (only.clone(), summary)
                 })
@@ -84,20 +89,14 @@ fn the_wire_level_suite_passes_against_the_simulator() {
         rules.len()
     );
     assert_eq!(
-        summary.failed, 0,
+        summary.failed,
+        0,
         "{} of {} rules failed, in sections {failed:?}; the report above says which",
         summary.failed,
         summary.passed + summary.failed + summary.skipped
     );
     // A guard against the catalogue silently emptying itself: if a refactor
     // stopped registering rules, every assertion above would still hold.
-    assert!(
-        summary.passed >= 60,
-        "only {} rules ran; the catalogue has shrunk",
-        summary.passed
-    );
-    assert_eq!(
-        summary.skipped, 3,
-        "expected exactly the two --slow rules and the cap probe to be skipped"
-    );
+    assert!(summary.passed >= 60, "only {} rules ran; the catalogue has shrunk", summary.passed);
+    assert_eq!(summary.skipped, 3, "expected exactly the two --slow rules and the cap probe to be skipped");
 }

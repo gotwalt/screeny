@@ -56,8 +56,7 @@ pub const MOODS: usize = 8;
 /// Card 182: **the one list**. `Mood::new` puts the name on from here rather
 /// than each arm carrying a literal, and `dials::MOOD_CHOICES` - the `mood`
 /// parameter's named stops - is built from it.
-pub const MOOD_NAMES: [&str; MOODS] =
-    ["drift", "sway", "breathe", "corners", "unison", "tide", "rings", "streamlines"];
+pub const MOOD_NAMES: [&str; MOODS] = ["drift", "sway", "breathe", "corners", "unison", "tide", "rings", "streamlines"];
 
 impl Mood {
     /// Nothing moving. The arms of [`Mood::new`] say only what they change, and
@@ -107,7 +106,10 @@ impl Mood {
             // Rigid right-angle corners, carried round by a broad wave.
             3 => Mood {
                 turn: 18.0,
-                ripples: [ripple((60.0, 110.0), (0.3, 0.55), (0.15, 0.3)), ripple((10.0, 20.0), (0.9, 1.3), (0.3, 0.5))],
+                ripples: [
+                    ripple((60.0, 110.0), (0.3, 0.55), (0.15, 0.3)),
+                    ripple((10.0, 20.0), (0.9, 1.3), (0.3, 0.5)),
+                ],
                 open: (90.0, 90.0),
                 ..Mood::STILL
             },
@@ -139,7 +141,10 @@ impl Mood {
             // into long curves across the whole panel.
             _ => Mood {
                 turn: 5.0,
-                ripples: [ripple((30.0, 50.0), (0.18, 0.3), (0.12, 0.22)), ripple((6.0, 12.0), (0.45, 0.7), (0.15, 0.3))],
+                ripples: [
+                    ripple((30.0, 50.0), (0.18, 0.3), (0.12, 0.22)),
+                    ripple((6.0, 12.0), (0.45, 0.7), (0.15, 0.3)),
+                ],
                 open: (180.0, 180.0),
                 ..Mood::STILL
             },
@@ -437,7 +442,12 @@ mod tests {
                         assert!((v - prev_v[i][h]).abs() <= motor.acc * dt * 1.05 + 1e-3, "{}: jerked", ambient.name());
                         prev_v[i][h] = v;
                         if frame == 26 * 30 - 1 {
-                            assert!(shortest(angles[i][h], pose[i][h]).abs() < 0.5, "{}: dial {i} hand {h} at {}", ambient.name(), angles[i][h]);
+                            assert!(
+                                shortest(angles[i][h], pose[i][h]).abs() < 0.5,
+                                "{}: dial {i} hand {h} at {}",
+                                ambient.name(),
+                                angles[i][h]
+                            );
                         }
                     }
                 }

@@ -86,11 +86,7 @@ impl Scorer {
 
     #[inline(always)]
     fn emit_lab(lut: &[f32; 256], c: [u8; 3]) -> [f32; 3] {
-        oklab([
-            lut[c[0] as usize],
-            lut[c[1] as usize],
-            lut[c[2] as usize],
-        ])
+        oklab([lut[c[0] as usize], lut[c[1] as usize], lut[c[2] as usize]])
     }
 
     /// Cache the source frame's emitted Oklab. Call once per frame, before

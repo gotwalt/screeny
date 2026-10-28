@@ -12,8 +12,7 @@ use common::*;
 use screeny_device_api::error::ErrorReply;
 use screeny_device_api::form::MAX_FORM_LEN;
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply,
-    TelemetryReply, WifiReply,
+    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 use screeny_device_api::route::{Body, MAX_REQUEST_LEN, ROUTES};
@@ -23,62 +22,27 @@ use serde::Serialize;
 #[track_caller]
 fn exactly<T: Serialize>(what: &str, value: &T, bound: usize) {
     let len = wire_len(value);
-    assert_eq!(
-        len, bound,
-        "{what}: worst case is {len} bytes, MAX_JSON_LEN says {bound}"
-    );
+    assert_eq!(len, bound, "{what}: worst case is {len} bytes, MAX_JSON_LEN says {bound}");
 }
 
 #[test]
 fn every_reply_bound_is_exact() {
     exactly("StatusReply", &worst_status(), StatusReply::MAX_JSON_LEN);
-    exactly(
-        "TelemetryReply",
-        &worst_telemetry(),
-        TelemetryReply::MAX_JSON_LEN,
-    );
-    exactly(
-        "NetworksReply",
-        &worst_networks(),
-        NetworksReply::MAX_JSON_LEN,
-    );
+    exactly("TelemetryReply", &worst_telemetry(), TelemetryReply::MAX_JSON_LEN);
+    exactly("NetworksReply", &worst_networks(), NetworksReply::MAX_JSON_LEN);
     exactly("WifiReply", &worst_wifi(), WifiReply::MAX_JSON_LEN);
     exactly("PanicReply", &worst_panic_reply(), PanicReply::MAX_JSON_LEN);
-    exactly(
-        "SettingsReply",
-        &worst_settings_reply(),
-        SettingsReply::MAX_JSON_LEN,
-    );
-    exactly(
-        "FirmwareReply",
-        &worst_firmware(),
-        FirmwareReply::MAX_JSON_LEN,
-    );
-    exactly(
-        "AcceptedReply",
-        &worst_accepted(),
-        AcceptedReply::MAX_JSON_LEN,
-    );
+    exactly("SettingsReply", &worst_settings_reply(), SettingsReply::MAX_JSON_LEN);
+    exactly("FirmwareReply", &worst_firmware(), FirmwareReply::MAX_JSON_LEN);
+    exactly("AcceptedReply", &worst_accepted(), AcceptedReply::MAX_JSON_LEN);
     exactly("ErrorReply", &worst_error(), ErrorReply::MAX_JSON_LEN);
 }
 
 #[test]
 fn every_request_bound_is_exact() {
-    exactly(
-        "SettingsRequest",
-        &worst_settings_request(),
-        SettingsRequest::MAX_JSON_LEN,
-    );
-    exactly(
-        "RebootRequest",
-        &worst_reboot_request(),
-        RebootRequest::MAX_JSON_LEN,
-    );
-    exactly(
-        "IdentifyRequest",
-        &worst_identify_request(),
-        IdentifyRequest::MAX_JSON_LEN,
-    );
+    exactly("SettingsRequest", &worst_settings_request(), SettingsRequest::MAX_JSON_LEN);
+    exactly("RebootRequest", &worst_reboot_request(), RebootRequest::MAX_JSON_LEN);
+    exactly("IdentifyRequest", &worst_identify_request(), IdentifyRequest::MAX_JSON_LEN);
 }
 
 #[test]
@@ -92,17 +56,10 @@ fn a_typical_reply_is_far_shorter_than_its_bound() {
     // cost 3,488 bytes of the device's stack, because the firmware moves one
     // of these through picoserve's response chain many times in one inlined
     // async frame. The breadcrumb is `PanicReply` on its own route.
-    let real = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/golden/status.json"
-    ))
-    .unwrap();
+    let real = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/status.json")).unwrap();
     let value: StatusReply = serde_json::from_str(&real).unwrap();
     let on_the_wire = wire(&value).len();
-    assert!(
-        on_the_wire < 400,
-        "a real status reply is {on_the_wire} bytes"
-    );
+    assert!(on_the_wire < 400, "a real status reply is {on_the_wire} bytes");
     assert!(
         StatusReply::MAX_JSON_LEN > on_the_wire * 2,
         "the bound is {} and a real reply is {on_the_wire}",
@@ -179,8 +136,5 @@ fn no_reply_is_bigger_than_the_one_on_the_hot_path() {
     // it (device-web decision 10 dropped card 229) and its reply enum has no
     // variant for it, which is why this list is explicit rather than "every
     // type in the module".
-    println!(
-        "NetworksReply = {} bytes (not served by the firmware)",
-        size_of::<NetworksReply>()
-    );
+    println!("NetworksReply = {} bytes (not served by the firmware)", size_of::<NetworksReply>());
 }

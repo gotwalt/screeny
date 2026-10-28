@@ -127,9 +127,7 @@ fn answered(ask: Ask, frames: &[Frame]) -> bool {
     frames.iter().any(|f| match (ask, f) {
         (Ask::Info, Frame::Result { command, .. }) => *command == cmd::GET_DEVICE_INFO,
         (Ask::State, Frame::State(_)) => true,
-        (Ask::Scan, Frame::Result { command, strings }) => {
-            *command == cmd::GET_WIFI_NETWORKS && strings.is_empty()
-        }
+        (Ask::Scan, Frame::Result { command, strings }) => *command == cmd::GET_WIFI_NETWORKS && strings.is_empty(),
         (_, Frame::Error(e)) => matches!(e, ErrorCode::InvalidRpc | ErrorCode::UnknownRpc),
         _ => false,
     })
@@ -162,9 +160,7 @@ pub fn query(port: &mut dyn Port, ask: Ask, wait: Duration) -> Result<Vec<Frame>
             Err(e)
                 if matches!(
                     e.kind(),
-                    std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::TimedOut
-                        | std::io::ErrorKind::Interrupted
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted
                 ) =>
             {
                 std::thread::sleep(Duration::from_millis(20));

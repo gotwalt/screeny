@@ -44,9 +44,7 @@ impl Frame {
     /// An all-black frame.
     #[must_use]
     pub fn black() -> Self {
-        Frame {
-            px: Box::new([0u8; NBYTES]),
-        }
+        Frame { px: Box::new([0u8; NBYTES]) }
     }
 
     /// A frame of one colour.
@@ -219,16 +217,8 @@ impl<'a> Pixels<'a> {
     pub fn validate(&self) -> crate::Result<()> {
         self.check()?;
         if let Pixels::Indexed { palette, indices } = self {
-            if let Some((pixel, &index)) = indices
-                .iter()
-                .enumerate()
-                .find(|(_, i)| **i as usize >= palette.len())
-            {
-                return Err(crate::Error::BadIndex {
-                    index,
-                    pixel,
-                    palette: palette.len(),
-                });
+            if let Some((pixel, &index)) = indices.iter().enumerate().find(|(_, i)| **i as usize >= palette.len()) {
+                return Err(crate::Error::BadIndex { index, pixel, palette: palette.len() });
             }
         }
         Ok(())
@@ -244,22 +234,14 @@ impl<'a> Pixels<'a> {
     pub fn check(&self) -> crate::Result<()> {
         use crate::Error;
         match self {
-            Pixels::Rgb(px) if px.len() != NBYTES => Err(Error::Frame {
-                what: "an RGB frame",
-                got: px.len(),
-                want: NBYTES,
-            }),
-            Pixels::Indexed { indices, .. } if indices.len() != NPIX => Err(Error::Frame {
-                what: "an index plane",
-                got: indices.len(),
-                want: NPIX,
-            }),
+            Pixels::Rgb(px) if px.len() != NBYTES => {
+                Err(Error::Frame { what: "an RGB frame", got: px.len(), want: NBYTES })
+            }
+            Pixels::Indexed { indices, .. } if indices.len() != NPIX => {
+                Err(Error::Frame { what: "an index plane", got: indices.len(), want: NPIX })
+            }
             Pixels::Indexed { palette, .. } if palette.is_empty() || palette.len() > 256 => {
-                Err(Error::Frame {
-                    what: "a palette",
-                    got: palette.len(),
-                    want: 256,
-                })
+                Err(Error::Frame { what: "a palette", got: palette.len(), want: 256 })
             }
             _ => Ok(()),
         }
@@ -384,10 +366,7 @@ pub struct FnSource<F> {
 impl<F: FnMut(FrameTime, &mut Frame) -> bool> FnSource<F> {
     /// Wrap `f`.
     pub fn new(name: impl Into<String>, f: F) -> Self {
-        FnSource {
-            f,
-            name: name.into(),
-        }
+        FnSource { f, name: name.into() }
     }
 }
 
@@ -415,11 +394,7 @@ pub struct RawReader<R> {
 impl<R: std::io::Read> RawReader<R> {
     /// Wrap a reader.
     pub fn new(r: R) -> Self {
-        RawReader {
-            r,
-            buf: vec![0u8; NBYTES],
-            truncated: false,
-        }
+        RawReader { r, buf: vec![0u8; NBYTES], truncated: false }
     }
 }
 

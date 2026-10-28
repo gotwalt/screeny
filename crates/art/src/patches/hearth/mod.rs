@@ -262,23 +262,86 @@ pub(crate) const DARK_RAMPS: [[[u32; 3]; FIRE_STEPS]; 3] = [
     // "steady red": card 374's ramp at its nearest levels, green held at 0
     // until it is past half a level - the same look, steadied.
     [
-        [2, 0, 0], [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0], [7, 1, 0], [8, 1, 0], [10, 1, 0],
-        [12, 2, 0], [14, 2, 0], [16, 2, 0], [18, 3, 0], [20, 4, 0], [23, 5, 0], [25, 6, 0], [28, 7, 0],
-        [30, 8, 0], [32, 10, 1], [35, 11, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+        [2, 0, 0],
+        [3, 0, 0],
+        [4, 0, 0],
+        [5, 0, 0],
+        [6, 0, 0],
+        [7, 1, 0],
+        [8, 1, 0],
+        [10, 1, 0],
+        [12, 2, 0],
+        [14, 2, 0],
+        [16, 2, 0],
+        [18, 3, 0],
+        [20, 4, 0],
+        [23, 5, 0],
+        [25, 6, 0],
+        [28, 7, 0],
+        [30, 8, 0],
+        [32, 10, 1],
+        [35, 11, 1],
+        [37, 13, 2],
+        [40, 15, 3],
+        [43, 17, 4],
+        [45, 19, 5],
+        [48, 22, 6],
     ],
     // "deeper red": one level darker at the bottom and pure red for longer,
     // so the tips and the edges fade through deep red rather than orange.
     [
-        [1, 0, 0], [2, 0, 0], [3, 0, 0], [4, 0, 0], [5, 0, 0], [6, 0, 0], [8, 0, 0], [10, 1, 0],
-        [12, 1, 0], [14, 1, 0], [16, 2, 0], [18, 2, 0], [20, 3, 0], [23, 4, 0], [25, 5, 0], [28, 6, 0],
-        [30, 8, 0], [32, 10, 1], [35, 11, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+        [1, 0, 0],
+        [2, 0, 0],
+        [3, 0, 0],
+        [4, 0, 0],
+        [5, 0, 0],
+        [6, 0, 0],
+        [8, 0, 0],
+        [10, 1, 0],
+        [12, 1, 0],
+        [14, 1, 0],
+        [16, 2, 0],
+        [18, 2, 0],
+        [20, 3, 0],
+        [23, 4, 0],
+        [25, 5, 0],
+        [28, 6, 0],
+        [30, 8, 0],
+        [32, 10, 1],
+        [35, 11, 1],
+        [37, 13, 2],
+        [40, 15, 3],
+        [43, 17, 4],
+        [45, 19, 5],
+        [48, 22, 6],
     ],
     // "warmer": green comes in early, so the cool end is a dim orange
     // rather than a red.
     [
-        [2, 0, 0], [3, 1, 0], [4, 1, 0], [5, 1, 0], [6, 2, 0], [7, 2, 0], [8, 2, 0], [10, 3, 0],
-        [12, 3, 0], [14, 4, 0], [16, 4, 0], [18, 5, 0], [20, 6, 0], [23, 7, 0], [25, 8, 0], [28, 9, 0],
-        [30, 10, 1], [32, 11, 1], [35, 12, 1], [37, 13, 2], [40, 15, 3], [43, 17, 4], [45, 19, 5], [48, 22, 6],
+        [2, 0, 0],
+        [3, 1, 0],
+        [4, 1, 0],
+        [5, 1, 0],
+        [6, 2, 0],
+        [7, 2, 0],
+        [8, 2, 0],
+        [10, 3, 0],
+        [12, 3, 0],
+        [14, 4, 0],
+        [16, 4, 0],
+        [18, 5, 0],
+        [20, 6, 0],
+        [23, 7, 0],
+        [25, 8, 0],
+        [28, 9, 0],
+        [30, 10, 1],
+        [32, 11, 1],
+        [35, 12, 1],
+        [37, 13, 2],
+        [40, 15, 3],
+        [43, 17, 4],
+        [45, 19, 5],
+        [48, 22, 6],
     ],
 ];
 
@@ -687,13 +750,17 @@ impl Hearth {
             // Sat down into the gap: its axis a little under the tops of
             // the two it rests on, plus its own radius.
             let y = 0.5 * (a.y + a.r + b.y + b.r) + 0.6 * r;
-            let (x, z) = (0.5 * (a.x + a.half * a.yaw.cos() + b.x - b.half * b.yaw.cos()), 0.5 * (a.z + b.z) + rng.range(-3.0, 3.0));
+            let (x, z) = (
+                0.5 * (a.x + a.half * a.yaw.cos() + b.x - b.half * b.yaw.cos()),
+                0.5 * (a.z + b.z) + rng.range(-3.0, 3.0),
+            );
             let (half, yaw) = (rng.range(16.0, 22.0), rng.range(-0.6, 0.6));
             logs.push(log(&mut rng, x, y, z, r, half, yaw));
         }
         // The pile centred and kept off the side walls: the fire is as
         // likely to reach out of frame on the left as on the right.
-        let (lo, hi) = logs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), l| (lo.min(l.x - l.reach()), hi.max(l.x + l.reach())));
+        let (lo, hi) =
+            logs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), l| (lo.min(l.x - l.reach()), hi.max(l.x + l.reach())));
         let squeeze = (2.0 * SPREAD * WIDE / (hi - lo)).min(1.0);
         let mid = 0.5 * (lo + hi);
         for l in &mut logs {
@@ -849,16 +916,19 @@ impl Hearth {
                 self.bed[c.at] = [0.0; 4];
                 continue;
             }
-            let tongues = (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0 + yf / 5.0, gt * 0.7, self.salt)).max(0.0).powf(1.2);
+            let tongues =
+                (0.2 + 1.8 * noise::fbm3(xf / 7.0, zf / 7.0 + yf / 5.0, gt * 0.7, self.salt)).max(0.0).powf(1.2);
             // Wood (experiment): the gas comes out of the logs in pockets -
             // a crack, an end, a hot gap - each swelling, burning hard and
             // dying in a second or two of gas time, not as a burner's
             // steady sheet.
-            let pocket = smoothstep(0.05, 0.45, noise::fbm3(xf / 9.0, zf / 6.0 + yf / 6.0, gt * 0.9, self.salt ^ 0x9e3d));
+            let pocket =
+                smoothstep(0.05, 0.45, noise::fbm3(xf / 9.0, zf / 6.0 + yf / 6.0, gt * 0.9, self.salt ^ 0x9e3d));
             let wood_release = 1.0 - wood + wood * 1.6 * pocket;
             // Held thinner toward the shell's edge: the surfaces and gaps
             // together give off far more than card 372's sheet otherwise.
-            let level = 1.5 * smoothstep(lo, lo + 0.6, release * (0.35 + tongues) * breath * wood_release) * release.min(1.0);
+            let level =
+                1.5 * smoothstep(lo, lo + 0.6, release * (0.35 + tongues) * breath * wood_release) * release.min(1.0);
             self.bed[c.at] = [level, 0.6 * release.min(1.0) * shimmer, 0.0, 0.0];
         }
         let k = self.grid.k;
@@ -874,7 +944,8 @@ impl Hearth {
         let drift = 3.0 * noise::fbm1(t / 21.0, self.salt ^ 0xd1f7) * if stove { 0.3 } else { 1.0 };
         let (gust, surge) = self.gust.as_ref().map_or((0.0, 0.0), |g| {
             let a = ((self.t - g.start) / g.length).clamp(0.0, 1.0) as f32;
-            let env = (std::f32::consts::PI * a).sin().powi(2) * (1.0 + 0.25 * noise::fbm1(t * 0.9, self.salt ^ 0x6057));
+            let env =
+                (std::f32::consts::PI * a).sin().powi(2) * (1.0 + 0.25 * noise::fbm1(t * 0.9, self.salt ^ 0x6057));
             (g.peak * env, env * g.peak.abs() / 18.0)
         });
         let gust = if stove { 0.0 } else { gust };
@@ -935,7 +1006,10 @@ impl Hearth {
         self.sparks[4 * slot + 2] = [pos[0], pos[1], pos[2], 0.0];
         self.sparks[4 * slot + 3] = [0.0; 4];
         self.bounces_read[slot] = [0.0; 4];
-        self.spawns.push((slot, [[pos[0], pos[1], pos[2], heat], [v[0], v[1], v[2], cooling], [pos[0], pos[1], pos[2], 0.0], [0.0; 4]]));
+        self.spawns.push((
+            slot,
+            [[pos[0], pos[1], pos[2], heat], [v[0], v[1], v[2], cooling], [pos[0], pos[1], pos[2], 0.0], [0.0; 4]],
+        ));
     }
 
     /// The dice: gusts, log settles, and single sparks.
@@ -1110,8 +1184,11 @@ impl Hearth {
         let (leds, bare) = leds.split_at(N);
         let mut light: Vec<Rgb> = leds.iter().map(|l| Rgb::new(l[0], l[1], l[2])).collect();
         // How much of each LED's fire the soot in front of it has taken.
-        let soot: Vec<f32> =
-            light.iter().zip(bare).map(|(c, b)| if b[0] > 1e-4 { (1.0 - c.luma() / b[0]).clamp(0.0, 1.0) } else { 0.0 }).collect();
+        let soot: Vec<f32> = light
+            .iter()
+            .zip(bare)
+            .map(|(c, b)| if b[0] > 1e-4 { (1.0 - c.luma() / b[0]).clamp(0.0, 1.0) } else { 0.0 })
+            .collect();
         for k in 0..EMBERS {
             if self.sparks[4 * k][3] > EMBER_OUT {
                 let spark = self.sparks[4 * k..4 * k + 3].to_vec();
@@ -1275,7 +1352,13 @@ impl Patch for Hearth {
         }
         if self.sim.is_none() {
             self.sim = Some(match Gpu::shared() {
-                Ok(gpu) => Some(Sim::new(gpu, self.grid.dims(), self.grid.bed_rows() as u32, self.grid.sweeps, &self.ramp.table())),
+                Ok(gpu) => Some(Sim::new(
+                    gpu,
+                    self.grid.dims(),
+                    self.grid.bed_rows() as u32,
+                    self.grid.sweeps,
+                    &self.ramp.table(),
+                )),
                 Err(e) => {
                     eprintln!("screeny-art: hearth: {e}; rendering black");
                     None
@@ -1320,6 +1403,11 @@ impl Patch for Hearth {
         } else {
             "burning quietly".to_string()
         };
-        Some(Playing { title: format!("a fire of {} logs", self.logs.len()), detail, actions: Vec::new(), notes: Vec::new() })
+        Some(Playing {
+            title: format!("a fire of {} logs", self.logs.len()),
+            detail,
+            actions: Vec::new(),
+            notes: Vec::new(),
+        })
     }
 }

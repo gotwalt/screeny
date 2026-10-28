@@ -88,13 +88,7 @@ pub fn rules() -> Vec<Rule> {
             flags: RETRY,
             run: stream_timeout,
         },
-        Rule {
-            section: "7.3",
-            name: "HOLD_MS in HOLD -> IDLE",
-            secs: 13.0,
-            flags: SLOW | RETRY,
-            run: hold_to_idle,
-        },
+        Rule { section: "7.3", name: "HOLD_MS in HOLD -> IDLE", secs: 13.0, flags: SLOW | RETRY, run: hold_to_idle },
         Rule {
             section: "7.5",
             name: "HOLD_FOREVER stays in HOLD and still releases the lock",
@@ -118,8 +112,7 @@ fn keep_alive(link: &mut FrameLink, ms: u64) -> Result<(), String> {
     let t0 = Instant::now();
     let p = dim();
     while t0.elapsed() < Duration::from_millis(ms) {
-        link.send(codec::SOLID, F_KEY, &p)
-            .map_err(|e| e.to_string())?;
+        link.send(codec::SOLID, F_KEY, &p).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(33));
     }
     Ok(())
@@ -129,10 +122,7 @@ fn busies(link: &FrameLink) -> Vec<(u8, u32)> {
     link.poll()
         .into_iter()
         .filter_map(|r| match r {
-            OwnedReply::Busy {
-                reason,
-                remaining_ms,
-            } => Some((reason, remaining_ms)),
+            OwnedReply::Busy { reason, remaining_ms } => Some((reason, remaining_ms)),
             _ => None,
         })
         .collect()
@@ -146,12 +136,7 @@ fn adopt(cx: &mut Ctx) -> Result<Outcome, String> {
     let t = cx.telemetry()?;
     verdict(
         t.state == tstate::LIVE && t.frames_shown >= 1 && t.frames_rejected == 0,
-        format!(
-            "state {} shown {} rejected {}",
-            crate::state_name(t.state),
-            t.frames_shown,
-            t.frames_rejected
-        ),
+        format!("state {} shown {} rejected {}", crate::state_name(t.state), t.frames_shown, t.frames_rejected),
     )
 }
 
@@ -164,20 +149,14 @@ fn locked_out(cx: &mut Ctx) -> Result<Outcome, String> {
     let p = dim();
     for _ in 0..5 {
         a.send(codec::SOLID, F_KEY, &p).map_err(|e| e.to_string())?;
-        b.send_seq(codec::SOLID, F_KEY, 1, &p)
-            .map_err(|e| e.to_string())?;
+        b.send_seq(codec::SOLID, F_KEY, 1, &p).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(40));
     }
     cx.settle();
     let t = cx.telemetry()?;
     verdict(
         t.frames_rejected > base.frames_rejected && t.state == tstate::LIVE,
-        format!(
-            "rejected {} -> {}, state {}",
-            base.frames_rejected,
-            t.frames_rejected,
-            crate::state_name(t.state)
-        ),
+        format!("rejected {} -> {}, state {}", base.frames_rejected, t.frames_rejected, crate::state_name(t.state)),
     )
 }
 
@@ -194,8 +173,7 @@ fn busy_body(cx: &mut Ctx) -> Result<Outcome, String> {
     let mut got: Option<(u8, u32)> = None;
     for _ in 0..6 {
         a.send(codec::SOLID, F_KEY, &p).map_err(|e| e.to_string())?;
-        b.send_seq(codec::SOLID, F_KEY, 1, &p)
-            .map_err(|e| e.to_string())?;
+        b.send_seq(codec::SOLID, F_KEY, 1, &p).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(40));
         if let Some(x) = busies(&b).into_iter().next() {
             got = Some(x);
@@ -224,18 +202,14 @@ fn busy_rate_limit(cx: &mut Ctx) -> Result<Outcome, String> {
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_millis(2_100) {
         a.send(codec::SOLID, F_KEY, &p).map_err(|e| e.to_string())?;
-        b.send_seq(codec::SOLID, F_KEY, 1, &p)
-            .map_err(|e| e.to_string())?;
+        b.send_seq(codec::SOLID, F_KEY, 1, &p).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(33));
         count += busies(&b).len();
     }
     let t = cx.telemetry()?;
     verdict(
         (1..=3).contains(&count),
-        format!(
-            "{count} BUSY packets for {} rejected frames over 2.1 s",
-            t.frames_rejected
-        ),
+        format!("{count} BUSY packets for {} rejected frames over 2.1 s", t.frames_rejected),
     )
 }
 
@@ -253,8 +227,7 @@ fn busy_not_telemetry(cx: &mut Ctx) -> Result<Outcome, String> {
     let mut telem = 0usize;
     for _ in 0..6 {
         a.send(codec::SOLID, F_KEY, &p).map_err(|e| e.to_string())?;
-        b.send_seq(codec::SOLID, F_KEY | F_STATS_REQ, 1, &p)
-            .map_err(|e| e.to_string())?;
+        b.send_seq(codec::SOLID, F_KEY | F_STATS_REQ, 1, &p).map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(40));
         for r in b.poll() {
             match r {
@@ -264,10 +237,7 @@ fn busy_not_telemetry(cx: &mut Ctx) -> Result<Outcome, String> {
             }
         }
     }
-    verdict(
-        busy >= 1 && telem == 0,
-        format!("{busy} BUSY, {telem} TELEMETRY to the locked-out source"),
-    )
+    verdict(busy >= 1 && telem == 0, format!("{busy} BUSY, {telem} TELEMETRY to the locked-out source"))
 }
 
 fn takeover(cx: &mut Ctx) -> Result<Outcome, String> {
@@ -303,16 +273,14 @@ fn takeover(cx: &mut Ctx) -> Result<Outcome, String> {
 fn final_releases(cx: &mut Ctx) -> Result<Outcome, String> {
     let mut a = cx.claim()?;
     keep_alive(&mut a, 150)?;
-    a.send(codec::SOLID, F_KEY | F_FINAL, &dim())
-        .map_err(|e| e.to_string())?;
+    a.send(codec::SOLID, F_KEY | F_FINAL, &dim()).map_err(|e| e.to_string())?;
     cx.settle();
     let held = cx.telemetry()?;
 
     // "so any sender may take over instantly" - well inside LOCK_MS.
     let mut b = cx.second_source()?;
     let _ = b.poll();
-    b.send(codec::SOLID, F_KEY, &dim())
-        .map_err(|e| e.to_string())?;
+    b.send(codec::SOLID, F_KEY, &dim()).map_err(|e| e.to_string())?;
     cx.settle();
     let late_busy = busies(&b).len();
     let t = cx.telemetry()?;
@@ -332,8 +300,7 @@ fn final_that_does_not_decode(cx: &mut Ctx) -> Result<Outcome, String> {
     // nothing, so one damaged packet cannot hand the panel to a stranger.
     let mut a = cx.claim()?;
     keep_alive(&mut a, 150)?;
-    a.send(codec::SOLID, F_KEY | F_FINAL, &[1, 2])
-        .map_err(|e| e.to_string())?; // one byte short
+    a.send(codec::SOLID, F_KEY | F_FINAL, &[1, 2]).map_err(|e| e.to_string())?; // one byte short
     cx.settle();
     let after = cx.telemetry()?;
 
@@ -341,14 +308,11 @@ fn final_that_does_not_decode(cx: &mut Ctx) -> Result<Outcome, String> {
     let b = cx.second_source()?;
     let _ = b.poll();
     let rej_before = after.frames_rejected;
-    b.send_seq(codec::SOLID, F_KEY, 1, &dim())
-        .map_err(|e| e.to_string())?;
+    b.send_seq(codec::SOLID, F_KEY, 1, &dim()).map_err(|e| e.to_string())?;
     cx.settle();
     let t = cx.telemetry()?;
     verdict(
-        after.state == tstate::LIVE
-            && after.frames_dropped_decode == 1
-            && t.frames_rejected > rej_before,
+        after.state == tstate::LIVE && after.frames_dropped_decode == 1 && t.frames_rejected > rej_before,
         format!(
             "state {} decode {} rejected {} -> {}",
             crate::state_name(after.state),
@@ -401,8 +365,7 @@ fn stream_timeout(cx: &mut Ctx) -> Result<Outcome, String> {
 fn hold_to_idle(cx: &mut Ctx) -> Result<Outcome, String> {
     // Section 7.3/7.5, at the spec's own HOLD_MS. Eleven seconds of wall
     // clock, which is why this one is behind --slow.
-    cx.ctrl
-        .request(Request::SetIdle(screeny_proto::control::IdleMode::Status))?;
+    cx.ctrl.request(Request::SetIdle(screeny_proto::control::IdleMode::Status))?;
     let mut a = cx.claim()?;
     keep_alive(&mut a, 150)?;
     std::thread::sleep(Duration::from_millis(STREAM_TIMEOUT_MS + 300));
@@ -411,11 +374,7 @@ fn hold_to_idle(cx: &mut Ctx) -> Result<Outcome, String> {
     let t = cx.telemetry()?;
     verdict(
         held.state == tstate::HOLD && t.state == tstate::IDLE,
-        format!(
-            "{} -> {} after HOLD_MS",
-            crate::state_name(held.state),
-            crate::state_name(t.state)
-        ),
+        format!("{} -> {} after HOLD_MS", crate::state_name(held.state), crate::state_name(t.state)),
     )
 }
 
@@ -424,19 +383,11 @@ fn hold_forever(cx: &mut Ctx) -> Result<Outcome, String> {
     // state byte stays HOLD indefinitely and the lock is still released on
     // the stream timeout as usual." Put back to STATUS on the way out - and
     // the suite's own restore does it again for good measure.
-    cx.ctrl
-        .request(Request::SetIdle(screeny_proto::control::IdleMode::HoldForever))?;
+    cx.ctrl.request(Request::SetIdle(screeny_proto::control::IdleMode::HoldForever))?;
     let mut a = cx.claim()?;
     keep_alive(&mut a, 150)?;
     std::thread::sleep(Duration::from_millis(STREAM_TIMEOUT_MS + HOLD_MS + 800));
     let t = cx.telemetry()?;
-    cx.ctrl
-        .request(Request::SetIdle(screeny_proto::control::IdleMode::Status))?;
-    verdict(
-        t.state == tstate::HOLD,
-        format!(
-            "{} after STREAM_TIMEOUT_MS + HOLD_MS",
-            crate::state_name(t.state)
-        ),
-    )
+    cx.ctrl.request(Request::SetIdle(screeny_proto::control::IdleMode::Status))?;
+    verdict(t.state == tstate::HOLD, format!("{} after STREAM_TIMEOUT_MS + HOLD_MS", crate::state_name(t.state)))
 }

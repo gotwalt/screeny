@@ -60,11 +60,7 @@ impl Led {
                 stamp[y * scale + x] = ((core + halo).min(1.0) * 4096.0) as u16;
             }
         }
-        Led {
-            scale,
-            stamp,
-            buf: vec![0u32; scale * W * (scale * H + OVERLAY_H)],
-        }
+        Led { scale, stamp, buf: vec![0u32; scale * W * (scale * H + OVERLAY_H)] }
     }
 
     /// Output width in pixels.

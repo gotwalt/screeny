@@ -132,7 +132,10 @@ fn the_fire_carries_to_another_grid() {
         params.set(PARAMS, "speed", speed);
         let after = run(&mut h, &params, 1);
         assert_eq!(h.grid.k, k, "speed {speed}");
-        assert!(after.0 > 0.5 * before.0 && after.2 > 15, "speed {speed}: lit {before:?} before, {after:?} on the first frame after");
+        assert!(
+            after.0 > 0.5 * before.0 && after.2 > 15,
+            "speed {speed}: lit {before:?} before, {after:?} on the first frame after"
+        );
         before = run(&mut h, &params, 60);
     }
 }
@@ -326,7 +329,11 @@ fn sparks_stay_in_the_firebox_and_bounce_rarely() {
                 continue;
             }
             let half = (z - c.eye[2]) * c.tan_w;
-            assert!(x >= c.eye[0] - half - 1e-3 && x <= c.eye[0] + half + 1e-3, "spark {k} at x {x:.2}, frame +-{half:.2} at {:.1} s", i as f64 * DT);
+            assert!(
+                x >= c.eye[0] - half - 1e-3 && x <= c.eye[0] + half + 1e-3,
+                "spark {k} at x {x:.2}, frame +-{half:.2} at {:.1} s",
+                i as f64 * DT
+            );
             assert!(y <= ceiling || flue(&h, x, z), "spark {k} in the ceiling at ({x:.1}, {y:.1}, {z:.1})");
             // A spark that has just bounced off the ceiling: its speed up
             // into it is gone, all but the restitution's share, and it is
@@ -441,7 +448,10 @@ fn the_picture_does_not_jump_when_size_moves() {
     }
     let natural = (1..30).map(|i| (lit[i] - lit[i - 1]).abs()).fold(0.0f32, f32::max);
     let across = (lit[30] - lit[29]).abs();
-    assert!(across <= natural + 0.01, "the change of size moved the picture by {across} (it moves by up to {natural} on its own)");
+    assert!(
+        across <= natural + 0.01,
+        "the change of size moved the picture by {across} (it moves by up to {natural} on its own)"
+    );
 }
 
 /// The occasional things happen and stay occasional: over twenty minutes at
@@ -573,7 +583,10 @@ fn twenty_minutes_does_not_loop_and_the_rare_things_happen() {
     }
     let gusts = h.gusts_seen;
     let settles = h.settles_seen;
-    eprintln!("twenty minutes: {gusts} gusts, {settles} settles, mean {:.2} embers (max {ember_max_calm} outside a burst)", ember_sum as f32 / ember_frames as f32);
+    eprintln!(
+        "twenty minutes: {gusts} gusts, {settles} settles, mean {:.2} embers (max {ember_max_calm} outside a burst)",
+        ember_sum as f32 / ember_frames as f32
+    );
     assert!((10..=40).contains(&gusts), "{gusts} gusts in twenty minutes");
     assert!((3..=20).contains(&settles), "{settles} settles in twenty minutes");
     let mean = ember_sum as f32 / ember_frames as f32;
@@ -760,7 +773,12 @@ fn strip() {
             e.set_color(png::ColorType::Rgba);
             e.set_depth(png::BitDepth::Eight);
             e.write_header().and_then(|mut wr| wr.write_image_data(&rgba)).expect("png");
-            eprintln!("{path}: {} colours, exact {}, embers {}", out.stats.distinct_colours, out.stats.exact, h.ember_count());
+            eprintln!(
+                "{path}: {} colours, exact {}, embers {}",
+                out.stats.distinct_colours,
+                out.stats.exact,
+                h.ember_count()
+            );
             next += 1;
         }
         i += 1;
@@ -917,7 +935,8 @@ fn survey() {
                     smoke += s;
                     empty += usize::from(t == 0);
                     light += level(&f);
-                    gold += indices(&f).iter().filter(|k| (FIRE_STEPS - 5..=FIRE_STEPS).contains(&(**k as usize))).count();
+                    gold +=
+                        indices(&f).iter().filter(|k| (FIRE_STEPS - 5..=FIRE_STEPS).contains(&(**k as usize))).count();
                     n += 1;
                 }
             }
@@ -945,7 +964,15 @@ fn palette_levels() {
         let lv = code.map(|v| screeny_panel::model::nearest_level(screeny_panel::model::duty_16ths(v)));
         eprintln!(
             "{i:>2}  srgb {:>3} {:>3} {:>3}   levels {:>2}{:+} {:>2}{:+} {:>2}{:+}   L {:.3}",
-            code[0], code[1], code[2], lv[0].0, lv[0].1, lv[1].0, lv[1].1, lv[2].0, lv[2].1,
+            code[0],
+            code[1],
+            code[2],
+            lv[0].0,
+            lv[0].1,
+            lv[1].0,
+            lv[1].1,
+            lv[2].0,
+            lv[2].1,
             crate::color::to_oklab(*c)[0]
         );
     }
@@ -1029,7 +1056,8 @@ fn bounce_log() {
 /// of it, the rest as shipped.
 fn grid_from_env() -> Grid {
     let mut g = Grid::SHIPPED;
-    let v: Vec<f32> = std::env::var("HEARTH_GRID").unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    let v: Vec<f32> =
+        std::env::var("HEARTH_GRID").unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
     if let Some(x) = v.first() {
         g.k = *x;
     }

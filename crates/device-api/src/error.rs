@@ -65,10 +65,7 @@ impl ErrorCode {
     #[must_use]
     pub const fn status(self) -> u16 {
         match self {
-            ErrorCode::BadRequest
-            | ErrorCode::BadForm
-            | ErrorCode::BadJson
-            | ErrorCode::OutOfRange => 400,
+            ErrorCode::BadRequest | ErrorCode::BadForm | ErrorCode::BadJson | ErrorCode::OutOfRange => 400,
             ErrorCode::Unauthorized => 401,
             ErrorCode::Forbidden => 403,
             ErrorCode::NotFound => 404,
@@ -175,20 +172,14 @@ impl ErrorReply {
     /// An error with no sentence attached.
     #[must_use]
     pub const fn new(error: ErrorCode) -> Self {
-        Self {
-            error,
-            detail: None,
-        }
+        Self { error, detail: None }
     }
 
     /// An error with a short sentence. A `detail` that does not fit is
     /// dropped rather than truncated: half a sentence is worse than none.
     #[must_use]
     pub fn with_detail(error: ErrorCode, detail: &str) -> Self {
-        Self {
-            error,
-            detail: text(detail),
-        }
+        Self { error, detail: text(detail) }
     }
 
     /// The HTTP status to send this with.
@@ -230,17 +221,8 @@ mod tests {
     #[test]
     fn detail_that_does_not_fit_is_dropped_not_truncated() {
         let long = "x".repeat(MAX_DETAIL_LEN + 1);
-        assert_eq!(
-            ErrorReply::with_detail(ErrorCode::BadForm, &long).detail,
-            None
-        );
+        assert_eq!(ErrorReply::with_detail(ErrorCode::BadForm, &long).detail, None);
         let fits = "x".repeat(MAX_DETAIL_LEN);
-        assert_eq!(
-            ErrorReply::with_detail(ErrorCode::BadForm, &fits)
-                .detail
-                .unwrap()
-                .len(),
-            MAX_DETAIL_LEN
-        );
+        assert_eq!(ErrorReply::with_detail(ErrorCode::BadForm, &fits).detail.unwrap().len(), MAX_DETAIL_LEN);
     }
 }

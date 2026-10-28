@@ -549,7 +549,9 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
             continue;
         }
 
-        let read = tokio::task::spawn_blocking(move || crate::devhttp::get_status_counted(addr, crate::devhttp::TIMEOUT)).await;
+        let read =
+            tokio::task::spawn_blocking(move || crate::devhttp::get_status_counted(addr, crate::devhttp::TIMEOUT))
+                .await;
         // Card 164: the HTTP path's bytes, recorded before the reply is
         // looked at - a read that failed still cost what it cost.
         let read = match read {
@@ -611,8 +613,10 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                 // above has finished, so there is still exactly one HTTP
                 // connection to this device open at a time.
                 if st.devices.want_panic(&id, boot_id) {
-                    let panic_read =
-                        tokio::task::spawn_blocking(move || crate::devhttp::get_panic_counted(addr, crate::devhttp::TIMEOUT)).await;
+                    let panic_read = tokio::task::spawn_blocking(move || {
+                        crate::devhttp::get_panic_counted(addr, crate::devhttp::TIMEOUT)
+                    })
+                    .await;
                     match panic_read {
                         Ok((cost, out)) => {
                             st.devices.metered_http(&id, cost.out, cost.inbound);

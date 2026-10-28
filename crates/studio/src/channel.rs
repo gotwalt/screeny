@@ -133,7 +133,9 @@ fn most_constrained(members: &[Arc<Panel>]) -> Option<(usize, Vec<u8>)> {
     for lim in members.iter().filter_map(|p| p.link_limits()) {
         out = Some(match out {
             None => (lim.budget, lim.codecs),
-            Some((budget, codecs)) => (budget.min(lim.budget), codecs.into_iter().filter(|c| lim.codecs.contains(c)).collect()),
+            Some((budget, codecs)) => {
+                (budget.min(lim.budget), codecs.into_iter().filter(|c| lim.codecs.contains(c)).collect())
+            }
         });
     }
     out
@@ -1234,13 +1236,19 @@ mod tests {
     }
 
     fn idle_channel() -> Arc<Channel> {
-        Channel::new(StoredChannel { id: 1, patch: "metaballs".into(), ..StoredChannel::default() }, true, &Arc::new(SocketMeter::default()), &shared_output(Output::default()))
+        Channel::new(
+            StoredChannel { id: 1, patch: "metaballs".into(), ..StoredChannel::default() },
+            true,
+            &Arc::new(SocketMeter::default()),
+            &shared_output(Output::default()),
+        )
     }
 
     #[test]
     fn an_edit_keeps_what_it_was_given_and_a_bad_one_changes_nothing() {
         let c = idle_channel();
-        c.edit(&Edit { seed: Some(9), param: Some(("size".into(), 2.5)), ..Edit::default() }).expect("a real parameter");
+        c.edit(&Edit { seed: Some(9), param: Some(("size".into(), 2.5)), ..Edit::default() })
+            .expect("a real parameter");
         let s = c.stored();
         assert_eq!(s.seed, 9);
         assert_eq!(s.params["size"], 2.5);
@@ -1317,8 +1325,8 @@ mod tests {
     // ------------------------------ the cross-fade (card 304) ------------------------------
 
     use screeny_art::crossfade::ease;
-    use screeny_art::{Output, Pipeline};
     use screeny_art::{Frame, Rgb, N};
+    use screeny_art::{Output, Pipeline};
 
     /// A patch that is one colour, as an indexed frame, so "the output after
     /// the fade is the incoming frame exactly" can be checked byte for byte.
@@ -1336,9 +1344,30 @@ mod tests {
 
     static FLAT_PATCHES: &[PatchDef] = &[
         PatchDef { id: "test-red", name: "red", blurb: "", params: &[], make: |_| Box::new(Flat(RED)), seeded: false },
-        PatchDef { id: "test-blue", name: "blue", blurb: "", params: &[], make: |_| Box::new(Flat(BLUE)), seeded: false },
-        PatchDef { id: "test-green", name: "green", blurb: "", params: &[], make: |_| Box::new(Flat(GREEN)), seeded: false },
-        PatchDef { id: "test-white", name: "white", blurb: "", params: &[], make: |_| Box::new(Flat(Rgb::splat(1.0))), seeded: false },
+        PatchDef {
+            id: "test-blue",
+            name: "blue",
+            blurb: "",
+            params: &[],
+            make: |_| Box::new(Flat(BLUE)),
+            seeded: false,
+        },
+        PatchDef {
+            id: "test-green",
+            name: "green",
+            blurb: "",
+            params: &[],
+            make: |_| Box::new(Flat(GREEN)),
+            seeded: false,
+        },
+        PatchDef {
+            id: "test-white",
+            name: "white",
+            blurb: "",
+            params: &[],
+            make: |_| Box::new(Flat(Rgb::splat(1.0))),
+            seeded: false,
+        },
     ];
 
     fn core_of(def: &'static PatchDef) -> Core {
@@ -1420,7 +1449,9 @@ mod tests {
 
         deck.switch(flat("test-green"), 2.0);
         match &deck.fade {
-            Some(Fade { from: Outgoing::Held(still), .. }) => assert!(close(still.pixel(0), held), "the still is the frame that was shown"),
+            Some(Fade { from: Outgoing::Held(still), .. }) => {
+                assert!(close(still.pixel(0), held), "the still is the frame that was shown")
+            }
             _ => panic!("a change mid-fade must hold a still, not a live core"),
         }
         for k in 1..=45 {

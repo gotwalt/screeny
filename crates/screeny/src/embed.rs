@@ -85,11 +85,7 @@ pub struct Backoff {
 
 impl Default for Backoff {
     fn default() -> Self {
-        Backoff {
-            first: Duration::from_millis(250),
-            max: Duration::from_secs(10),
-            factor: 2.0,
-        }
+        Backoff { first: Duration::from_millis(250), max: Duration::from_secs(10), factor: 2.0 }
     }
 }
 
@@ -401,10 +397,7 @@ impl Link {
         // `target()` must still answer something honest for an attached link.
         // The frame address is that: it is where the frames go, and it is what
         // `Target { addr }` would have meant.
-        let target = Target {
-            addr: Some(device.frame),
-            ..Target::default()
-        };
+        let target = Target { addr: Some(device.frame), ..Target::default() };
         Self::build(target, Some(device), cfg)
     }
 
@@ -429,10 +422,7 @@ impl Link {
             next_attempt: Instant::now(),
             closed: false,
             given_up: false,
-            stats: LinkStats {
-                down_since: Some(Instant::now()),
-                ..LinkStats::default()
-            },
+            stats: LinkStats { down_since: Some(Instant::now()), ..LinkStats::default() },
             taken: LinkTraffic::default(),
             next_due: None,
             last_tx: None,
@@ -595,10 +585,7 @@ impl Link {
     /// sender has already written, no lock and no allocation.
     fn absorb(&mut self) {
         let Some(s) = self.sender.as_ref() else { return };
-        let now = LinkTraffic {
-            frames: s.stats().frames,
-            control: s.stats().control,
-        };
+        let now = LinkTraffic { frames: s.stats().frames, control: s.stats().control };
         let step = |to: &mut crate::net::Wire, now: crate::net::Wire, was: crate::net::Wire| {
             to.bytes += now.bytes.saturating_sub(was.bytes);
             to.packets += now.packets.saturating_sub(was.packets);
@@ -622,15 +609,10 @@ impl Link {
         // "Still streaming" means a frame went out inside the same window we
         // are judging the silence over - so a producer pushing every few
         // seconds is covered too, not just one at 30 fps.
-        let streaming = self
-            .last_tx
-            .is_some_and(|t| t.elapsed() < self.cfg.silence);
+        let streaming = self.last_tx.is_some_and(|t| t.elapsed() < self.cfg.silence);
         if streaming && s.stats().frames_sent > 0 && s.silence() > self.cfg.silence {
             let silence = s.silence();
-            self.lose(format!(
-                "no telemetry for {:.1} s while streaming",
-                silence.as_secs_f64()
-            ));
+            self.lose(format!("no telemetry for {:.1} s while streaming", silence.as_secs_f64()));
         }
     }
 
@@ -686,13 +668,11 @@ impl Link {
         let (tx, rx) = mpsc::sync_channel(1);
         let aim = self.aim();
         let cfg = self.cfg.sender.clone();
-        let spawned = std::thread::Builder::new()
-            .name("screeny-link-connect".into())
-            .spawn(move || {
-                // The receiver is gone if the link was dropped meanwhile,
-                // which is fine: the Sender goes with it, unused.
-                let _ = tx.send(aim.resolve().and_then(|d| Sender::connect(d, cfg)));
-            });
+        let spawned = std::thread::Builder::new().name("screeny-link-connect".into()).spawn(move || {
+            // The receiver is gone if the link was dropped meanwhile,
+            // which is fine: the Sender goes with it, unused.
+            let _ = tx.send(aim.resolve().and_then(|d| Sender::connect(d, cfg)));
+        });
         match spawned {
             Ok(_) => self.pending = Some(rx),
             Err(e) => {
@@ -706,11 +686,7 @@ impl Link {
 
     /// Connect synchronously, for [`Link::open`] and [`Link::attach`].
     fn connect_now(&mut self) -> Result<Sender> {
-        match self
-            .aim()
-            .resolve()
-            .and_then(|d| Sender::connect(d, self.cfg.sender.clone()))
-        {
+        match self.aim().resolve().and_then(|d| Sender::connect(d, self.cfg.sender.clone())) {
             Ok(s) => Ok(s),
             Err(e) => {
                 self.stats.connect_failures += 1;
@@ -794,10 +770,7 @@ impl Link {
                 self.attached = None;
             }
             Aim::Known(d) => {
-                self.target = Target {
-                    addr: Some(d.frame),
-                    ..Target::default()
-                };
+                self.target = Target { addr: Some(d.frame), ..Target::default() };
                 self.attached = Some(d);
             }
         }
@@ -896,9 +869,7 @@ impl Link {
     /// unconditionally.
     #[must_use]
     pub fn fps(&self) -> f64 {
-        self.sender
-            .as_ref()
-            .map_or(self.cfg.sender.fps, Sender::fps)
+        self.sender.as_ref().map_or(self.cfg.sender.fps, Sender::fps)
     }
 
     /// A pacer set to [`Link::fps`], for a caller that wants spec 9.1's
@@ -943,9 +914,7 @@ fn limits_of(s: &Sender) -> Limits {
         fps: s.fps(),
         configured_fps: s.config().fps,
         budget: s.budget(),
-        exact_palette: if s.budget() >= MIN_BUDGET
-            && codecs.contains(&screeny_proto::dec::codec::PAL5)
-        {
+        exact_palette: if s.budget() >= MIN_BUDGET && codecs.contains(&screeny_proto::dec::codec::PAL5) {
             32
         } else {
             0
@@ -995,13 +964,7 @@ impl Pace {
     /// A pacer for `fps`, starting now.
     #[must_use]
     pub fn new(fps: f64) -> Self {
-        Pace {
-            start: Instant::now(),
-            period: period_of(fps),
-            n: 0,
-            skipped: 0,
-            fps,
-        }
+        Pace { start: Instant::now(), period: period_of(fps), n: 0, skipped: 0, fps }
     }
 
     /// Change the rate. The schedule restarts from now, so a rate change does
@@ -1037,11 +1000,7 @@ impl Pace {
             self.n = should_be + 1;
         }
 
-        FrameTime {
-            index,
-            elapsed: self.start.elapsed(),
-            fps: self.fps,
-        }
+        FrameTime { index, elapsed: self.start.elapsed(), fps: self.fps }
     }
 
     /// Slots skipped because the caller overran.
@@ -1074,17 +1033,10 @@ mod tests {
         assert_eq!(b.delay(u32::MAX), b.max);
 
         // Degenerate configurations must not panic either.
-        let flat = Backoff {
-            first: Duration::ZERO,
-            max: Duration::from_secs(1),
-            factor: 0.0,
-        };
+        let flat = Backoff { first: Duration::ZERO, max: Duration::from_secs(1), factor: 0.0 };
         assert_eq!(flat.delay(1), Duration::ZERO);
         assert_eq!(flat.delay(u32::MAX), Duration::ZERO);
-        let nan = Backoff {
-            factor: f64::NAN,
-            ..Backoff::default()
-        };
+        let nan = Backoff { factor: f64::NAN, ..Backoff::default() };
         assert_eq!(nan.delay(5), nan.first);
     }
 
@@ -1095,14 +1047,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(60));
         let t0 = Instant::now();
         p.tick();
-        assert!(
-            p.skipped() >= 4,
-            "six periods went by; {} skipped",
-            p.skipped()
-        );
-        assert!(
-            t0.elapsed() < Duration::from_millis(15),
-            "the next slot should be close, not a catch-up burst"
-        );
+        assert!(p.skipped() >= 4, "six periods went by; {} skipped", p.skipped());
+        assert!(t0.elapsed() < Duration::from_millis(15), "the next slot should be close, not a catch-up burst");
     }
 }

@@ -4,9 +4,7 @@
 //! every level change and a poll every [`POLL_MS`] while a gesture is in
 //! flight - so what passes here is what the device does.
 
-use screeny_provision::button::{
-    ButtonEvent, Level, Recognizer, DEBOUNCE_MS, HOLD_MS, STATUS_MS, WIPE_MS,
-};
+use screeny_provision::button::{ButtonEvent, Level, Recognizer, DEBOUNCE_MS, HOLD_MS, STATUS_MS, WIPE_MS};
 
 /// What the firmware's button task uses while a gesture is in flight.
 const POLL_MS: u32 = 100;
@@ -53,10 +51,7 @@ fn since(now: u32, then: u32) -> u32 {
 #[test]
 fn a_short_press_is_one_short_press() {
     let mut b = ready(0);
-    assert_eq!(
-        press(&mut b, 1_000, 1_200, true),
-        vec![ButtonEvent::ShortPress]
-    );
+    assert_eq!(press(&mut b, 1_000, 1_200, true), vec![ButtonEvent::ShortPress]);
     assert!(!b.active());
 }
 
@@ -74,11 +69,7 @@ fn a_bounce_is_not_a_press() {
     assert_eq!(b.poll(Level::Low, 1_211, true), ButtonEvent::None);
     assert_eq!(b.poll(Level::Low, 1_260, true), ButtonEvent::None);
     assert_eq!(b.poll(Level::High, 1_300, true), ButtonEvent::None);
-    assert_eq!(
-        b.poll(Level::High, 1_340, true),
-        ButtonEvent::ShortPress,
-        "the whole thing is one press"
-    );
+    assert_eq!(b.poll(Level::High, 1_340, true), ButtonEvent::ShortPress, "the whole thing is one press");
 }
 
 /// The card's "999 ms vs 1,000 ms". The 999 ms press is a short press and
@@ -94,10 +85,7 @@ fn nine_hundred_and_ninety_nine_milliseconds_is_still_a_press() {
     let evs = press(&mut b, 10_000, 10_000 + HOLD_MS, true);
     assert_eq!(
         evs,
-        vec![
-            ButtonEvent::HoldStarted { seconds_left: 4 },
-            ButtonEvent::HoldCancelled
-        ],
+        vec![ButtonEvent::HoldStarted { seconds_left: 4 }, ButtonEvent::HoldCancelled],
         "at exactly the threshold the countdown starts, and letting go cancels it"
     );
 }
@@ -107,18 +95,13 @@ fn nine_hundred_and_ninety_nine_milliseconds_is_still_a_press() {
 fn releasing_before_five_seconds_changes_nothing() {
     let mut b = ready(0);
     let evs = press(&mut b, 1_000, 1_000 + 4_900, true);
-    assert!(
-        !evs.contains(&ButtonEvent::WipeWifi),
-        "4.9 s must not wipe: {evs:?}"
-    );
+    assert!(!evs.contains(&ButtonEvent::WipeWifi), "4.9 s must not wipe: {evs:?}");
     assert_eq!(evs.last(), Some(&ButtonEvent::HoldCancelled));
     // The countdown counted 4, 3, 2, 1 on the way.
     let ticks: Vec<u8> = evs
         .iter()
         .filter_map(|e| match e {
-            ButtonEvent::HoldStarted { seconds_left } | ButtonEvent::HoldTick { seconds_left } => {
-                Some(*seconds_left)
-            }
+            ButtonEvent::HoldStarted { seconds_left } | ButtonEvent::HoldTick { seconds_left } => Some(*seconds_left),
             _ => None,
         })
         .collect();
@@ -179,10 +162,7 @@ fn a_pin_low_at_boot_never_wipes_until_it_has_been_released() {
     assert!(!b.active());
 
     // From here it is an ordinary button.
-    assert_eq!(
-        press(&mut b, 11_000, 11_200, true),
-        vec![ButtonEvent::ShortPress]
-    );
+    assert_eq!(press(&mut b, 11_000, 11_200, true), vec![ButtonEvent::ShortPress]);
     let evs = press(&mut b, 12_000, 12_000 + WIPE_MS + 100, true);
     assert_eq!(evs.last(), Some(&ButtonEvent::WipeWifi));
 }
@@ -195,16 +175,10 @@ fn presses_during_the_status_screen_are_each_a_short_press() {
     let mut b = ready(0);
     let mut at = 1_000;
     for _ in 0..4 {
-        assert_eq!(
-            press(&mut b, at, at + 150, true),
-            vec![ButtonEvent::ShortPress]
-        );
+        assert_eq!(press(&mut b, at, at + 150, true), vec![ButtonEvent::ShortPress]);
         at += 900;
     }
-    assert!(
-        at - 1_000 < STATUS_MS,
-        "all four presses are inside one status screen"
-    );
+    assert!(at - 1_000 < STATUS_MS, "all four presses are inside one status screen");
 }
 
 /// Card 230's OTA question. While an upload is in flight or an image is on
@@ -219,10 +193,7 @@ fn a_hold_during_an_update_is_refused_and_never_wipes() {
     // A short press is still a short press: showing the status screen costs
     // the update nothing.
     let mut b = ready(0);
-    assert_eq!(
-        press(&mut b, 1_000, 1_150, false),
-        vec![ButtonEvent::ShortPress]
-    );
+    assert_eq!(press(&mut b, 1_000, 1_150, false), vec![ButtonEvent::ShortPress]);
 }
 
 /// An upload that starts *during* the countdown stops the wipe at the last
@@ -232,14 +203,8 @@ fn an_update_that_starts_mid_countdown_stops_the_wipe() {
     let mut b = ready(0);
     assert_eq!(b.poll(Level::Low, 1_000, true), ButtonEvent::None);
     assert_eq!(b.poll(Level::Low, 1_040, true), ButtonEvent::None);
-    assert_eq!(
-        b.poll(Level::Low, 2_000, true),
-        ButtonEvent::HoldStarted { seconds_left: 4 }
-    );
-    assert_eq!(
-        b.poll(Level::Low, 3_100, true),
-        ButtonEvent::HoldTick { seconds_left: 3 }
-    );
+    assert_eq!(b.poll(Level::Low, 2_000, true), ButtonEvent::HoldStarted { seconds_left: 4 });
+    assert_eq!(b.poll(Level::Low, 3_100, true), ButtonEvent::HoldTick { seconds_left: 3 });
     // The upload starts here.
     assert_eq!(
         b.poll(Level::Low, 6_100, false),
@@ -261,10 +226,7 @@ fn a_late_poll_still_shows_the_countdown_before_it_wipes() {
     assert_eq!(b.poll(Level::Low, 1_040, true), ButtonEvent::None);
     // Nothing ran for six seconds.
     let e = b.poll(Level::Low, 7_500, true);
-    assert!(
-        matches!(e, ButtonEvent::HoldStarted { .. }),
-        "the countdown starts first: {e:?}"
-    );
+    assert!(matches!(e, ButtonEvent::HoldStarted { .. }), "the countdown starts first: {e:?}");
     assert_eq!(b.poll(Level::Low, 7_600, true), ButtonEvent::WipeWifi);
 }
 

@@ -41,7 +41,9 @@ async fn fake_supervisor(status: u16, body: String) -> (String, tokio::task::Joi
 }
 
 fn offer() -> String {
-    format!(r#"{{"result":"ok","data":{{"addon":"core_mosquitto","host":"127.0.0.1","port":1,"ssl":false,"username":"ha","password":"{PASSWORD}","protocol":"3.1.1"}}}}"#)
+    format!(
+        r#"{{"result":"ok","data":{{"addon":"core_mosquitto","host":"127.0.0.1","port":1,"ssl":false,"username":"ha","password":"{PASSWORD}","protocol":"3.1.1"}}}}"#
+    )
 }
 
 fn app_config(base: &str) -> Config {
@@ -54,7 +56,9 @@ async fn the_supervisors_broker_is_used_when_nothing_is_set_and_its_password_nev
     let studio = Studio::bind(app_config(&base)).await.unwrap().spawn();
     let at = studio.addr;
 
-    let view = until_json(at, PATIENCE, "the Supervisor's broker", "/api/v1/home_assistant", |v| v["from_supervisor"] == true).await;
+    let view =
+        until_json(at, PATIENCE, "the Supervisor's broker", "/api/v1/home_assistant", |v| v["from_supervisor"] == true)
+            .await;
     assert_eq!(view["host"], "127.0.0.1");
     assert_eq!(view["port"], 1);
     assert_eq!(view["username"], "ha");
@@ -71,7 +75,8 @@ async fn the_owners_own_settings_beat_the_supervisors() {
     let (base, _fake) = fake_supervisor(200, offer()).await;
     let studio = Studio::bind(app_config(&base)).await.unwrap().spawn();
     let at = studio.addr;
-    until_json(at, PATIENCE, "the Supervisor's broker", "/api/v1/home_assistant", |v| v["from_supervisor"] == true).await;
+    until_json(at, PATIENCE, "the Supervisor's broker", "/api/v1/home_assistant", |v| v["from_supervisor"] == true)
+        .await;
 
     // The owner types a broker of their own: it replaces the Supervisor's.
     let r = post(at, "/api/v1/home_assistant/set", r#"{"host":"broker.example","enabled":true}"#).await;
@@ -110,7 +115,10 @@ async fn no_mosquitto_yet_is_not_a_failure() {
     let studio = Studio::bind(app_config(&base)).await.unwrap().spawn();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let v = get(studio.addr, "/api/v1/home_assistant").await.json();
-    assert_eq!((v["from_supervisor"].clone(), v["enabled"].clone(), v["status"]["state"].as_str()), (false.into(), false.into(), Some("off")));
+    assert_eq!(
+        (v["from_supervisor"].clone(), v["enabled"].clone(), v["status"]["state"].as_str()),
+        (false.into(), false.into(), Some("off"))
+    );
     assert_eq!(get(studio.addr, "/healthz").await.status, 200, "no broker is never a reason to restart");
 }
 
@@ -144,7 +152,8 @@ async fn only_the_named_peer_is_served_in_app_mode() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_access_is_a_second_listener_without_the_check() {
     let stranger: IpAddr = "10.9.9.9".parse().unwrap();
-    let cfg = Config { peers: Some(vec![stranger]), direct: Some(SocketAddr::from(([127, 0, 0, 1], 0))), ..test_config() };
+    let cfg =
+        Config { peers: Some(vec![stranger]), direct: Some(SocketAddr::from(([127, 0, 0, 1], 0))), ..test_config() };
     let studio = Studio::bind(cfg).await.unwrap();
     let direct = studio.direct_addr.expect("a direct listener");
     let running = studio.spawn();

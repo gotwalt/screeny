@@ -56,11 +56,7 @@ impl ButtonModel {
         // The first reading of a pin at rest, which is what an ordinary boot
         // gives the firmware's task.
         let _ = rec.poll(Level::High, 0, true);
-        ButtonModel {
-            rec,
-            clock_ms: 0,
-            shown: None,
-        }
+        ButtonModel { rec, clock_ms: 0, shown: None }
     }
 
     /// Press the button, hold it for `hold_ms`, and let it go.

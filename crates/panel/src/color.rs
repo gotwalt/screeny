@@ -154,20 +154,12 @@ pub fn oklch_to_lin(l: f32, c: f32, h_turns: f32) -> [f32; 3] {
     for _ in 0..24 {
         let rgb = oklab_inv([l, chroma * ch, chroma * sh]);
         if rgb.iter().all(|v| *v >= -0.001 && *v <= 1.001) {
-            return [
-                rgb[0].clamp(0.0, 1.0),
-                rgb[1].clamp(0.0, 1.0),
-                rgb[2].clamp(0.0, 1.0),
-            ];
+            return [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)];
         }
         chroma *= 0.88;
     }
     let rgb = oklab_inv([l, 0.0, 0.0]);
-    [
-        rgb[0].clamp(0.0, 1.0),
-        rgb[1].clamp(0.0, 1.0),
-        rgb[2].clamp(0.0, 1.0),
-    ]
+    [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)]
 }
 
 /// [`oklch_to_lin`] encoded back to an sRGB888 colour.
@@ -196,11 +188,7 @@ pub use self::lin as srgb8_to_lin;
 #[must_use]
 pub fn lin(c: [u8; 3]) -> [f32; 3] {
     let t = &*SRGB_TO_LIN;
-    [
-        t[c[0] as usize],
-        t[c[1] as usize],
-        t[c[2] as usize],
-    ]
+    [t[c[0] as usize], t[c[1] as usize], t[c[2] as usize]]
 }
 
 /// sRGB888 -> Oklab, via the sRGB EOTF.

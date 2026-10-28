@@ -39,8 +39,7 @@ impl Res {
     /// The body parsed as JSON.
     #[must_use]
     pub fn json(&self) -> serde_json::Value {
-        serde_json::from_slice(&self.body)
-            .unwrap_or_else(|e| panic!("not JSON: {e}: {:?}", self.text()))
+        serde_json::from_slice(&self.body).unwrap_or_else(|e| panic!("not JSON: {e}: {:?}", self.text()))
     }
 
     /// The body parsed as one of `screeny_device_api`'s types. This is the
@@ -55,19 +54,13 @@ impl Res {
     /// The `error` field of an error reply, as a string.
     #[must_use]
     pub fn error_code(&self) -> String {
-        self.json()["error"]
-            .as_str()
-            .unwrap_or_else(|| panic!("no error field in {:?}", self.text()))
-            .to_string()
+        self.json()["error"].as_str().unwrap_or_else(|| panic!("no error field in {:?}", self.text())).to_string()
     }
 
     /// One header's value.
     #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
+        self.headers.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
     }
 }
 
@@ -86,52 +79,24 @@ pub fn get_with_host(addr: SocketAddr, path: &str, host: &str) -> Res {
 /// `POST path` with a JSON body.
 #[must_use]
 pub fn post_json(addr: SocketAddr, path: &str, body: &str) -> Res {
-    request(
-        addr,
-        "POST",
-        path,
-        &addr.to_string(),
-        Some("application/json"),
-        body.as_bytes(),
-    )
+    request(addr, "POST", path, &addr.to_string(), Some("application/json"), body.as_bytes())
 }
 
 /// `POST path` with an urlencoded form body.
 #[must_use]
 pub fn post_form(addr: SocketAddr, path: &str, body: &str) -> Res {
-    request(
-        addr,
-        "POST",
-        path,
-        &addr.to_string(),
-        Some("application/x-www-form-urlencoded"),
-        body.as_bytes(),
-    )
+    request(addr, "POST", path, &addr.to_string(), Some("application/x-www-form-urlencoded"), body.as_bytes())
 }
 
 /// `POST path` with a raw octet-stream body.
 #[must_use]
 pub fn post_bytes(addr: SocketAddr, path: &str, body: &[u8]) -> Res {
-    request(
-        addr,
-        "POST",
-        path,
-        &addr.to_string(),
-        Some("application/octet-stream"),
-        body,
-    )
+    request(addr, "POST", path, &addr.to_string(), Some("application/octet-stream"), body)
 }
 
 /// One request, spelled out.
 #[must_use]
-pub fn request(
-    addr: SocketAddr,
-    method: &str,
-    path: &str,
-    host: &str,
-    content_type: Option<&str>,
-    body: &[u8],
-) -> Res {
+pub fn request(addr: SocketAddr, method: &str, path: &str, host: &str, content_type: Option<&str>, body: &[u8]) -> Res {
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\n");
     if let Some(ct) = content_type {
         head.push_str(&format!("Content-Type: {ct}\r\n"));
@@ -184,9 +149,5 @@ pub fn parse(wire: &[u8]) -> Res {
 
     // Every reply this API sends carries a Content-Length and closes, so the
     // body is simply what came after the head.
-    Res {
-        status,
-        headers,
-        body,
-    }
+    Res { status, headers, body }
 }

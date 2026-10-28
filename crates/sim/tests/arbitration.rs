@@ -84,15 +84,9 @@ fn a_second_source_is_locked_out_and_told_so() {
     assert!(pkt.is_reply(), "section 6.2: unsolicited packets set REPLY");
     assert_eq!(pkt.req_id, 0, "section 6.2: and req_id 0");
     match decoded.expect("a BUSY body") {
-        Reply::Busy {
-            reason,
-            lock_holder_ms_remaining,
-        } => {
+        Reply::Busy { reason, lock_holder_ms_remaining } => {
             assert_eq!(reason, busy_reason::LOCKED);
-            assert!(
-                lock_holder_ms_remaining <= 100,
-                "no more than LOCK_MS, got {lock_holder_ms_remaining}"
-            );
+            assert!(lock_holder_ms_remaining <= 100, "no more than LOCK_MS, got {lock_holder_ms_remaining}");
         }
         other => panic!("expected BUSY, got {other:?}"),
     }
@@ -135,21 +129,11 @@ fn a_new_source_takes_over_once_the_lock_lapses() {
     b.send(codec::SOLID, F_KEY, &pb);
 
     let ev = sim
-        .wait_for(&mut cursor, T, |e| {
-            matches!(
-                e,
-                Event::LockReleased {
-                    reason: ReleaseReason::TakenOver,
-                    ..
-                }
-            )
-        })
+        .wait_for(&mut cursor, T, |e| matches!(e, Event::LockReleased { reason: ReleaseReason::TakenOver, .. }))
         .expect("a takeover");
     assert!(matches!(ev, Event::LockReleased { source, .. } if source == a.addr()));
 
-    let s = sim
-        .wait_until(T, |s| s.active_source == Some(b.addr()))
-        .unwrap();
+    let s = sim.wait_until(T, |s| s.active_source == Some(b.addr())).unwrap();
     assert_frames_eq(&s.decoded[..], &eb, "B has the panel");
     assert_eq!(s.state, State::Live);
     assert_eq!(s.telemetry.frames_rejected, 0, "B was never locked out");
@@ -170,15 +154,7 @@ fn a_final_frame_releases_the_lock_at_once() {
     a.send(codec::SOLID, F_KEY | F_FINAL, &pa);
 
     let ev = sim
-        .wait_for(&mut cursor, T, |e| {
-            matches!(
-                e,
-                Event::LockReleased {
-                    reason: ReleaseReason::Final,
-                    ..
-                }
-            )
-        })
+        .wait_for(&mut cursor, T, |e| matches!(e, Event::LockReleased { reason: ReleaseReason::Final, .. }))
         .expect("FINAL releases the lock");
     assert!(matches!(ev, Event::LockReleased { source, .. } if source == a.addr()));
 
@@ -189,9 +165,7 @@ fn a_final_frame_releases_the_lock_at_once() {
 
     // "so any sender may take over instantly" - no LOCK_MS wait.
     b.send(codec::SOLID, F_KEY, &pb);
-    let s = sim
-        .wait_until(T, |s| s.active_source == Some(b.addr()))
-        .unwrap();
+    let s = sim.wait_until(T, |s| s.active_source == Some(b.addr())).unwrap();
     assert_eq!(s.state, State::Live);
     assert_frames_eq(&s.decoded[..], &eb, "B took over instantly");
     assert_eq!(s.telemetry.frames_rejected, 0);
@@ -256,15 +230,7 @@ fn a_stream_that_stops_goes_to_hold_and_then_to_the_idle_screen() {
 
     // STREAM_TIMEOUT_MS with no frames: LIVE -> HOLD, lock released.
     let ev = sim
-        .wait_for(&mut cursor, T, |e| {
-            matches!(
-                e,
-                Event::LockReleased {
-                    reason: ReleaseReason::Timeout,
-                    ..
-                }
-            )
-        })
+        .wait_for(&mut cursor, T, |e| matches!(e, Event::LockReleased { reason: ReleaseReason::Timeout, .. }))
         .expect("the stream timeout");
     assert!(matches!(ev, Event::LockReleased { source, .. } if source == a.addr()));
     let s = sim.snapshot();
@@ -272,15 +238,9 @@ fn a_stream_that_stops_goes_to_hold_and_then_to_the_idle_screen() {
     assert_frames_eq(&s.decoded[..], &ea, "HOLD leaves the last frame lit");
 
     // HOLD_MS later: the idle screen.
-    let s = sim
-        .wait_until(T, |s| s.state == State::Idle)
-        .expect("HOLD_MS to expire");
+    let s = sim.wait_until(T, |s| s.state == State::Idle).expect("HOLD_MS to expire");
     assert_eq!(s.state_byte, screeny_proto::control::state::IDLE);
-    assert_frames_eq(
-        &s.decoded[..],
-        &ea,
-        "the decoded frame is kept; only the panel changes",
-    );
+    assert_frames_eq(&s.decoded[..], &ea, "the decoded frame is kept; only the panel changes");
 
     // And what the panel is scanning out is no longer that frame.
     std::thread::sleep(Duration::from_millis(80)); // past FADE_MS
@@ -293,9 +253,7 @@ fn hold_forever_never_fades() {
     let dev = SimDevice::start(quick()).unwrap();
     let sim = dev.handle();
     let ctrl = Ctrl::new(dev.control_addr());
-    let reply = ctrl
-        .call(&Request::SetIdle(IdleMode::HoldForever), 1)
-        .expect("a reply");
+    let reply = ctrl.call(&Request::SetIdle(IdleMode::HoldForever), 1).expect("a reply");
     assert!(matches!(parse_reply(&reply).1, Ok(Reply::Idle { mode: 1 })));
 
     let mut a = Sender::new(dev.frame_addr());
@@ -327,13 +285,8 @@ fn identify_is_an_overlay_and_not_a_state() {
     a.send(codec::SOLID, F_KEY, &pa);
     sim.wait_for_frames(1, T).unwrap();
 
-    ctrl.call(&Request::Identify { duration_ms: 400 }, 3)
-        .expect("a reply");
-    let s = sim
-        .wait_until(T, |s| {
-            s.state_byte == screeny_proto::control::state::IDENTIFY
-        })
-        .expect("the overlay");
+    ctrl.call(&Request::Identify { duration_ms: 400 }, 3).expect("a reply");
+    let s = sim.wait_until(T, |s| s.state_byte == screeny_proto::control::state::IDENTIFY).expect("the overlay");
     assert_eq!(s.state, State::Live, "the stream state is untouched");
 
     // Frame handling continues underneath.
@@ -342,11 +295,7 @@ fn identify_is_an_overlay_and_not_a_state() {
     let s = sim.wait_for_frames(2, T).unwrap();
     assert_ne!(&eb[..], &ea[..]);
     assert_frames_eq(&s.decoded[..], &eb, "frames still land");
-    assert_ne!(
-        &sim.render_display()[..],
-        &s.panel[..],
-        "but the overlay is what is lit"
-    );
+    assert_ne!(&sim.render_display()[..], &s.panel[..], "but the overlay is what is lit");
 
     // Card 247, item 1: **none** of those frames reaches the panel while the
     // overlay is up. `screeny_receiver::Intent::shows_frames()` is the rule,
@@ -364,11 +313,8 @@ fn identify_is_an_overlay_and_not_a_state() {
 
     // And it expires on its own, back to whatever the stream state has
     // become in the meantime.
-    let s = sim
-        .wait_until(T, |s| {
-            s.state_byte != screeny_proto::control::state::IDENTIFY
-        })
-        .expect("the overlay to expire");
+    let s =
+        sim.wait_until(T, |s| s.state_byte != screeny_proto::control::state::IDENTIFY).expect("the overlay to expire");
     assert_eq!(s.state_byte, s.state.as_u8());
     assert_frames_eq(&s.decoded[..], &eb, "the frame underneath survived");
     // ...and the picture is back: the last frame that arrived *during* the
@@ -380,4 +326,3 @@ fn identify_is_an_overlay_and_not_a_state() {
         "the picture is the panel's again the moment the overlay ends",
     );
 }
-

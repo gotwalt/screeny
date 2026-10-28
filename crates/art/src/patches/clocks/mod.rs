@@ -370,7 +370,8 @@ impl Clocks {
                 return composition.clone();
             }
         }
-        let mut rng = Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9) ^ self.asked.wrapping_mul(0x85eb_ca6b));
+        let mut rng =
+            Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9) ^ self.asked.wrapping_mul(0x85eb_ca6b));
         let composed = match choice {
             0 => rng.u64() % 10 < 6,
             n => n > dance::DANCES,
@@ -379,7 +380,8 @@ impl Clocks {
             dance::compose(&mut rng, &self.angles, to, motor, &self.variety)
         } else if choice == 0 {
             // From the repertoire, whichever has gone longest unperformed.
-            let names: Vec<String> = (0..dance::DANCES).map(|i| dance::named(i, &mut Rng::new(0)).tags[0].clone()).collect();
+            let names: Vec<String> =
+                (0..dance::DANCES).map(|i| dance::named(i, &mut Rng::new(0)).tags[0].clone()).collect();
             let freshest = self.variety.freshest(&names, || rng.f32()).and_then(|n| names.iter().position(|m| m == n));
             dance::named(freshest.unwrap_or(0), &mut rng)
         } else {
@@ -491,7 +493,11 @@ impl Clocks {
             None if ctx.t - self.landed >= held && slack > SETTLE + 6.0 => {
                 let mut rng = Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b));
                 let moods: Vec<String> = (0..ambient::MOODS).map(|m| format!("mood:{m}")).collect();
-                let mood = self.variety.freshest(&moods, || rng.f32()).and_then(|n| moods.iter().position(|m| m == n)).unwrap_or(0);
+                let mood = self
+                    .variety
+                    .freshest(&moods, || rng.f32())
+                    .and_then(|n| moods.iter().position(|m| m == n))
+                    .unwrap_or(0);
                 self.variety.note("", std::slice::from_ref(&moods[mood]));
                 let ambient = ambient::Ambient::new(&mut rng, mood, COLS, ROWS, CELL);
                 self.ambient = Some(ambient);
@@ -504,11 +510,14 @@ impl Clocks {
 impl Patch for Clocks {
     fn playing(&self) -> Option<Playing> {
         let performed = self.performed.as_ref()?;
-        let actions = vec![
-            Action { id: "again", label: "Play it again" },
-            Action { id: "another", label: "Compose another" },
-        ];
-        Some(Playing { title: performed.name.clone(), detail: self.doing.clone(), actions, notes: vec![format!("resting dials: {}", self.treatment)] })
+        let actions =
+            vec![Action { id: "again", label: "Play it again" }, Action { id: "another", label: "Compose another" }];
+        Some(Playing {
+            title: performed.name.clone(),
+            detail: self.doing.clone(),
+            actions,
+            notes: vec![format!("resting dials: {}", self.treatment)],
+        })
     }
 
     fn act(&mut self, action: &str) {
@@ -522,7 +531,11 @@ impl Patch for Clocks {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         self.step(ctx);
         self.settle(ctx.dt as f32);
-        let tint = |hue: &str, chroma: &str| draw::Tint { hue: ctx.get(hue), chroma: ctx.get(chroma), light: ctx.get("light") };
+        let tint = |hue: &str, chroma: &str| draw::Tint {
+            hue: ctx.get(hue),
+            chroma: ctx.get(chroma),
+            light: ctx.get("light"),
+        };
         let look = Look {
             half: ctx.get("weight") * 0.5,
             tip: ctx.get("tip"),
@@ -568,16 +581,16 @@ fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled:
     // everything else to the dither"), so it stays the cheap continuous ramp
     // the whole way; only the held, dark end of it needs steadying.
     let shade = (settled >= 1.0 && rest.ink < 1.0).then(|| dark_shade(look.dark, rest.ink)).flatten();
-    let scales: Vec<draw::RestScale> = idle
-        .iter()
-        .map(|at_rest| {
-            if *at_rest {
-                draw::RestScale { ink: scale[0], reach: scale[1], shade }
-            } else {
-                draw::RestScale::FULL
-            }
-        })
-        .collect();
+    let scales: Vec<draw::RestScale> =
+        idle.iter()
+            .map(|at_rest| {
+                if *at_rest {
+                    draw::RestScale { ink: scale[0], reach: scale[1], shade }
+                } else {
+                    draw::RestScale::FULL
+                }
+            })
+            .collect();
     draw::Dials {
         angles,
         cols: COLS,
@@ -763,7 +776,9 @@ mod tests {
                 for settled in [0.0, 0.5, 1.0] {
                     for (hh, mm, _) in AWKWARD {
                         let frame = picture(&pose(hh, mm, *rest), &resting(hh, mm), *rest, settled, look);
-                        let Frame::Indexed { palette, indices } = &frame else { panic!("rest {v}: not an indexed frame") };
+                        let Frame::Indexed { palette, indices } = &frame else {
+                            panic!("rest {v}: not an indexed frame")
+                        };
                         let has_idle = resting(hh, mm).iter().any(|r| *r);
                         let want = if settled >= 1.0 && rest.ink < 1.0 && has_idle { 32 } else { 31 };
                         assert_eq!(palette.len(), want, "`{name}` rest {v} settled {settled}: palette grew");
@@ -790,7 +805,10 @@ mod tests {
         };
         assert_eq!(indices(with(0.3, 1.0)), indices(with(1.0, 1.0)), "the taper survived into the numeral");
         let total = |f: &Frame| ink(f).iter().sum::<f32>();
-        assert!(total(&with(0.3, 0.0)) < total(&with(1.0, 0.0)) * 0.9, "a tapered dancer is not lighter than a blunt one");
+        assert!(
+            total(&with(0.3, 0.0)) < total(&with(1.0, 0.0)) * 0.9,
+            "a tapered dancer is not lighter than a blunt one"
+        );
     }
 
     /// A resting dial is drawn at full strength while the hands are dancing and
@@ -827,7 +845,10 @@ mod tests {
                         let mut prev = from[i][h];
                         for k in 1..=(total * 30.0) as usize {
                             let a = dance::angle_at(from[i][h], &moves[i][h], MOTOR, k as f32 / 30.0);
-                            assert!((a - prev).abs() * 30.0 <= MOTOR.speed * 2.05, "rest {v}: {name} overdrives clock {i}");
+                            assert!(
+                                (a - prev).abs() * 30.0 <= MOTOR.speed * 2.05,
+                                "rest {v}: {name} overdrives clock {i}"
+                            );
                             prev = a;
                         }
                     }
@@ -866,7 +887,8 @@ mod tests {
         let rest = RESTS[DEFAULT_REST];
         for row in 0..ROWS {
             for hand in rest.hands(row) {
-                let off = [0.0, 90.0, 180.0, 270.0].iter().map(|a| dance::shortest(hand, *a).abs()).fold(f32::MAX, f32::min);
+                let off =
+                    [0.0, 90.0, 180.0, 270.0].iter().map(|a| dance::shortest(hand, *a).abs()).fold(f32::MAX, f32::min);
                 assert!(off > 30.0, "a resting hand at {hand} deg is only {off} deg off a digit stroke");
             }
         }

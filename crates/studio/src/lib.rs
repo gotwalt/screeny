@@ -309,11 +309,17 @@ impl AppState {
     /// # Errors
     ///
     /// When it names a channel or a panel this studio does not have.
-    pub fn channel(&self, channel: Option<ChannelId>, panel: Option<&str>) -> Result<(Arc<Channel>, Option<Arc<Panel>>), String> {
+    pub fn channel(
+        &self,
+        channel: Option<ChannelId>,
+        panel: Option<&str>,
+    ) -> Result<(Arc<Channel>, Option<Arc<Panel>>), String> {
         if let Some(id) = channel {
             let c = self.panels.channel(id).ok_or_else(|| format!("no channel {id}"))?;
             // A panel named as well is only the point of view, if it is on it.
-            let from = panel.and_then(|p| self.panels.get(p.trim())).filter(|p| p.channel().is_some_and(|pc| Arc::ptr_eq(&pc, &c)));
+            let from = panel
+                .and_then(|p| self.panels.get(p.trim()))
+                .filter(|p| p.channel().is_some_and(|pc| Arc::ptr_eq(&pc, &c)));
             return Ok((c, from));
         }
         match panel.map(str::trim).filter(|w| !w.is_empty()) {
@@ -379,19 +385,19 @@ impl AppState {
         let (panels, channels) = self.panels.stored();
         {
             state::Persisted {
-            version: state::SCHEMA_VERSION,
-            devices: self.devices.stored(),
-            panels,
-            channels,
-            output: self.panels.output(),
-            players: Vec::new(),
-            focus: String::new(),
-            // Card 151's named settings. They live here and nowhere else: the
-            // state file in `SCREENY_STATE_DIR` is the volume the container
-            // keeps across a rebuild.
-            patches: self.memory.snapshot(),
-            home_assistant: Some(self.ha.settings()).filter(|s| *s != ha::HaSettings::default()),
-        }
+                version: state::SCHEMA_VERSION,
+                devices: self.devices.stored(),
+                panels,
+                channels,
+                output: self.panels.output(),
+                players: Vec::new(),
+                focus: String::new(),
+                // Card 151's named settings. They live here and nowhere else: the
+                // state file in `SCREENY_STATE_DIR` is the volume the container
+                // keeps across a rebuild.
+                patches: self.memory.snapshot(),
+                home_assistant: Some(self.ha.settings()).filter(|s| *s != ha::HaSettings::default()),
+            }
         }
     }
 

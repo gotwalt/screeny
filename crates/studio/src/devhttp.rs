@@ -251,7 +251,11 @@ pub fn post_firmware(
     let said = serde_json::from_slice::<ErrorReply>(body).ok();
     Err(Fault::reached(match said {
         Some(e) => {
-            format!("the panel refused the upload: {}{}", e.error, e.detail.map_or_else(String::new, |d| format!(" ({d})")))
+            format!(
+                "the panel refused the upload: {}{}",
+                e.error,
+                e.detail.map_or_else(String::new, |d| format!(" ({d})"))
+            )
         }
         None => write_error.unwrap_or_else(|| format!("the upload was answered {status}")),
     }))
@@ -261,7 +265,12 @@ pub fn post_firmware(
 /// [`get_panic`] both are, parameterised on the route and the reply shape -
 /// the connection handling, the deadline and the 404-is-absent rule are one
 /// implementation rather than two that happen to agree.
-fn read_json<T: DeserializeOwned>(path: &str, addr: SocketAddr, patience: Duration, cost: &mut Cost) -> Result<T, Fault> {
+fn read_json<T: DeserializeOwned>(
+    path: &str,
+    addr: SocketAddr,
+    patience: Duration,
+    cost: &mut Cost,
+) -> Result<T, Fault> {
     let started = Instant::now();
     let left = || patience.checked_sub(started.elapsed()).filter(|d| !d.is_zero());
 
@@ -314,7 +323,12 @@ fn read_reply(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>, cost:
 }
 
 /// [`read_reply`] with its own ceiling.
-fn read_reply_with(stream: &mut TcpStream, left: &dyn Fn() -> Option<Duration>, cost: &mut Cost, max: usize) -> Result<Vec<u8>, Fault> {
+fn read_reply_with(
+    stream: &mut TcpStream,
+    left: &dyn Fn() -> Option<Duration>,
+    cost: &mut Cost,
+    max: usize,
+) -> Result<Vec<u8>, Fault> {
     let mut raw: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     loop {

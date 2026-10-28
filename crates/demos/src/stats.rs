@@ -49,13 +49,7 @@ impl FrameStats {
             Wire::Exact(c) => c,
             Wire::Lossy => "LOSSY",
         };
-        format!(
-            "{} colors  {} B {}  APL {:.0}%",
-            self.colors,
-            self.est_bytes,
-            w,
-            self.apl * 100.0
-        )
+        format!("{} colors  {} B {}  APL {:.0}%", self.colors, self.est_bytes, w, self.apl * 100.0)
     }
 }
 
@@ -113,11 +107,7 @@ pub fn frame_stats(f: &Frame, p: &Panel) -> FrameStats {
     FrameStats {
         colors: st.colours,
         est_bytes: out.payload.len(),
-        wire: if st.exact {
-            Wire::Exact(codec_name(out.codec))
-        } else {
-            Wire::Lossy
-        },
+        wire: if st.exact { Wire::Exact(codec_name(out.codec)) } else { Wire::Lossy },
         apl: apl(f, p),
     }
 }

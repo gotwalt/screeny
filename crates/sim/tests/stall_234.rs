@@ -78,13 +78,8 @@ impl Polled {
         let worst_run = Arc::new(AtomicU32::new(0));
         let worst_us = Arc::new(AtomicU64::new(0));
         let handle = {
-            let (stop, ok, miss, worst_run, worst_us) = (
-                stop.clone(),
-                ok.clone(),
-                miss.clone(),
-                worst_run.clone(),
-                worst_us.clone(),
-            );
+            let (stop, ok, miss, worst_run, worst_us) =
+                (stop.clone(), ok.clone(), miss.clone(), worst_run.clone(), worst_us.clone());
             thread::spawn(move || {
                 let mut run = 0u32;
                 while !stop.load(Ordering::Relaxed) {
@@ -98,9 +93,8 @@ impl Polled {
                     // Parsed with the API's own type, not a `Value`: a 200
                     // carrying something the Studio could not read is not an
                     // answer.
-                    let answered = res.is_ok_and(|r| {
-                        r.status == 200 && serde_json::from_slice::<StatusReply>(&r.body).is_ok()
-                    });
+                    let answered =
+                        res.is_ok_and(|r| r.status == 200 && serde_json::from_slice::<StatusReply>(&r.body).is_ok());
                     if answered {
                         ok.fetch_add(1, Ordering::Relaxed);
                         run = 0;
@@ -113,14 +107,7 @@ impl Polled {
                 }
             })
         };
-        Polled {
-            stop,
-            ok,
-            miss,
-            worst_run,
-            worst_us,
-            handle,
-        }
+        Polled { stop, ok, miss, worst_run, worst_us, handle }
     }
 
     /// Stop, join, and assert the page never went silent.
@@ -137,11 +124,7 @@ impl Polled {
              the page went silent and stayed silent, which is card 234's symptom",
             ok + miss
         );
-        assert!(
-            ok >= least,
-            "{what}: only {ok} of {} status polls got through",
-            ok + miss
-        );
+        assert!(ok >= least, "{what}: only {ok} of {} status polls got through", ok + miss);
         assert!(
             worst < POLL_DEADLINE,
             "{what}: the slowest status poll took {worst:?}, over the {POLL_DEADLINE:?} deadline"
@@ -170,11 +153,7 @@ fn the_bench_sequence_keeps_every_port_answering() {
         ..screeny_probe::http::Opts::new(api, api.to_string())
     };
     let http_summary = screeny_probe::http::run(&http_opts).expect("the HTTP suite ran");
-    assert_eq!(
-        http_summary.failed, 0,
-        "the HTTP suite failed {} rules under a concurrent poller",
-        http_summary.failed
-    );
+    assert_eq!(http_summary.failed, 0, "the HTTP suite failed {} rules under a concurrent poller", http_summary.failed);
 
     // 2. The panel is released, exactly as the Studio released it at ~80 s.
     let mut ctrl = Control::connect(dev.control_addr()).expect("control socket");
@@ -193,16 +172,8 @@ fn the_bench_sequence_keeps_every_port_answering() {
         restore_idle: 0,
     };
     let udp_summary = suite::run(&udp_opts).expect("the UDP suite ran");
-    assert_eq!(
-        udp_summary.failed, 0,
-        "the UDP suite failed {} rules under a concurrent poller",
-        udp_summary.failed
-    );
-    assert!(
-        udp_summary.passed >= 60,
-        "only {} UDP rules ran; the catalogue has shrunk",
-        udp_summary.passed
-    );
+    assert_eq!(udp_summary.failed, 0, "the UDP suite failed {} rules under a concurrent poller", udp_summary.failed);
+    assert!(udp_summary.passed >= 60, "only {} UDP rules ran; the catalogue has shrunk", udp_summary.passed);
 
     poll.finish(20, "the bench sequence");
     dev.shutdown();
@@ -277,23 +248,14 @@ fn a_locked_out_second_source_does_not_stall_the_other_ports() {
     let _holder = holder.join().expect("the holding sender");
     let refused = refused.join().expect("the refused sender");
 
-    assert!(
-        telemetries >= 20,
-        "only {telemetries} telemetry replies in six seconds"
-    );
+    assert!(telemetries >= 20, "only {telemetries} telemetry replies in six seconds");
 
     // Section 6.2: a locked-out source is told, and told no more often than
     // `BUSY_MIN_INTERVAL_MS`. That bound is the whole reason the firmware's
     // send loop is short enough to give each datagram a deadline.
     let back = refused.drain();
-    assert!(
-        !back.is_empty(),
-        "the refused source was never sent a BUSY, so section 6.2 was not exercised"
-    );
-    let busies = back
-        .iter()
-        .filter(|b| b.len() >= 3 && b[2] == op::BUSY)
-        .count();
+    assert!(!back.is_empty(), "the refused source was never sent a BUSY, so section 6.2 was not exercised");
+    let busies = back.iter().filter(|b| b.len() >= 3 && b[2] == op::BUSY).count();
     assert!(busies > 0, "nothing that came back was a BUSY: {back:?}");
     // One per second at the outside, over three seconds of being refused
     // thirty times a second, plus slack for the drain's boundaries.

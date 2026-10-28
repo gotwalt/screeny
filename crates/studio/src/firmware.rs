@@ -162,7 +162,9 @@ impl Run {
     #[must_use]
     pub fn percent(&self) -> Option<u8> {
         match self {
-            Run::Uploading { sent, total } if *total > 0 => Some(u8::try_from((sent * 100 / total).min(100)).unwrap_or(100)),
+            Run::Uploading { sent, total } if *total > 0 => {
+                Some(u8::try_from((sent * 100 / total).min(100)).unwrap_or(100))
+            }
             _ => None,
         }
     }
@@ -269,12 +271,16 @@ impl Firmware {
             _ if run.as_ref().is_some_and(Run::is_active) => Some("an update is in progress".to_string()),
             (None, _) => Some("this Studio carries no firmware to offer".to_string()),
             (Some(_), None) => Some("the panel has not said what firmware it runs".to_string()),
-            (Some(o), Some(i)) if !is_update(i, o) => Some(if parse_version(i).is_some() && parse_version(o).is_some() {
-                "the panel is up to date".to_string()
-            } else {
-                "the versions cannot be compared".to_string()
-            }),
-            _ if state.is_some_and(|s| s != FwState::Valid) => Some("the panel is still proving the firmware it is running".to_string()),
+            (Some(o), Some(i)) if !is_update(i, o) => {
+                Some(if parse_version(i).is_some() && parse_version(o).is_some() {
+                    "the panel is up to date".to_string()
+                } else {
+                    "the versions cannot be compared".to_string()
+                })
+            }
+            _ if state.is_some_and(|s| s != FwState::Valid) => {
+                Some("the panel is still proving the firmware it is running".to_string())
+            }
             _ => None,
         };
         View { available: why_not.is_none(), why_not, installed, offered, run }
@@ -292,7 +298,8 @@ pub fn start(st: &AppState, device: &str) -> Result<(), String> {
     let fw = Arc::clone(&st.firmware);
     let offer = fw.offer.clone().ok_or("this Studio carries no firmware to offer")?;
     let record = st.devices.get(device).ok_or_else(|| format!("no panel `{device}`"))?;
-    let facts = record.facts.as_ref().ok_or("the panel has not answered its status API yet, so its firmware is unknown")?;
+    let facts =
+        record.facts.as_ref().ok_or("the panel has not answered its status API yet, so its firmware is unknown")?;
     let installed = facts.reply.fw.to_string();
     let addr = record.http_addr(st.cfg.device_http_port).ok_or("the panel's address is not known yet")?;
     let view = fw.view(device, Some(&installed), Some(facts.reply.fw_state));
@@ -327,7 +334,14 @@ pub fn start(st: &AppState, device: &str) -> Result<(), String> {
     Ok(())
 }
 
-async fn run_update(st: &AppState, device: &str, addr: std::net::SocketAddr, offer: &Offer, before: u32, installed: &str) -> Result<(), String> {
+async fn run_update(
+    st: &AppState,
+    device: &str,
+    addr: std::net::SocketAddr,
+    offer: &Offer,
+    before: u32,
+    installed: &str,
+) -> Result<(), String> {
     let fw = &st.firmware;
     let timing = fw.timing;
     let total = offer.bytes.len();
@@ -340,7 +354,9 @@ async fn run_update(st: &AppState, device: &str, addr: std::net::SocketAddr, off
     let progress_to = Arc::clone(&st.firmware);
     let id = device.to_string();
     let reply = tokio::task::spawn_blocking(move || {
-        devhttp::post_firmware(addr, &bytes, true, timing.upload, &mut |sent| progress_to.set(&id, Run::Uploading { sent, total }))
+        devhttp::post_firmware(addr, &bytes, true, timing.upload, &mut |sent| {
+            progress_to.set(&id, Run::Uploading { sent, total })
+        })
     })
     .await
     .map_err(|e| format!("the upload task failed: {e}"))?
@@ -383,7 +399,10 @@ async fn run_update(st: &AppState, device: &str, addr: std::net::SocketAddr, off
         let state = now.fw_state;
         st.devices.heard_http(device, now.clone());
         if running != offer.version {
-            return Err(format!("the panel came back on firmware {running}, not {}: it rolled the update back", offer.version));
+            return Err(format!(
+                "the panel came back on firmware {running}, not {}: it rolled the update back",
+                offer.version
+            ));
         }
         if state == FwState::Valid {
             return Ok(());
@@ -445,7 +464,8 @@ mod tests {
 
     #[test]
     fn an_image_is_checked_the_way_the_panel_checks_it() {
-        let good = screeny_fwimage::build::Builder { version: "0.11.0", ..screeny_fwimage::build::Builder::good() }.build();
+        let good =
+            screeny_fwimage::build::Builder { version: "0.11.0", ..screeny_fwimage::build::Builder::good() }.build();
         assert_eq!(check_image(&good).as_deref(), Ok("0.11.0"));
         let wrong = screeny_fwimage::build::Builder::wrong_project().build();
         assert!(check_image(&wrong).is_err());

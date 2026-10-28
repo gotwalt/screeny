@@ -96,17 +96,9 @@ pub struct QuantEffort {
 impl QuantEffort {
     /// The lab's settings: ten iterations at k<=32, and a fresh median cut
     /// kept as the safety valve. The baseline card 031 measures against.
-    pub const FULL: QuantEffort = QuantEffort {
-        iters: 10,
-        seeded_iters: 10,
-        verify_seed: true,
-    };
+    pub const FULL: QuantEffort = QuantEffort { iters: 10, seeded_iters: 10, verify_seed: true };
     /// Fewer iterations, seeded starts trusted without a second opinion.
-    pub const FAST: QuantEffort = QuantEffort {
-        iters: 4,
-        seeded_iters: 2,
-        verify_seed: false,
-    };
+    pub const FAST: QuantEffort = QuantEffort { iters: 4, seeded_iters: 2, verify_seed: false };
 }
 
 /// A palette and what it costs on the frame it was built for.
@@ -170,10 +162,7 @@ pub fn build(
         while srgb.len() < k {
             srgb.push([0, 0, 0]);
         }
-        return Built {
-            palette: Palette::from_srgb(srgb),
-            cost: 0.0,
-        };
+        return Built { palette: Palette::from_srgb(srgb), cost: 0.0 };
     }
 
     let fresh = |hist: &Hist| {
@@ -202,10 +191,7 @@ pub fn build(
         }
         _ => fresh(hist),
     };
-    Built {
-        palette: Palette::from_srgb(chosen.iter().map(|c| lab_to_srgb8(*c)).collect()),
-        cost,
-    }
+    Built { palette: Palette::from_srgb(chosen.iter().map(|c| lab_to_srgb8(*c)).collect()), cost }
 }
 
 fn lab_to_srgb8(lab: [f32; 3]) -> [u8; 3] {
@@ -245,9 +231,7 @@ fn median_cut(hist: &Hist, k: usize) -> Vec<[f32; 3]> {
         let axis = boxes[i].axis;
         let mut b = boxes.swap_remove(i).members;
         b.sort_by(|&p, &q| {
-            lab[p as usize][axis]
-                .partial_cmp(&lab[q as usize][axis])
-                .unwrap_or(std::cmp::Ordering::Equal)
+            lab[p as usize][axis].partial_cmp(&lab[q as usize][axis]).unwrap_or(std::cmp::Ordering::Equal)
         });
         let total: f32 = b.iter().map(|&j| hist.bins[j as usize].count).sum();
         let mut acc = 0.0;
@@ -268,19 +252,11 @@ fn median_cut(hist: &Hist, k: usize) -> Vec<[f32; 3]> {
 
 fn score_box(hist: &Hist, members: Vec<u32>) -> Box {
     if members.len() < 2 {
-        return Box {
-            members,
-            axis: 0,
-            score: 0.0,
-        };
+        return Box { members, axis: 0, score: 0.0 };
     }
     let (axis, span) = longest_axis(hist, &members);
     let n: f32 = members.iter().map(|&j| hist.bins[j as usize].count).sum();
-    Box {
-        members,
-        axis,
-        score: span * n.sqrt(),
-    }
+    Box { members, axis, score: span * n.sqrt() }
 }
 
 fn centroid(hist: &Hist, idxs: &[u32]) -> [f32; 3] {
@@ -297,11 +273,7 @@ fn centroid(hist: &Hist, idxs: &[u32]) -> [f32; 3] {
     if w == 0.0 {
         return [0.0; 3];
     }
-    [
-        (acc[0] / w) as f32,
-        (acc[1] / w) as f32,
-        (acc[2] / w) as f32,
-    ]
+    [(acc[0] / w) as f32, (acc[1] / w) as f32, (acc[2] / w) as f32]
 }
 
 fn longest_axis(hist: &Hist, idxs: &[u32]) -> (usize, f32) {
@@ -354,11 +326,7 @@ fn lloyd(hist: &Hist, mut cents: Vec<[f32; 3]>, iters: usize) -> Vec<[f32; 3]> {
         let mut moved = 0f32;
         for i in 0..k {
             if wsum[i] > 0.0 {
-                let next = [
-                    (acc[i][0] / wsum[i]) as f32,
-                    (acc[i][1] / wsum[i]) as f32,
-                    (acc[i][2] / wsum[i]) as f32,
-                ];
+                let next = [(acc[i][0] / wsum[i]) as f32, (acc[i][1] / wsum[i]) as f32, (acc[i][2] / wsum[i]) as f32];
                 moved = moved.max(d2(next, cents[i]));
                 cents[i] = next;
             }
@@ -378,8 +346,5 @@ fn lloyd(hist: &Hist, mut cents: Vec<[f32; 3]>, iters: usize) -> Vec<[f32; 3]> {
 #[must_use]
 pub fn nearest_per_bin(hist: &Hist, pal: &Palette) -> Vec<u8> {
     let index = NnIndex::build(&pal.lab);
-    hist.lab()
-        .iter()
-        .map(|l| index.nearest(*l).0 as u8)
-        .collect()
+    hist.lab().iter().map(|l| index.nearest(*l).0 as u8).collect()
 }

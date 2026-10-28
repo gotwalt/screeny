@@ -27,12 +27,7 @@ const T: Duration = Duration::from_secs(3);
 fn counters(t: &Telemetry) -> String {
     format!(
         "frames_rx {}, frames_shown {}, superseded {}, seq_gaps {}, stale {}, rejected {}",
-        t.frames_rx,
-        t.frames_shown,
-        t.frames_dropped_superseded,
-        t.seq_gaps,
-        t.frames_dropped_stale,
-        t.frames_rejected,
+        t.frames_rx, t.frames_shown, t.frames_dropped_superseded, t.seq_gaps, t.frames_dropped_stale, t.frames_rejected,
     )
 }
 
@@ -80,23 +75,18 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
         // rest of the suite, and the counters are read on the frame thread.
         sim.set_faults(Faults::default());
         let tail = tx.send(codec::SOLID, F_KEY, &p);
-        let snap = sim
-            .wait_until(T, |s| s.shown.as_ref().map(|m| m.seq) == Some(tail))
-            .unwrap_or_else(|| {
-                panic!(
-                    "frame {tail}, the last of {}, never reached the panel within {T:?}: {}",
-                    n + 1,
-                    counters(&sim.telemetry())
-                )
-            });
+        let snap = sim.wait_until(T, |s| s.shown.as_ref().map(|m| m.seq) == Some(tail)).unwrap_or_else(|| {
+            panic!(
+                "frame {tail}, the last of {}, never reached the panel within {T:?}: {}",
+                n + 1,
+                counters(&sim.telemetry())
+            )
+        });
         // That last frame is one of the stream as far as the counters go.
         (n + 1, snap.telemetry)
     };
 
-    let (sent, lossy) = stream(Faults {
-        drop_pct: 30.0,
-        ..Faults::default()
-    });
+    let (sent, lossy) = stream(Faults { drop_pct: 30.0, ..Faults::default() });
     // Network-limited: three datagrams in ten never happened, so they are
     // simply missing from frames_rx. Both ends of the band matter - too few
     // would mean the stream was never read, not that it was lost.
@@ -108,11 +98,7 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
     // And it left holes where it went. This one owes nothing to the host's
     // scheduling: the slow run below has no holes at all, so the pair of them
     // tells the two cases apart on its own.
-    assert!(
-        lossy.seq_gaps > 0,
-        "a lost packet leaves a hole in the sequence; {}",
-        counters(&lossy)
-    );
+    assert!(lossy.seq_gaps > 0, "a lost packet leaves a hole in the sequence; {}", counters(&lossy));
     // And the device kept up with what did arrive: a lost packet is not a
     // superseded one. Against `frames_rx` rather than against zero, because
     // zero is a statement about the machine's scheduler.
@@ -123,10 +109,7 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
         counters(&lossy)
     );
 
-    let (sent, slow) = stream(Faults {
-        decode_ms: 40,
-        ..Faults::default()
-    });
+    let (sent, slow) = stream(Faults { decode_ms: 40, ..Faults::default() });
     // Decode-limited: nothing was lost on the way in. The tail frame proves
     // the drain reached the end of the stream, so a datagram the kernel had
     // dropped would have left a hole behind it and `seq_gaps` would say so -
@@ -147,17 +130,12 @@ fn a_sender_can_tell_network_loss_from_a_slow_device() {
     // send loop still paced at 5.5 ms a frame - and when it happens the
     // failure prints `frames_shown` next to `frames_rx` and says so plainly,
     // which is the honest answer rather than a bound low enough to hide it.
-    assert!(
-        slow.frames_dropped_superseded * 2 > slow.frames_rx,
-        "and could not draw it in time; {}",
-        counters(&slow)
-    );
+    assert!(slow.frames_dropped_superseded * 2 > slow.frames_rx, "and could not draw it in time; {}", counters(&slow));
 
     // The sentence the test's name makes, said in counters: whichever way the
     // machine's load leans, these two do not look like one another.
     assert!(
-        slow.frames_rx > lossy.frames_rx
-            && slow.frames_dropped_superseded > lossy.frames_dropped_superseded,
+        slow.frames_rx > lossy.frames_rx && slow.frames_dropped_superseded > lossy.frames_dropped_superseded,
         "loss and slowness must not look alike: lossy [{}] against slow [{}]",
         counters(&lossy),
         counters(&slow)
@@ -179,12 +157,10 @@ fn the_telemetry_struct_round_trips_through_its_own_offsets() {
     sim.wait_for_frames(1, T).unwrap();
 
     tx.send_seq(codec::SOLID, F_KEY, 0, &p); // a duplicate of seq 0: stale
-    sim.wait_until(T, |s| s.telemetry.frames_dropped_stale == 1)
-        .expect("stale");
+    sim.wait_until(T, |s| s.telemetry.frames_dropped_stale == 1).expect("stale");
 
     tx.send(codec::BC1_DUAL, F_KEY, &p); // 3 bytes where 1296 are required
-    sim.wait_until(T, |s| s.telemetry.frames_dropped_decode == 1)
-        .expect("decode drop");
+    sim.wait_until(T, |s| s.telemetry.frames_dropped_decode == 1).expect("decode drop");
 
     tx.send(codec::SOLID, F_KEY | F_STATS_REQ, &p);
 
@@ -195,22 +171,13 @@ fn the_telemetry_struct_round_trips_through_its_own_offsets() {
     // to this crate; the deadline is the same `T` the rest of the test uses.
     let deadline = std::time::Instant::now() + T;
     let d = loop {
-        if let Some(d) = tx
-            .drain()
-            .into_iter()
-            .find(|d| ControlPacket::parse(d).map(|p| p.op) == Ok(op::TELEMETRY))
-        {
+        if let Some(d) = tx.drain().into_iter().find(|d| ControlPacket::parse(d).map(|p| p.op) == Ok(op::TELEMETRY)) {
             break d;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no TELEMETRY came back within {T:?}"
-        );
+        assert!(std::time::Instant::now() < deadline, "no TELEMETRY came back within {T:?}");
     };
     let pkt = ControlPacket::parse(&d).unwrap();
-    let Ok(Reply::Telemetry(wire)) = Reply::decode(pkt.op, pkt.flags, pkt.body) else {
-        panic!()
-    };
+    let Ok(Reply::Telemetry(wire)) = Reply::decode(pkt.op, pkt.flags, pkt.body) else { panic!() };
 
     assert_eq!(wire.frames_dropped_stale, 1);
     assert_eq!(wire.frames_dropped_decode, 1);

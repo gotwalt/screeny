@@ -32,32 +32,14 @@ fn no_secret_words(what: &str, bytes: &[u8]) {
 #[test]
 fn no_reply_type_can_carry_a_psk() {
     no_secret_words("StatusReply", &serde_json::to_vec(&worst_status()).unwrap());
-    no_secret_words(
-        "TelemetryReply",
-        &serde_json::to_vec(&worst_telemetry()).unwrap(),
-    );
-    no_secret_words(
-        "NetworksReply",
-        &serde_json::to_vec(&worst_networks()).unwrap(),
-    );
+    no_secret_words("TelemetryReply", &serde_json::to_vec(&worst_telemetry()).unwrap());
+    no_secret_words("NetworksReply", &serde_json::to_vec(&worst_networks()).unwrap());
     no_secret_words("WifiReply", &serde_json::to_vec(&worst_wifi()).unwrap());
-    no_secret_words(
-        "SettingsReply",
-        &serde_json::to_vec(&worst_settings_reply()).unwrap(),
-    );
-    no_secret_words(
-        "FirmwareReply",
-        &serde_json::to_vec(&worst_firmware()).unwrap(),
-    );
-    no_secret_words(
-        "AcceptedReply",
-        &serde_json::to_vec(&worst_accepted()).unwrap(),
-    );
+    no_secret_words("SettingsReply", &serde_json::to_vec(&worst_settings_reply()).unwrap());
+    no_secret_words("FirmwareReply", &serde_json::to_vec(&worst_firmware()).unwrap());
+    no_secret_words("AcceptedReply", &serde_json::to_vec(&worst_accepted()).unwrap());
     no_secret_words("ErrorReply", &serde_json::to_vec(&worst_error()).unwrap());
-    no_secret_words(
-        "PanicReply",
-        &serde_json::to_vec(&worst_panic_reply()).unwrap(),
-    );
+    no_secret_words("PanicReply", &serde_json::to_vec(&worst_panic_reply()).unwrap());
 }
 
 #[test]

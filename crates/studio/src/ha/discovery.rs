@@ -167,7 +167,8 @@ pub mod key {
 /// discovery removes a component by listing it with its platform and nothing
 /// else; they are listed on every announcement, which costs a few bytes and
 /// means a studio that was down when this build first ran still cleans up.
-pub const RETIRED: &[(&str, &str)] = &[("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")];
+pub const RETIRED: &[(&str, &str)] =
+    &[("scene", "select"), ("schedule", "switch"), ("resume", "button"), ("scheduled", "sensor")];
 
 /// Card 355: what a later panel's device had from card 352 and does not any
 /// more - its picture and patch are its channel's now. Removed by listing them
@@ -284,7 +285,11 @@ pub fn build(cfg: &MqttConfig, topics: &Topics, snap: &Snapshot) -> DeviceDiscov
                 _ => snap.firmware.installed.clone(),
             },
         },
-        origin: Origin { name: "screeny-studio".into(), sw_version: env!("CARGO_PKG_VERSION").into(), support_url: None },
+        origin: Origin {
+            name: "screeny-studio".into(),
+            sw_version: env!("CARGO_PKG_VERSION").into(),
+            support_url: None,
+        },
         components,
     }
 }
@@ -357,7 +362,11 @@ mod tests {
         // compared with the select taken out, and the select has its own pin.
         // Card 364 added the firmware's `update` entity, and has its own pin
         // (`update.json`).
-        let update = value["components"].as_object_mut().unwrap().remove("firmware").expect("the first device has a firmware update entity");
+        let update = value["components"]
+            .as_object_mut()
+            .unwrap()
+            .remove("firmware")
+            .expect("the first device has a firmware update entity");
         let text = serde_json::to_string_pretty(&update).unwrap();
         snapshot_json("update.json", &text);
         assert_eq!(update["platform"], "update");
@@ -367,7 +376,11 @@ mod tests {
         assert_eq!(update["command_topic"], "screeny/studio/firmware/set");
         assert_eq!(update["state_topic"], "screeny/studio/firmware/state");
         assert_eq!(update["availability_topic"], "screeny/studio/status");
-        let channel = value["components"].as_object_mut().unwrap().remove("channel").expect("the first device has a channel select");
+        let channel = value["components"]
+            .as_object_mut()
+            .unwrap()
+            .remove("channel")
+            .expect("the first device has a channel select");
         assert_eq!(channel["platform"], "select");
         assert_eq!(channel["unique_id"], "screeny_studio_channel");
         assert_eq!(channel["command_topic"], "screeny/studio/channel/set");
@@ -383,7 +396,8 @@ mod tests {
         let cfg = config();
         let topics = Topics::new(&cfg);
         let value = serde_json::to_value(build(&cfg, &topics, &snap())).unwrap();
-        let ids: Vec<&str> = value["components"].as_object().unwrap().values().filter_map(|c| c["unique_id"].as_str()).collect();
+        let ids: Vec<&str> =
+            value["components"].as_object().unwrap().values().filter_map(|c| c["unique_id"].as_str()).collect();
         assert_eq!(ids.len(), 7, "the five it always had, the channel select and the firmware update");
         let mut sorted = ids.clone();
         sorted.sort_unstable();
