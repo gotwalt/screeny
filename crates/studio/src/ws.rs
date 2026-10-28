@@ -404,7 +404,7 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
         if let Some(m) = as_text(&msg) {
             let _ = tokio::time::timeout(STALL, socket.send(m)).await;
         }
-        let _ = socket.send(Message::Close(None)).await;
+        let _ = tokio::time::timeout(STALL, socket.send(Message::Close(None))).await;
         return;
     };
     let mut states = st.states.subscribe();
@@ -525,7 +525,12 @@ async fn run(mut socket: WebSocket, st: AppState, q: WsQuery) {
             break;
         }
     }
-    let _ = socket.send(Message::Close(None)).await;
+    // Under the same timeout as every other send. Most ways out of the loop
+    // are a socket that has stopped draining, and an unbounded close on one
+    // of those waits for ever: the task, its socket and its count in
+    // `sockets.open` were never let go, which is the leak the stall timeout
+    // exists to prevent.
+    let _ = tokio::time::timeout(STALL, socket.send(Message::Close(None))).await;
 }
 
 /// A `preview` message from the browser. Anything else is ignored: a page from

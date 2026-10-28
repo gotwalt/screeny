@@ -320,9 +320,21 @@ async fn a_stalled_browser_does_not_hold_up_the_engine_or_the_panel() {
 async fn a_stalled_browser_is_eventually_dropped() {
     let studio = studio().await;
     let mut stalled = Ws::connect_on(tiny_socket(studio.addr).await, Some("stalled")).await;
+    let open = |v: &serde_json::Value| v["sockets"]["open"].as_u64();
+    until_json(studio.addr, Duration::from_secs(5), "the socket to open", "/api/v1/status", |v| open(v) == Some(1))
+        .await;
 
-    // Long enough for the socket to wedge and the 3 s timeout to expire.
-    tokio::time::sleep(Duration::from_secs(6)).await;
+    // Wait for the studio to give up on it, rather than for a fixed time. The
+    // tiny receive buffer is the browser's; the studio's send buffer is the
+    // kernel's to size, and Linux grows it past a megabyte on loopback, so the
+    // socket only wedges once that has filled (about 7 s of frames on kernel
+    // 6.8), then the 3 s timeout, then up to 3 s more for the close. A fixed
+    // 6 s wait passed on a smaller buffer and failed every time on this one,
+    // and waiting on `sockets.open` is what caught the close itself hanging.
+    until_json(studio.addr, Duration::from_secs(40), "the stalled socket to be dropped", "/api/v1/status", |v| {
+        open(v) == Some(0)
+    })
+    .await;
 
     // Now drain it. Everything buffered arrives, and then the server's close.
     let closed = tokio::time::timeout(Duration::from_secs(10), async {
