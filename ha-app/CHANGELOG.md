@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.9
+
+- **Clocks: numerals** starts in **Gold and Blue**: a brass hour hand and a
+  slate minute hand, thin hands, faint resting dials, and the time held for
+  5 seconds before the dials drift. A panel already showing it keeps its own
+  settings.
+- **Physarum** starts as **worms**, tuned on the panel: fed faster, drawn
+  more strongly, at a finer scale, the time spaced out and eaten slowly.
+- New **Physarum** setting, **Which palette**: *mineral* (as before), *gold
+  and blue*, *parlour* and *lamplight*. The three new ones are made for the
+  panel in a room: the faintest veins are a warm amber rather than the
+  electric violet and red the LEDs make at their lowest levels, and the
+  brightest pale to a warm bone rather than a cool white.
+- **Physarum** no longer draws long straight vertical lines: the colony's
+  world has walls now instead of wrapping round top to bottom.
+
 ## 0.1.8
 
 - **flame clock** is now called **Flavortime**. Its settings start over at
