@@ -61,8 +61,10 @@ pub const OTA1_OFFSET: u32 = 0x1F0000;
 
 /// Brightness. The Tidbyt's limits are a laptop-USB budget; this board has its
 /// own USB-C supply, taken as 3 A at 5 V (owner, 2026-10-29). Full white on all
-/// 1024 pixels draws about 4 A at 100% duty (Adafruit), so 18 of the 32 slots in
-/// a scan row (56%) is about 2.2 A for a full-white frame, and the slider has
+/// 1024 pixels draws about 4 A at 100% duty (Adafruit), so 22 of the 32 slots in
+/// a scan row (69%) is about 2.75 A for a full-white frame - the owner's choice
+/// (2026-10-29), just under the supply and the board's own sketch's 24 of 32.
+/// The patches are mostly dark, so real draw is far below it. The slider has
 /// its whole range. The firmware's 39%-duty ceiling stays the Tidbyt's.
 pub const BRIGHTNESS_CAP: u8 = 255;
-pub const MAX_OE_SLOTS: usize = 18;
+pub const MAX_OE_SLOTS: usize = 22;

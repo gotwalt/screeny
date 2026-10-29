@@ -100,7 +100,7 @@ impl DrawTarget for Frame {
 /// framebuffer could reach 55 slots (86%); we never ask it to.
 ///
 /// Per board (`board::MAX_OE_SLOTS`): a scan row is one slot per column, and
-/// the art panel, with its own supply, may light 18 of its 32 (56%).
+/// the art panel, with its own supply, may light 22 of its 32 (69%).
 pub const MAX_OE_SLOTS: usize = crate::board::MAX_OE_SLOTS;
 const _: () = assert!(MAX_OE_SLOTS <= FrameBuffer::OE_SLOTS);
 
