@@ -7,6 +7,10 @@
 //! `DCElfving/LED_Art_Panel`, `LED_Art_Panel.ino:33-52`, which drives it with
 //! `ESP32-HUB75-MatrixPanel-I2S-DMA` at that library's defaults.
 //!
+//! The bench unit's chip is an ESP32-D0WDQ6 at silicon revision 1.0; esp-hal
+//! wants 3.0 unless built with `ESP_HAL_CONFIG_MIN_CHIP_REVISION=100`, and then
+//! applies its older-silicon workarounds at run time. Boots and runs on it.
+//!
 //! The same names as [`crate::tidbyt`], so `crate::board` can be either.
 #![allow(dead_code)]
 
