@@ -82,6 +82,14 @@ mod spike_ota;
 mod stack_probe;
 mod store;
 mod tidbyt;
+#[cfg(feature = "board-art-panel")]
+mod art_panel;
+/// The board this image is built for: the Tidbyt Gen 1 unless
+/// `--features board-art-panel`. Same constant names in both.
+#[cfg(not(feature = "board-art-panel"))]
+use tidbyt as board;
+#[cfg(feature = "board-art-panel")]
+use art_panel as board;
 // Card 201's compile-only spike (`spike-ap`, `spike-portal`, `spike-qr`,
 // `device-web-spike`) was **retired by card 223**: the soft-AP, the DHCP
 // server, the DNS catch-all and the QR screen are in the default build now, so
@@ -266,8 +274,15 @@ pub const MAX_DATAGRAM: usize = screeny_proto::MAX_UDP_PAYLOAD;
 /// an unattended soak. 160/255 is 16 of 64 output-enable slots, 25% duty.
 pub const BRIGHTNESS_CAP: u8 = 160;
 
-pub const COLS: usize = tidbyt::PANEL_COLS;
-pub const ROWS: usize = tidbyt::PANEL_ROWS;
+/// The frame: what the wire carries and what every screen draws, 64x32
+/// whatever the board.
+pub const COLS: usize = screeny_proto::W;
+pub const ROWS: usize = screeny_proto::H;
+/// The panel. On a narrower panel than the frame (the art panel's 32x32)
+/// the display shows the frame's centre columns until frames learn their
+/// own size.
+pub const PANEL_COLS: usize = board::PANEL_COLS;
+const _: () = assert!(PANEL_COLS <= COLS && board::PANEL_ROWS == ROWS);
 /// 1/16 scan: the panel shifts two rows at a time.
 const NROWS: usize = compute_rows(ROWS);
 
@@ -275,9 +290,9 @@ const NROWS: usize = compute_rows(ROWS);
 /// the gamma table is built against this number.
 const PLANES: usize = gamma::PLANES;
 
-const PIXEL_CLOCK: Rate = Rate::from_mhz(tidbyt::PIXEL_CLOCK_MHZ);
+const PIXEL_CLOCK: Rate = Rate::from_mhz(board::PIXEL_CLOCK_MHZ);
 
-pub type FrameBuffer = DmaFrameBuffer<NROWS, COLS, PLANES>;
+pub type FrameBuffer = DmaFrameBuffer<NROWS, PANEL_COLS, PLANES>;
 
 const REFRESH_HZ: u32 = esp_hub75::refresh_hz::<FrameBuffer>(PIXEL_CLOCK);
 
@@ -792,7 +807,7 @@ async fn telemetry_task() {
 
 #[track_caller]
 fn assert_pin(pin: &impl Pin, expected: u8) {
-    assert_eq!(pin.number(), expected, "pin map disagrees with tidbyt::pins");
+    assert_eq!(pin.number(), expected, "pin map disagrees with board::pins");
 }
 
 #[esp_rtos::main]
@@ -894,83 +909,139 @@ async fn main(spawner: Spawner) {
     BRIGHTNESS.store(boot_brightness, Ordering::Relaxed);
 
     // --- panel ------------------------------------------------------------
-    assert_pin(&peripherals.GPIO21, tidbyt::pins::R1);
-    assert_pin(&peripherals.GPIO2, tidbyt::pins::G1);
-    assert_pin(&peripherals.GPIO22, tidbyt::pins::B1);
-    assert_pin(&peripherals.GPIO23, tidbyt::pins::R2);
-    assert_pin(&peripherals.GPIO4, tidbyt::pins::G2);
-    assert_pin(&peripherals.GPIO27, tidbyt::pins::B2);
-    assert_pin(&peripherals.GPIO26, tidbyt::pins::A);
-    assert_pin(&peripherals.GPIO5, tidbyt::pins::B);
-    assert_pin(&peripherals.GPIO25, tidbyt::pins::C);
-    assert_pin(&peripherals.GPIO18, tidbyt::pins::D);
-    assert_pin(&peripherals.GPIO14, tidbyt::pins::E_UNUSED);
-    assert_pin(&peripherals.GPIO19, tidbyt::pins::LAT);
-    assert_pin(&peripherals.GPIO32, tidbyt::pins::OE);
-    assert_pin(&peripherals.GPIO33, tidbyt::pins::CLK);
+    #[cfg(not(feature = "board-art-panel"))]
+    let pins = {
+        assert_pin(&peripherals.GPIO21, board::pins::R1);
+        assert_pin(&peripherals.GPIO2, board::pins::G1);
+        assert_pin(&peripherals.GPIO22, board::pins::B1);
+        assert_pin(&peripherals.GPIO23, board::pins::R2);
+        assert_pin(&peripherals.GPIO4, board::pins::G2);
+        assert_pin(&peripherals.GPIO27, board::pins::B2);
+        assert_pin(&peripherals.GPIO26, board::pins::A);
+        assert_pin(&peripherals.GPIO5, board::pins::B);
+        assert_pin(&peripherals.GPIO25, board::pins::C);
+        assert_pin(&peripherals.GPIO18, board::pins::D);
+        assert_pin(&peripherals.GPIO14, board::pins::E_UNUSED);
+        assert_pin(&peripherals.GPIO19, board::pins::LAT);
+        assert_pin(&peripherals.GPIO32, board::pins::OE);
+        assert_pin(&peripherals.GPIO33, board::pins::CLK);
 
-    {
-        let out = OutputConfig::default();
-        let mut rgb = [
-            Output::new(peripherals.GPIO21.reborrow(), Level::Low, out), // R1
-            Output::new(peripherals.GPIO23.reborrow(), Level::Low, out), // R2
-            Output::new(peripherals.GPIO2.reborrow(), Level::Low, out),  // G1
-            Output::new(peripherals.GPIO4.reborrow(), Level::Low, out),  // G2
-            Output::new(peripherals.GPIO22.reborrow(), Level::Low, out), // B1
-            Output::new(peripherals.GPIO27.reborrow(), Level::Low, out), // B2
-        ];
-        let mut clk = Output::new(peripherals.GPIO33.reborrow(), Level::Low, out);
-        let mut lat = Output::new(peripherals.GPIO19.reborrow(), Level::Low, out);
-        let mut oe = Output::new(peripherals.GPIO32.reborrow(), Level::High, out);
-        panel_init::fm6124_init(&mut rgb, &mut clk, &mut lat, &mut oe);
-    }
+        {
+            let out = OutputConfig::default();
+            let mut rgb = [
+                Output::new(peripherals.GPIO21.reborrow(), Level::Low, out), // R1
+                Output::new(peripherals.GPIO23.reborrow(), Level::Low, out), // R2
+                Output::new(peripherals.GPIO2.reborrow(), Level::Low, out),  // G1
+                Output::new(peripherals.GPIO4.reborrow(), Level::Low, out),  // G2
+                Output::new(peripherals.GPIO22.reborrow(), Level::Low, out), // B1
+                Output::new(peripherals.GPIO27.reborrow(), Level::Low, out), // B2
+            ];
+            let mut clk = Output::new(peripherals.GPIO33.reborrow(), Level::Low, out);
+            let mut lat = Output::new(peripherals.GPIO19.reborrow(), Level::Low, out);
+            let mut oe = Output::new(peripherals.GPIO32.reborrow(), Level::High, out);
+            panel_init::fm6124_init(&mut rgb, &mut clk, &mut lat, &mut oe);
+        }
 
-    // Some Gen 1 units have their colour lines wired in the order Tidbyt's own
-    // `hdk` publishes; others have them rotated. The first bench unit is
-    // rotated relative to the hdk's names: the lines it calls R/G/B drive
-    // blue/red/green (confirmed on the panel at bring-up, card 001, and again
-    // by card 007's test card). Card 361 made the choice a stored setting, so
-    // one image fits both: `ColourOrder::Rotated` (the default, and what every
-    // unit that predates the setting boots as) or `ColourOrder::Published`
-    // (`tidbyt::pins`). It is read here, once, because the pins are handed to
-    // the panel driver below and never revisited - a change takes effect on the
-    // next boot. The pins are all `.degrade()`d to `AnyPin`, so the two arms
-    // have one type and the choice costs no code in the driver.
-    info!("panel: colour order {}", settings.colour_order.as_u8());
-    let (red1, grn1, blu1, red2, grn2, blu2) = match settings.colour_order {
-        screeny_settings::ColourOrder::Published => (
-            peripherals.GPIO21.degrade(),
-            peripherals.GPIO2.degrade(),
-            peripherals.GPIO22.degrade(),
-            peripherals.GPIO23.degrade(),
-            peripherals.GPIO4.degrade(),
-            peripherals.GPIO27.degrade(),
-        ),
-        screeny_settings::ColourOrder::Rotated => (
-            peripherals.GPIO2.degrade(),
-            peripherals.GPIO22.degrade(),
-            peripherals.GPIO21.degrade(),
-            peripherals.GPIO4.degrade(),
-            peripherals.GPIO27.degrade(),
-            peripherals.GPIO23.degrade(),
-        ),
+        // Some Gen 1 units have their colour lines wired in the order Tidbyt's own
+        // `hdk` publishes; others have them rotated. The first bench unit is
+        // rotated relative to the hdk's names: the lines it calls R/G/B drive
+        // blue/red/green (confirmed on the panel at bring-up, card 001, and again
+        // by card 007's test card). Card 361 made the choice a stored setting, so
+        // one image fits both: `ColourOrder::Rotated` (the default, and what every
+        // unit that predates the setting boots as) or `ColourOrder::Published`
+        // (`tidbyt::pins`). It is read here, once, because the pins are handed to
+        // the panel driver below and never revisited - a change takes effect on the
+        // next boot. The pins are all `.degrade()`d to `AnyPin`, so the two arms
+        // have one type and the choice costs no code in the driver.
+        info!("panel: colour order {}", settings.colour_order.as_u8());
+        let (red1, grn1, blu1, red2, grn2, blu2) = match settings.colour_order {
+            screeny_settings::ColourOrder::Published => (
+                peripherals.GPIO21.degrade(),
+                peripherals.GPIO2.degrade(),
+                peripherals.GPIO22.degrade(),
+                peripherals.GPIO23.degrade(),
+                peripherals.GPIO4.degrade(),
+                peripherals.GPIO27.degrade(),
+            ),
+            screeny_settings::ColourOrder::Rotated => (
+                peripherals.GPIO2.degrade(),
+                peripherals.GPIO22.degrade(),
+                peripherals.GPIO21.degrade(),
+                peripherals.GPIO4.degrade(),
+                peripherals.GPIO27.degrade(),
+                peripherals.GPIO23.degrade(),
+            ),
+        };
+
+        Hub75Pins16 {
+            red1,
+            grn1,
+            blu1,
+            red2,
+            grn2,
+            blu2,
+            addr0: peripherals.GPIO26.degrade(),
+            addr1: peripherals.GPIO5.degrade(),
+            addr2: peripherals.GPIO25.degrade(),
+            addr3: peripherals.GPIO18.degrade(),
+            addr4: peripherals.GPIO14.degrade(),
+            blank: peripherals.GPIO32.degrade(),
+            clock: peripherals.GPIO33.degrade(),
+            latch: peripherals.GPIO19.degrade(),
+        }
     };
-
-    let pins = Hub75Pins16 {
-        red1,
-        grn1,
-        blu1,
-        red2,
-        grn2,
-        blu2,
-        addr0: peripherals.GPIO26.degrade(),
-        addr1: peripherals.GPIO5.degrade(),
-        addr2: peripherals.GPIO25.degrade(),
-        addr3: peripherals.GPIO18.degrade(),
-        addr4: peripherals.GPIO14.degrade(),
-        blank: peripherals.GPIO32.degrade(),
-        clock: peripherals.GPIO33.degrade(),
-        latch: peripherals.GPIO19.degrade(),
+    #[cfg(feature = "board-art-panel")]
+    let pins = {
+        use board::pins;
+        assert_pin(&peripherals.GPIO18, pins::R1);
+        assert_pin(&peripherals.GPIO21, pins::G1);
+        assert_pin(&peripherals.GPIO4, pins::B1);
+        assert_pin(&peripherals.GPIO32, pins::R2);
+        assert_pin(&peripherals.GPIO19, pins::G2);
+        assert_pin(&peripherals.GPIO33, pins::B2);
+        assert_pin(&peripherals.GPIO25, pins::A);
+        assert_pin(&peripherals.GPIO5, pins::B);
+        assert_pin(&peripherals.GPIO26, pins::C);
+        assert_pin(&peripherals.GPIO17, pins::D);
+        assert_pin(&peripherals.GPIO22, pins::E_UNUSED);
+        assert_pin(&peripherals.GPIO16, pins::LAT);
+        assert_pin(&peripherals.GPIO14, pins::OE);
+        assert_pin(&peripherals.GPIO27, pins::CLK);
+        // The FM6124 register write is harmless on a panel without those
+        // chips (see `panel_init`), and this panel's chips are not known.
+        {
+            let out = OutputConfig::default();
+            let mut rgb = [
+                Output::new(peripherals.GPIO18.reborrow(), Level::Low, out), // R1
+                Output::new(peripherals.GPIO32.reborrow(), Level::Low, out), // R2
+                Output::new(peripherals.GPIO21.reborrow(), Level::Low, out), // G1
+                Output::new(peripherals.GPIO19.reborrow(), Level::Low, out), // G2
+                Output::new(peripherals.GPIO4.reborrow(), Level::Low, out),  // B1
+                Output::new(peripherals.GPIO33.reborrow(), Level::Low, out), // B2
+            ];
+            let mut clk = Output::new(peripherals.GPIO27.reborrow(), Level::Low, out);
+            let mut lat = Output::new(peripherals.GPIO16.reborrow(), Level::Low, out);
+            let mut oe = Output::new(peripherals.GPIO14.reborrow(), Level::High, out);
+            panel_init::fm6124_init(&mut rgb, &mut clk, &mut lat, &mut oe);
+        }
+        // One board, one wiring: the stored colour order is a Tidbyt setting.
+        info!("panel: art panel, 32x32, showing frame columns {}..{}", display::CROP_X0, display::CROP_X0 + PANEL_COLS);
+        Hub75Pins16 {
+            red1: peripherals.GPIO18.degrade(),
+            grn1: peripherals.GPIO21.degrade(),
+            blu1: peripherals.GPIO4.degrade(),
+            red2: peripherals.GPIO32.degrade(),
+            grn2: peripherals.GPIO19.degrade(),
+            blu2: peripherals.GPIO33.degrade(),
+            addr0: peripherals.GPIO25.degrade(),
+            addr1: peripherals.GPIO5.degrade(),
+            addr2: peripherals.GPIO26.degrade(),
+            addr3: peripherals.GPIO17.degrade(),
+            addr4: peripherals.GPIO22.degrade(),
+            blank: peripherals.GPIO14.degrade(),
+            clock: peripherals.GPIO27.degrade(),
+            latch: peripherals.GPIO16.degrade(),
+        }
     };
 
     let (producer, consumer) = SLOTS.split();
@@ -1236,8 +1307,13 @@ async fn main(spawner: Spawner) {
     // strap and the MTDO pin: `src/button.rs` has the whole of 008's point 4,
     // and nothing else in this firmware may read that pin while this task
     // holds it.
-    assert_pin(&peripherals.GPIO15, tidbyt::BUTTON_GPIO.unwrap_or(0));
-    spawner.spawn(button::button_task(peripherals.GPIO15.degrade()).unwrap());
+    #[cfg(not(feature = "board-art-panel"))]
+    let button_pin = peripherals.GPIO15;
+    // The art panel's BOOT button.
+    #[cfg(feature = "board-art-panel")]
+    let button_pin = peripherals.GPIO0;
+    assert_pin(&button_pin, board::BUTTON_GPIO.unwrap_or(0));
+    spawner.spawn(button::button_task(button_pin.degrade()).unwrap());
     // Card 227: says when a stack goes deeper than it ever has, at 4 Hz, so
     // the line lands next to whatever caused it. See `stack_probe`.
     spawner.spawn(stack_probe::watch_task().unwrap());

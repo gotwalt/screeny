@@ -20,8 +20,8 @@
 
 use esp_hal::gpio::Output;
 
-/// Columns in one row of the chain. 64 columns, one panel.
-const PIXELS_PER_ROW: usize = super::COLS;
+/// Columns in one row of the chain: one panel.
+const PIXELS_PER_ROW: usize = super::PANEL_COLS;
 
 /// Global brightness / current gain. Bits 5..=10 set.
 const REG1: [bool; 16] = [

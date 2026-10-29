@@ -18,6 +18,10 @@ hub75-framebuffer = { path = "vendor/hub75-framebuffer" }
 
 [features]
 default = []
+# The LED Art Panel board (`src/art_panel.rs`): classic ESP32, 4 MB flash, one
+# 32x32 panel, BOOT button. Flash with `SCREENY_BOARD=art-panel tools/fw-run.sh`
+# (4 MB partition table). The panel shows the 64x32 frame's centre 32 columns.
+board-art-panel = []
 # (The `panel-hdk-colours` feature is gone: card 361 made the HUB75 colour-line
 # order the stored `colour_order` setting, so one image fits every Gen 1 unit.)
 # Bench A/B only (card 008): run the display task on core 0's executor, the

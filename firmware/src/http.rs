@@ -284,13 +284,13 @@ pub async fn read_fw_health() {
     // The *booted* partition, not otadata's selection: after a rollback the
     // bootloader may run one while otadata still names the other.
     if let Some(offset) = parts.booted_offset {
-        // By offset, from `firmware/partitions.csv`, and not by asking the
+        // By offset, from the board's partition table, and not by asking the
         // entry for its subtype: `PartitionEntry::partition_type()` `unwrap!`s
         // the conversion, and a panic in the boot path to put a word in a
         // status reply is a bad trade (research 006 section 3).
         let slot = match offset {
             0x10000 => FwSlot::Ota0 as u8,
-            0x210000 => FwSlot::Ota1 as u8,
+            crate::board::OTA1_OFFSET => FwSlot::Ota1 as u8,
             _ => FW_UNKNOWN,
         };
         FW_SLOT.store(slot, Ordering::Relaxed);

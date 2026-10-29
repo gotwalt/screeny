@@ -1,0 +1,10 @@
+# screeny partition table - 4 MB flash (the LED Art Panel's ESP32-WROOM), two OTA
+# slots, one settings partition. firmware/partitions.csv with the app slots cut
+# from 2 MB to 1.875 MB (the image is about 1 MB) so it all fits under 4 MB.
+# ota_1's offset is `art_panel::OTA1_OFFSET`.
+# Name,    Type, SubType,   Offset,   Size,     Flags
+nvs,       data, nvs,       0x9000,   0x5000,
+otadata,   data, ota,       0xE000,   0x2000,
+ota_0,     app,  ota_0,     0x10000,  0x1E0000,
+ota_1,     app,  ota_1,     0x1F0000, 0x1E0000,
+screeny,   data, undefined, 0x3D0000, 0x10000,

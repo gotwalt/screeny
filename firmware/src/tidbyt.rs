@@ -115,3 +115,6 @@ pub const STOCK_BRIGHTNESS_MAX: u8 = 100;
 /// the ESP32's I2S tops out near 19 MHz and the refresh-rate table in the
 /// research doc says what faster clocks buy.
 pub const PIXEL_CLOCK_MHZ: u32 = 10;
+
+/// Where `ota_1` starts in `firmware/partitions.csv` (8 MB).
+pub const OTA1_OFFSET: u32 = 0x210000;

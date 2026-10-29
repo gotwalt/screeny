@@ -183,7 +183,7 @@ pub async fn button_task(pin: AnyPin<'static>) {
     let mut rec = Recognizer::new();
     info!(
         "button: gpio{} input, pull-up, active low ({} ms debounce, {} ms hold, {} ms wipe)",
-        crate::tidbyt::BUTTON_GPIO.unwrap_or(0),
+        crate::board::BUTTON_GPIO.unwrap_or(0),
         screeny_provision::button::DEBOUNCE_MS,
         screeny_provision::button::HOLD_MS,
         screeny_provision::button::WIPE_MS,

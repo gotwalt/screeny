@@ -10,7 +10,7 @@ use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::{DrawTarget, OriginDimensions, RgbColor, Size};
 
 use crate::gamma::{self, FRAC_BITS};
-use crate::{FrameBuffer, COLS, ROWS};
+use crate::{FrameBuffer, COLS, PANEL_COLS, ROWS};
 
 pub const NPIX: usize = COLS * ROWS;
 
@@ -98,7 +98,10 @@ impl DrawTarget for Frame {
 /// 25/64 is 39% duty, which is exactly what Tidbyt's own firmware calls
 /// brightness 100 — their documented maximum (`hdk/src/display.h`). The
 /// framebuffer could reach 55 slots (86%); we never ask it to.
-pub const MAX_OE_SLOTS: usize = 25;
+///
+/// A scan row is one slot per column, so a narrower panel has fewer slots and
+/// the same duty is proportionally fewer of them: 12/32 on the art panel.
+pub const MAX_OE_SLOTS: usize = 25 * PANEL_COLS / 64;
 
 /// Runtime brightness 0..=255 -> output-enable slots.
 ///
@@ -162,12 +165,16 @@ fn row_thresholds(phase: u16, y: usize) -> [u16; 4] {
     t
 }
 
+/// The first frame column the panel shows: the frame's centre on a panel
+/// narrower than it, 0 on the Tidbyt.
+pub const CROP_X0: usize = (COLS - PANEL_COLS) / 2;
+
 pub fn render(frame: &Frame, fb: &mut FrameBuffer, mode: Mode, phase: u16) {
-    let mut row = [[0u8; 3]; COLS];
+    let mut row = [[0u8; 3]; PANEL_COLS];
     for y in 0..ROWS {
-        let src = &frame.px[y * COLS * 3..(y + 1) * COLS * 3];
+        let src = &frame.px[(y * COLS + CROP_X0) * 3..(y * COLS + CROP_X0 + PANEL_COLS) * 3];
         let th = row_thresholds(phase, y);
-        for x in 0..COLS {
+        for x in 0..PANEL_COLS {
             let (r, g, b) = (src[x * 3], src[x * 3 + 1], src[x * 3 + 2]);
             let (qr, qg, qb) = if mode.gamma {
                 (gamma::gamma_q(r), gamma::gamma_q(g), gamma::gamma_q(b))
