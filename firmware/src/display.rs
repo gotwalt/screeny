@@ -99,18 +99,25 @@ impl DrawTarget for Frame {
 /// brightness 100 — their documented maximum (`hdk/src/display.h`). The
 /// framebuffer could reach 55 slots (86%); we never ask it to.
 ///
-/// A scan row is one slot per column, so a narrower panel has fewer slots and
-/// the same duty is proportionally fewer of them: 12/32 on the art panel.
-pub const MAX_OE_SLOTS: usize = 25 * PANEL_COLS / 64;
+/// Per board (`board::MAX_OE_SLOTS`): a scan row is one slot per column, and
+/// the art panel, with its own supply, may light 18 of its 32 (56%).
+pub const MAX_OE_SLOTS: usize = crate::board::MAX_OE_SLOTS;
+const _: () = assert!(MAX_OE_SLOTS <= FrameBuffer::OE_SLOTS);
 
 /// Runtime brightness 0..=255 -> output-enable slots.
 ///
 /// Linear in duty, and therefore linear in emitted light. Note the real
 /// resolution of the control is [`MAX_OE_SLOTS`] steps, not 256: the panel is
 /// lit for a whole number of pixel clocks or not at all.
+///
+/// A nonzero brightness lights at least one slot. On the Tidbyt that changes
+/// nothing (`screeny_receiver::BRIGHTNESS_FLOOR` already keeps a nonzero level
+/// at 6 or above, which lights one); with fewer slots, as on the art panel, it
+/// stops the floor's 6 and 7 from going black while `applied` reports them.
 #[inline]
 pub const fn slots_for(brightness: u8) -> usize {
-    (brightness as usize * MAX_OE_SLOTS + 127) / 255
+    let slots = (brightness as usize * MAX_OE_SLOTS + 127) / 255;
+    if brightness > 0 && slots == 0 { 1 } else { slots }
 }
 
 /// What we come up at when flash holds no brightness. 96/255 is 9 slots, about

@@ -275,7 +275,8 @@ pub const MAX_DATAGRAM: usize = screeny_proto::MAX_UDP_PAYLOAD;
 /// mapping, where card 007 put it; this is a second, softer limit so that a
 /// sender on the LAN cannot drive a USB-powered panel to its ceiling during
 /// an unattended soak. 160/255 is 16 of 64 output-enable slots, 25% duty.
-pub const BRIGHTNESS_CAP: u8 = 160;
+/// Per board: the art panel has its own supply and the whole range.
+pub const BRIGHTNESS_CAP: u8 = board::BRIGHTNESS_CAP;
 
 /// The frame: what the wire carries and what every screen draws, 64x32
 /// whatever the board.

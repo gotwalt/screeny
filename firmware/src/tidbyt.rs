@@ -118,3 +118,8 @@ pub const PIXEL_CLOCK_MHZ: u32 = 10;
 
 /// Where `ota_1` starts in `firmware/partitions.csv` (8 MB).
 pub const OTA1_OFFSET: u32 = 0x210000;
+
+/// Brightness: the laptop-USB budget. `BRIGHTNESS_CAP` is `crate::BRIGHTNESS_CAP`
+/// and `MAX_OE_SLOTS` is `display::MAX_OE_SLOTS`; both are documented there.
+pub const BRIGHTNESS_CAP: u8 = 160;
+pub const MAX_OE_SLOTS: usize = 25;

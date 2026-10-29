@@ -8,8 +8,9 @@
 //! `ESP32-HUB75-MatrixPanel-I2S-DMA` at that library's defaults.
 //!
 //! The bench unit's chip is an ESP32-D0WDQ6 at silicon revision 1.0; esp-hal
-//! wants 3.0 unless built with `ESP_HAL_CONFIG_MIN_CHIP_REVISION=100`, and then
-//! applies its older-silicon workarounds at run time. Boots and runs on it.
+//! wants 3.0 unless built with `ESP_HAL_CONFIG_MIN_CHIP_REVISION=100`. It boots
+//! and runs, but with the display on core 1 the panel stays dark, so this board
+//! runs its display on core 0 (`display-on-core0`).
 //!
 //! The same names as [`crate::tidbyt`], so `crate::board` can be either.
 #![allow(dead_code)]
@@ -57,3 +58,11 @@ pub const PIXEL_CLOCK_MHZ: u32 = 10;
 
 /// Where `ota_1` starts in `firmware/partitions-4mb.csv`.
 pub const OTA1_OFFSET: u32 = 0x1F0000;
+
+/// Brightness. The Tidbyt's limits are a laptop-USB budget; this board has its
+/// own USB-C supply, taken as 3 A at 5 V (owner, 2026-10-29). Full white on all
+/// 1024 pixels draws about 4 A at 100% duty (Adafruit), so 18 of the 32 slots in
+/// a scan row (56%) is about 2.2 A for a full-white frame, and the slider has
+/// its whole range. The firmware's 39%-duty ceiling stays the Tidbyt's.
+pub const BRIGHTNESS_CAP: u8 = 255;
+pub const MAX_OE_SLOTS: usize = 18;
