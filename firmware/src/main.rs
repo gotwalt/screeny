@@ -1007,23 +1007,9 @@ async fn main(spawner: Spawner) {
         assert_pin(&peripherals.GPIO16, pins::LAT);
         assert_pin(&peripherals.GPIO14, pins::OE);
         assert_pin(&peripherals.GPIO27, pins::CLK);
-        // The FM6124 register write is harmless on a panel without those
-        // chips (see `panel_init`), and this panel's chips are not known.
-        {
-            let out = OutputConfig::default();
-            let mut rgb = [
-                Output::new(peripherals.GPIO18.reborrow(), Level::Low, out), // R1
-                Output::new(peripherals.GPIO32.reborrow(), Level::Low, out), // R2
-                Output::new(peripherals.GPIO21.reborrow(), Level::Low, out), // G1
-                Output::new(peripherals.GPIO19.reborrow(), Level::Low, out), // G2
-                Output::new(peripherals.GPIO4.reborrow(), Level::Low, out),  // B1
-                Output::new(peripherals.GPIO33.reborrow(), Level::Low, out), // B2
-            ];
-            let mut clk = Output::new(peripherals.GPIO27.reborrow(), Level::Low, out);
-            let mut lat = Output::new(peripherals.GPIO16.reborrow(), Level::Low, out);
-            let mut oe = Output::new(peripherals.GPIO14.reborrow(), Level::High, out);
-            panel_init::fm6124_init(&mut rgb, &mut clk, &mut lat, &mut oe);
-        }
+        // No FM6124 register write: the board's own sketch drives this panel
+        // as plain shift registers, and a register write meant for another chip
+        // family can leave a panel's outputs off.
         // One board, one wiring: the stored colour order is a Tidbyt setting.
         info!("panel: art panel, 32x32, showing frame columns {}..{}", display::CROP_X0, display::CROP_X0 + PANEL_COLS);
         Hub75Pins16 {

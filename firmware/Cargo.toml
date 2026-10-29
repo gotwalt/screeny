@@ -112,6 +112,9 @@ frac-bits-2 = ["screeny-dither/frac-bits-2"]
 # `required-features`, so a plain `cargo build --release` never builds it and
 # the shipping firmware is unaffected. See `docs/research/008-button.md`.
 gpio-probe = []
+# The art panel's bench tool: drive its HUB75 pins by hand, no DMA
+# (`src/bin/hub75_bitbang.rs`). Never part of the shipping build.
+hub75-bitbang = []
 
 # Card 201's compile-only spike (`device-web-spike`, `spike-ap`,
 # `spike-portal`, `spike-qr`) was **retired by card 223**, together with
@@ -172,6 +175,11 @@ path = "src/main.rs"
 name = "gpio_probe"
 path = "src/bin/gpio_probe.rs"
 required-features = ["gpio-probe"]
+
+[[bin]]
+name = "hub75_bitbang"
+path = "src/bin/hub75_bitbang.rs"
+required-features = ["hub75-bitbang"]
 
 [dependencies]
 # --- HAL / runtime -------------------------------------------------------
