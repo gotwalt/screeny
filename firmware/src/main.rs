@@ -105,7 +105,10 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant as EmbassyInstant, Timer};
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{Level, Output, OutputConfig, Pin};
+use esp_hal::gpio::Pin;
+// The FM6124 register write; the art panel goes without it.
+#[cfg(not(feature = "board-art-panel"))]
+use esp_hal::gpio::{Level, Output, OutputConfig};
 use esp_hal::interrupt::Priority;
 use esp_hal::rng::Rng;
 use esp_hal::system::Stack as CoreStack;
@@ -822,6 +825,8 @@ async fn main(spawner: Spawner) {
     // guard has latched. A panic in the boot path below is then counted like
     // any other, which is the case the guard exists for.
     let crashed = panic::boot();
+    // `mut` for the FM6124 write's reborrows, which the art panel goes without.
+    #[cfg_attr(feature = "board-art-panel", allow(unused_mut))]
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     // **Card 241b, and the first thing after `esp_hal::init`.** That call has
@@ -1112,14 +1117,18 @@ async fn main(spawner: Spawner) {
         },
     );
 
-    // The `display-on-core0` build exists only to be measured against the
-    // one above: same decode path, same triple buffer, same everything, with
-    // the display sharing core 0's executor the way card 007 shipped it. It
-    // is not a configuration to run the panel in.
+    // The `display-on-core0` build exists to be measured against the one
+    // above: same decode path, same triple buffer, same everything, with the
+    // display sharing core 0's executor the way card 007 shipped it. On the
+    // Tidbyt it is not a configuration to run the panel in. The art panel runs
+    // this way because its revision-1 ESP32 shows nothing from core 1.
     #[cfg(feature = "display-on-core0")]
     {
         let _ = (peripherals.CPU_CTRL, peripherals.FROM_CPU_INTR1);
+        #[cfg(not(feature = "board-art-panel"))]
         warn!("display: BENCH BUILD - display task is on core 0");
+        #[cfg(feature = "board-art-panel")]
+        info!("display: on core 0 (art panel: revision-1 ESP32)");
         spawner.spawn(display_task(build_hub75(), fb1, consumer).unwrap());
     }
 

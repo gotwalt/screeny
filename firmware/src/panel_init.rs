@@ -17,6 +17,7 @@
 //! actually an ICN2037, which does not need this; on such a panel the sequence
 //! is harmless, because all it does is clock zeros through the shift
 //! registers and blank them again.
+#![cfg_attr(feature = "board-art-panel", allow(dead_code))]
 
 use esp_hal::gpio::Output;
 

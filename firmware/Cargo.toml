@@ -23,8 +23,10 @@ default = []
 # (4 MB partition table). The panel shows the 64x32 frame's centre 32 columns.
 # Its ESP32 is silicon revision 1.0 and esp-hal defaults to requiring 3.0, so
 # build it with ESP_HAL_CONFIG_MIN_CHIP_REVISION=100 in the environment
-# (espflash refuses an image built without it).
-board-art-panel = []
+# (espflash refuses an image built without it). The display runs on core 0:
+# on that revision-1 chip the panel stays dark when it runs on core 1, with the
+# DMA completing all the while (2026-10-29 bring-up; cause not pinned down).
+board-art-panel = ["display-on-core0"]
 # (The `panel-hdk-colours` feature is gone: card 361 made the HUB75 colour-line
 # order the stored `colour_order` setting, so one image fits every Gen 1 unit.)
 # Bench A/B only (card 008): run the display task on core 0's executor, the
