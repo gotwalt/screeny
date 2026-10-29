@@ -18,6 +18,15 @@ hub75-framebuffer = { path = "vendor/hub75-framebuffer" }
 
 [features]
 default = []
+# The LED Art Panel board (`src/art_panel.rs`): classic ESP32, 4 MB flash, one
+# 32x32 panel, BOOT button. Flash with `SCREENY_BOARD=art-panel tools/fw-run.sh`
+# (4 MB partition table). The panel shows the 64x32 frame's centre 32 columns.
+# Its ESP32 is silicon revision 1.0 and esp-hal defaults to requiring 3.0, so
+# build it with ESP_HAL_CONFIG_MIN_CHIP_REVISION=100 in the environment
+# (espflash refuses an image built without it). The display runs on core 0:
+# on that revision-1 chip the panel stays dark when it runs on core 1, with the
+# DMA completing all the while (2026-10-29 bring-up; cause not pinned down).
+board-art-panel = ["display-on-core0"]
 # (The `panel-hdk-colours` feature is gone: card 361 made the HUB75 colour-line
 # order the stored `colour_order` setting, so one image fits every Gen 1 unit.)
 # Bench A/B only (card 008): run the display task on core 0's executor, the
@@ -105,6 +114,9 @@ frac-bits-2 = ["screeny-dither/frac-bits-2"]
 # `required-features`, so a plain `cargo build --release` never builds it and
 # the shipping firmware is unaffected. See `docs/research/008-button.md`.
 gpio-probe = []
+# The art panel's bench tool: drive its HUB75 pins by hand, no DMA
+# (`src/bin/hub75_bitbang.rs`). Never part of the shipping build.
+hub75-bitbang = []
 
 # Card 201's compile-only spike (`device-web-spike`, `spike-ap`,
 # `spike-portal`, `spike-qr`) was **retired by card 223**, together with
@@ -165,6 +177,11 @@ path = "src/main.rs"
 name = "gpio_probe"
 path = "src/bin/gpio_probe.rs"
 required-features = ["gpio-probe"]
+
+[[bin]]
+name = "hub75_bitbang"
+path = "src/bin/hub75_bitbang.rs"
+required-features = ["hub75-bitbang"]
 
 [dependencies]
 # --- HAL / runtime -------------------------------------------------------

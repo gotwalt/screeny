@@ -522,6 +522,13 @@ impl Panel {
         }
     }
 
+    /// Forget a learned brightness ceiling. Called when the panel reboots:
+    /// new firmware only arrives with a reboot and may allow more, and a cap
+    /// that is still there is learned again the next time it is asked past.
+    pub fn forget_brightness_cap(&self) {
+        self.slot().health.brightness_cap = None;
+    }
+
     /// The brightness policy, and what the device last said it applied.
     #[must_use]
     pub fn brightness_policy(&self) -> (Option<u8>, Option<u8>) {
@@ -721,5 +728,8 @@ mod tests {
         p.brightness_applied(200, 120);
         assert_eq!(p.brightness_policy(), (Some(120), Some(120)));
         assert_eq!(p.link_health().brightness_cap, Some(120));
+        p.forget_brightness_cap();
+        assert_eq!(p.link_health().brightness_cap, None, "a reboot forgets the cap");
+        assert_eq!(p.brightness_policy(), (Some(120), Some(120)), "the policy stays");
     }
 }

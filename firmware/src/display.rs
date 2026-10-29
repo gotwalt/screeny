@@ -10,7 +10,7 @@ use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::{DrawTarget, OriginDimensions, RgbColor, Size};
 
 use crate::gamma::{self, FRAC_BITS};
-use crate::{FrameBuffer, COLS, ROWS};
+use crate::{FrameBuffer, COLS, PANEL_COLS, ROWS};
 
 pub const NPIX: usize = COLS * ROWS;
 
@@ -98,16 +98,26 @@ impl DrawTarget for Frame {
 /// 25/64 is 39% duty, which is exactly what Tidbyt's own firmware calls
 /// brightness 100 — their documented maximum (`hdk/src/display.h`). The
 /// framebuffer could reach 55 slots (86%); we never ask it to.
-pub const MAX_OE_SLOTS: usize = 25;
+///
+/// Per board (`board::MAX_OE_SLOTS`): a scan row is one slot per column, and
+/// the art panel, with its own supply, may light 18 of its 32 (56%).
+pub const MAX_OE_SLOTS: usize = crate::board::MAX_OE_SLOTS;
+const _: () = assert!(MAX_OE_SLOTS <= FrameBuffer::OE_SLOTS);
 
 /// Runtime brightness 0..=255 -> output-enable slots.
 ///
 /// Linear in duty, and therefore linear in emitted light. Note the real
 /// resolution of the control is [`MAX_OE_SLOTS`] steps, not 256: the panel is
 /// lit for a whole number of pixel clocks or not at all.
+///
+/// A nonzero brightness lights at least one slot. On the Tidbyt that changes
+/// nothing (`screeny_receiver::BRIGHTNESS_FLOOR` already keeps a nonzero level
+/// at 6 or above, which lights one); with fewer slots, as on the art panel, it
+/// stops the floor's 6 and 7 from going black while `applied` reports them.
 #[inline]
 pub const fn slots_for(brightness: u8) -> usize {
-    (brightness as usize * MAX_OE_SLOTS + 127) / 255
+    let slots = (brightness as usize * MAX_OE_SLOTS + 127) / 255;
+    if brightness > 0 && slots == 0 { 1 } else { slots }
 }
 
 /// What we come up at when flash holds no brightness. 96/255 is 9 slots, about
@@ -162,12 +172,16 @@ fn row_thresholds(phase: u16, y: usize) -> [u16; 4] {
     t
 }
 
+/// The first frame column the panel shows: the frame's centre on a panel
+/// narrower than it, 0 on the Tidbyt.
+pub const CROP_X0: usize = (COLS - PANEL_COLS) / 2;
+
 pub fn render(frame: &Frame, fb: &mut FrameBuffer, mode: Mode, phase: u16) {
-    let mut row = [[0u8; 3]; COLS];
+    let mut row = [[0u8; 3]; PANEL_COLS];
     for y in 0..ROWS {
-        let src = &frame.px[y * COLS * 3..(y + 1) * COLS * 3];
+        let src = &frame.px[(y * COLS + CROP_X0) * 3..(y * COLS + CROP_X0 + PANEL_COLS) * 3];
         let th = row_thresholds(phase, y);
-        for x in 0..COLS {
+        for x in 0..PANEL_COLS {
             let (r, g, b) = (src[x * 3], src[x * 3 + 1], src[x * 3 + 2]);
             let (qr, qg, qb) = if mode.gamma {
                 (gamma::gamma_q(r), gamma::gamma_q(g), gamma::gamma_q(b))
