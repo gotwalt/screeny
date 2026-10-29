@@ -589,6 +589,11 @@ async fn status_once(st: &AppState, backoff: &mut BTreeMap<String, (u32, u32)>) 
                     }
                     if heard.rebooted {
                         eprintln!("studio: `{}` rebooted: {} since the studio started", record.label(), heard.reboots);
+                        // New firmware arrives with a reboot and may allow a
+                        // brighter panel than the cap learned before it.
+                        if let Some(panel) = st.panels.get(&id) {
+                            panel.forget_brightness_cap();
+                        }
                     }
                     // Card 195, and said plainly rather than alarmingly: on
                     // this firmware a crash and a reflash arrive as the same
