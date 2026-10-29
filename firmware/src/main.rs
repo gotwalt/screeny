@@ -775,30 +775,41 @@ async fn telemetry_task() {
             let core = guard.as_mut().expect("core exists");
             core.telemetry(EmbassyInstant::now().as_micros())
         };
-        info!(
-            "telemetry: {} fps rx, {} fps shown, {} swaps/s | drops stale {} superseded {} decode {} rejected {} gaps {} | ia {} us jit {} us | decode {} us (max {}) | render {} us (max {} window, {} boot) | state {} codec {:#04x} rssi {} bright {} | heap {}/{}",
-            t.frames_rx.wrapping_sub(last_rx) / PERIOD_S,
-            t.frames_shown.wrapping_sub(last_shown) / PERIOD_S,
-            swaps.wrapping_sub(last_swaps) / PERIOD_S,
-            t.frames_dropped_stale,
-            t.frames_dropped_superseded,
-            t.frames_dropped_decode,
-            t.frames_rejected,
-            t.seq_gaps,
-            t.interarrival_us,
-            t.jitter_us,
-            t.decode_us,
-            t.decode_us_max,
-            RENDER_US.load(Ordering::Relaxed),
-            RENDER_US_MAX_WINDOW.swap(0, Ordering::Relaxed),
-            RENDER_US_MAX.load(Ordering::Relaxed),
-            t.state,
-            t.last_codec,
-            t.rssi_dbm,
-            t.brightness,
-            stats.current_usage,
-            stats.size,
-        );
+        // The art panel's display shares core 0, and a log line holds
+        // interrupts off for the whole serial write (esp-println's lock):
+        // ~20 ms for this one, a visible flicker every period. It says the
+        // line for the first minute, for a bench session, and is then quiet;
+        // the same numbers stay on the network (spec 6.7).
+        #[cfg(feature = "board-art-panel")]
+        let say = tick <= STACK_TICK;
+        #[cfg(not(feature = "board-art-panel"))]
+        let say = true;
+        if say {
+            info!(
+                "telemetry: {} fps rx, {} fps shown, {} swaps/s | drops stale {} superseded {} decode {} rejected {} gaps {} | ia {} us jit {} us | decode {} us (max {}) | render {} us (max {} window, {} boot) | state {} codec {:#04x} rssi {} bright {} | heap {}/{}",
+                t.frames_rx.wrapping_sub(last_rx) / PERIOD_S,
+                t.frames_shown.wrapping_sub(last_shown) / PERIOD_S,
+                swaps.wrapping_sub(last_swaps) / PERIOD_S,
+                t.frames_dropped_stale,
+                t.frames_dropped_superseded,
+                t.frames_dropped_decode,
+                t.frames_rejected,
+                t.seq_gaps,
+                t.interarrival_us,
+                t.jitter_us,
+                t.decode_us,
+                t.decode_us_max,
+                RENDER_US.load(Ordering::Relaxed),
+                RENDER_US_MAX_WINDOW.swap(0, Ordering::Relaxed),
+                RENDER_US_MAX.load(Ordering::Relaxed),
+                t.state,
+                t.last_codec,
+                t.rssi_dbm,
+                t.brightness,
+                stats.current_usage,
+                stats.size,
+            );
+        }
         last_swaps = swaps;
         last_rx = t.frames_rx;
         last_shown = t.frames_shown;
