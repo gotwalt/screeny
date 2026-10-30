@@ -50,7 +50,7 @@ const PARAMS: &[ParamSpec] = &[
 ];
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    Box::new(Veil { seed: Rng::new(seed).f32(), cloth: Cloth::new(), skinned: Vec::new(), visit: None })
+    Box::new(Veil { seed: Rng::new(seed).f32(), cloth: Cloth::new(), skinned: Vec::new(), visit: None, body: None })
 }
 
 /// What comes through.
@@ -117,8 +117,6 @@ struct Key {
 struct Visit {
     kind: Kind,
     keys: Vec<Key>,
-    /// When the cloth is let go, for the shiver after.
-    release: f32,
     /// The direction, in the sheet, the hand is in from the tip (for `Hand`,
     /// the way its fingers point); how far the finger leans off pointing
     /// straight at us; and a phase for the slow turn of both.
@@ -188,7 +186,6 @@ impl Visit {
         let mut v = Visit {
             kind,
             keys: Vec::new(),
-            release: VISIT,
             // Mostly from below, as an arm would be, sometimes from a side.
             toward: -PI / 2.0 + rng.range(-1.1, 1.1),
             lean: rng.range(0.05, 0.3),
@@ -205,10 +202,6 @@ impl Visit {
             }
             Kind::Tips => Self::press(&mut rng, start, v.wall, 0.5),
         };
-        // The cloth comes free a little way into the last move.
-        let n = path.keys.len();
-        let (a, b) = (path.keys[n - 2], path.keys[n - 1]);
-        v.release = a.t + (b.t - a.t) * 0.4;
         v.keys = path.keys;
         v
     }
@@ -307,7 +300,6 @@ impl Visit {
         // Alive while it holds: a breath in the push, a slow turn of the hand.
         let breath = 0.012 * (local * 1.3 + self.phase).sin() * smooth(z / 0.1);
         let turn = 0.22 * (local * 0.11 + self.phase).sin();
-        let age = local - self.release;
         Some(Moment {
             kind: self.kind,
             tip: (x, y, z + breath),
@@ -315,8 +307,6 @@ impl Visit {
             lean: self.lean + 0.06 * (local * 0.17 + self.phase * 2.0).sin(),
             span: self.span,
             wall: self.wall,
-            ripple: if age > 0.0 { 0.012 * (-age * 0.9).exp() } else { 0.0 },
-            age: age.max(0.0),
         })
     }
 }
@@ -330,8 +320,6 @@ struct Moment {
     lean: f32,
     span: f32,
     wall: f32,
-    ripple: f32,
-    age: f32,
 }
 
 /// Life size on the Art Frame: 8 inches is 2.16 units, so 10.6 units a metre,
@@ -399,6 +387,30 @@ struct Veil {
     /// The visit under way: its number, when it began, and its plan. The next
     /// begins as soon as this one has settled and `pause` has passed.
     visit: Option<(u64, f32, Visit)>,
+    /// The hand as a body with weight, following its path; `None` between
+    /// visits.
+    body: Option<Body>,
+}
+
+/// The hand's own motion: where it is and how fast it moves, and the same for
+/// each digit's bend. Each follows what the choreography and the cloth ask of
+/// it through a spring, so the hand eases in, overshoots a hair and settles,
+/// and the fingers trail it and re-arch a beat after the palm lets go.
+struct Body {
+    at: [f32; 3],
+    speed: [f32; 3],
+    curl: [f32; 5],
+    curling: [f32; 5],
+}
+
+/// A spring's stiffness (as an angular frequency) and damping ratio.
+const HAND_SPRING: (f32, f32) = (6.0, 0.8);
+const FINGER_SPRING: (f32, f32) = (9.0, 0.65);
+
+/// One step of a damped spring pulling `x` (moving at `v`) towards `to`.
+fn spring(x: &mut f32, v: &mut f32, to: f32, (w, zeta): (f32, f32), dt: f32) {
+    *v += (w * w * (to - *x) - 2.0 * zeta * w * *v) * dt;
+    *x += *v * dt;
 }
 
 impl Patch for Veil {
@@ -415,14 +427,50 @@ impl Patch for Veil {
             self.visit = Some((n, if n == 0 { 0.0 } else { t }, Visit::plan(n, self.seed)));
         }
         let (_, start, visit) = self.visit.as_ref().unwrap();
-        let moment = visit.moment(t - start);
+        let mut moment = visit.moment(t - start);
         let size = ctx.get("size");
         let model = Model::get();
+        let dt = (ctx.dt as f32).clamp(0.0, 0.1);
 
         self.cloth.clear_under();
-        let (mut ripple, mut ripple_at) = (0.0, (0.0, 0.0, 0.0));
-        if let Some(m) = &moment {
-            let (pose, place, placed) = arrange(model, m, size);
+        if moment.is_none() {
+            self.body = None;
+        }
+        if let Some(m) = &mut moment {
+            // The body follows the path, with a faint tremor: something alive
+            // holding as still as it can.
+            let tremor = [
+                0.006 * ((t * 5.1 + visit.phase).sin() + 0.6 * (t * 8.3 + 2.0 * visit.phase).sin()),
+                0.006 * ((t * 4.3 + 3.0 * visit.phase).sin() + 0.6 * (t * 7.7 + visit.phase).sin()),
+                0.004 * (t * 6.1 + 5.0 * visit.phase).sin(),
+            ];
+            let goal = [m.tip.0 + tremor[0], m.tip.1 + tremor[1], m.tip.2 + tremor[2]];
+            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], curl: [f32::NAN; 5], curling: [0.0; 5] });
+            for k in 0..3 {
+                spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
+            }
+            m.tip = (body.at[0], body.at[1], body.at[2]);
+
+            let (mut pose, place, placed) = arrange(model, m, size);
+            // The fingers follow their bends through springs, but never into
+            // the cloth: the wall's answer is a bound, not a suggestion.
+            for d in 0..5 {
+                let target = pose.curl[d];
+                if body.curl[d].is_nan() {
+                    body.curl[d] = target;
+                }
+                spring(&mut body.curl[d], &mut body.curling[d], target, FINGER_SPRING, dt);
+                let bound = match m.kind {
+                    Kind::Stop => body.curl[d].min(target),
+                    Kind::Tips => body.curl[d].max(target),
+                    Kind::Pointer => body.curl[d],
+                };
+                if bound != body.curl[d] {
+                    body.curl[d] = bound;
+                    body.curling[d] = 0.0;
+                }
+                pose.curl[d] = bound;
+            }
             let bones = model.bones(&pose);
             model.skin(&bones, &place, &mut self.skinned);
             // A pointer's front-most point is where the choreography says the
@@ -438,21 +486,13 @@ impl Patch for Veil {
                 let [a, b, c] = tri.map(|i| self.skinned[i as usize]);
                 self.cloth.press(a, b, c);
             }
-            ripple = m.ripple;
-            ripple_at = (m.tip.0, m.tip.1, m.age);
         }
-        self.cloth.settle(ctx.get("stiff"));
+        self.cloth.step(dt, ctx.get("stiff"));
 
         let colour = oklch(0.97, ctx.get("tint"), ctx.get("hue"));
         let pallor = ctx.get("pallor");
         let cloth = &self.cloth;
-        let height = |x: f32, y: f32| {
-            let (h, touch) = cloth.at(x, y);
-            let r = ((x - ripple_at.0).powi(2) + (y - ripple_at.1).powi(2)).sqrt();
-            let age = ripple_at.2;
-            let wave = ripple * (r * 16.0 - age * 4.5).sin() * (-r * 1.2).exp() * smooth(age * 4.5 - r * 16.0 + 6.0);
-            (h + wave, touch)
-        };
+        let height = |x: f32, y: f32| cloth.at(x, y);
         // The Art Frame's 32 LEDs span 2.16 units; the frame is 64 wide.
         let unit = 2.16 / frame::H as f32;
         let key_l = norm([-0.55, 0.78, 0.3]);

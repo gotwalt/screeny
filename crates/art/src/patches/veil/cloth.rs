@@ -1,21 +1,36 @@
 //! The veil as a membrane: a grid of heights towards us, pinned flat at the
 //! edge of the frame, that cannot pass through whatever presses from behind.
-//! Solved by relaxation each frame from the last frame's sheet, so it drapes
+//! It has mass, tension and damping and is stepped as a wave, so it drapes
 //! over the real shape of the hand - webbing between spread fingers, tenting
-//! off a fingertip - and lags a little when the hand moves fast.
+//! off a fingertip - and when the hand lets go it springs back and shivers
+//! on its own.
 
 /// Cells per side, over `-EXTENT..EXTENT` in x and y. The Art Frame's 32
 /// LEDs span 2.16 units, so this is about four cells per LED.
 pub const N: usize = 144;
 pub const EXTENT: f32 = 1.2;
 
-/// Relaxation sweeps per frame, and the over-relaxation factor.
-const SWEEPS: usize = 36;
-const OMEGA: f32 = 1.85;
+/// Cell size, in sheet units.
+const DX: f32 = 2.0 * EXTENT / (N - 1) as f32;
+/// How fast a ripple runs across the sheet (units a second), and how quickly
+/// it dies (per second).
+const WAVE: f32 = 2.4;
+const DAMP: f32 = 4.0;
+/// Damping that grows with how fine a ripple is, as cloth's own does: a
+/// broad wave keeps its shiver, a cell-sized one dies at once. In units a
+/// cell, kept inside what an explicit step allows.
+const FINE: f32 = 0.08;
+/// The fastest the hand can carry the cloth towards us, units a second.
+const PUSH: f32 = 2.0;
+/// The longest step. The wave alone is stable up to 0.7 DX / WAVE, but with
+/// `FINE` damping the finest ripples grow unless the step is about half that.
+const STEP: f32 = 0.3 * DX / WAVE;
 
 pub struct Cloth {
-    /// The sheet.
+    /// The sheet, and how fast each cell of it is moving.
     pub h: Vec<f32>,
+    v: Vec<f32>,
+    dv: Vec<f32>,
     /// The front of whatever is behind it, or -1 where nothing is.
     pub under: Vec<f32>,
 }
@@ -26,7 +41,7 @@ pub fn cell(v: f32) -> f32 {
 
 impl Cloth {
     pub fn new() -> Self {
-        Cloth { h: vec![0.0; N * N], under: vec![-1.0; N * N] }
+        Cloth { h: vec![0.0; N * N], v: vec![0.0; N * N], dv: vec![0.0; N * N], under: vec![-1.0; N * N] }
     }
 
     pub fn clear_under(&mut self) {
@@ -64,18 +79,33 @@ impl Cloth {
         }
     }
 
-    /// Relax the sheet over what is under it. `stiff` pulls the cloth back
-    /// towards flat, so a tent dies away over a short distance instead of
-    /// lifting the whole sheet.
-    pub fn settle(&mut self, stiff: f32) {
-        let denom = 4.0 + stiff;
-        for _ in 0..SWEEPS {
+    /// Moves the sheet on by `dt` seconds over what is under it now. `stiff`
+    /// pulls the cloth back towards flat, so a tent dies away over a short
+    /// distance instead of lifting the whole sheet. Where the hand is, the
+    /// cloth goes with it and takes its speed.
+    pub fn step(&mut self, dt: f32, stiff: f32) {
+        let steps = (dt / STEP).ceil().clamp(1.0, 80.0) as usize;
+        let h = dt / steps as f32;
+        let c2 = WAVE * WAVE / (DX * DX);
+        for _ in 0..steps {
             for y in 1..N - 1 {
                 for x in 1..N - 1 {
                     let i = y * N + x;
-                    let around = self.h[i - 1] + self.h[i + 1] + self.h[i - N] + self.h[i + N];
-                    let relaxed = self.h[i] + OMEGA * (around / denom - self.h[i]);
-                    self.h[i] = relaxed.max(self.under[i]).max(0.0);
+                    let lap = self.h[i - 1] + self.h[i + 1] + self.h[i - N] + self.h[i + N] - 4.0 * self.h[i];
+                    let lap_v = self.v[i - 1] + self.v[i + 1] + self.v[i - N] + self.v[i + N] - 4.0 * self.v[i];
+                    let accel = c2 * (lap - stiff * self.h[i]) - DAMP * self.v[i];
+                    self.dv[i] = accel * h + FINE * lap_v;
+                }
+            }
+            for i in 0..N * N {
+                self.v[i] += self.dv[i];
+                let was = self.h[i];
+                self.h[i] += self.v[i] * h;
+                if self.h[i] < self.under[i] {
+                    self.h[i] = self.under[i];
+                    // No faster than a hand moves, so a surface that appears
+                    // all at once does not fling the cloth.
+                    self.v[i] = self.v[i].max(((self.under[i] - was) / h).min(PUSH));
                 }
             }
         }
