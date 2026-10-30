@@ -30,8 +30,7 @@ mod metaballs;
 #[cfg(feature = "gpu")]
 mod overland;
 pub(crate) mod vesta;
-// A fingertip through a veil, for the 32x32 Art Frame (2026-10-29, an experiment).
-#[cfg(feature = "gpu")]
+// A hand through a veil, for the 32x32 Art Frame (2026-10-29, an experiment).
 mod veil;
 
 /// Card 178 took two out of this list, at the author's word ("let's also kill
@@ -62,7 +61,6 @@ pub static ALL: &[PatchDef] = &[
     flavortime::DEF,
     #[cfg(feature = "gpu")]
     physarum::DEF,
-    #[cfg(feature = "gpu")]
     veil::DEF,
     #[cfg(feature = "gpu")]
     ghosts::DEF,
@@ -100,8 +98,6 @@ static GPU_PATCHES: &[(&str, Need)] = &[
     (flavortime::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (physarum::DEF.id, Need::Hardware),
-    #[cfg(feature = "gpu")]
-    (veil::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (ghosts::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
@@ -261,8 +257,8 @@ mod tests {
         }
         assert!(blocked(&hardware).is_empty());
         if cfg!(feature = "gpu") {
-            assert_eq!(blocked(&software), vec!["hearth", "flavortime", "physarum", "veil", "ghosts", "overland"]);
-            assert_eq!(blocked(&none).len(), 9);
+            assert_eq!(blocked(&software), vec!["hearth", "flavortime", "physarum", "ghosts", "overland"]);
+            assert_eq!(blocked(&none).len(), 8);
             let why = playable("overland", &software).unwrap_err();
             assert!(why.contains("software (llvmpipe)"), "{why}");
             for id in ["leaves", "lattice", "knot"] {

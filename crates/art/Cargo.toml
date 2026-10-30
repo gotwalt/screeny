@@ -13,6 +13,8 @@ path = "tests/art.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+# Reads the veil patch's hand model (a GLB's JSON chunk).
+serde_json = "1"
 png = "0.17"
 wgpu = { version = "30.0.1", optional = true }
 pollster = { version = "1.0.1", optional = true }
