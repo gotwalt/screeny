@@ -7,8 +7,8 @@
 //! its fingers): pointing, two fingers, a crooked beckoning finger, or a whole
 //! hand flat against the cloth that may hook its fingers while it holds. The
 //! sheet (`cloth.rs`) is a membrane relaxed over it every frame. This file is
-//! the choreography - a pure function of time and seed, one visit per slot,
-//! each a path built from gestures picked at random - and the lighting.
+//! the choreography - one visit after another, each planned from the seed and
+//! its number as a path of gestures picked at random - and the lighting.
 //!
 //! Everything is composed in the centre square, x in -1..1 of the frame's
 //! -2..2, which is what the Art Frame shows of the 64x32 frame.
@@ -33,7 +33,7 @@ pub const DEF: PatchDef = PatchDef {
     params: PARAMS,
     make,
     // The seed picks where each visit presses, from which side, how far, in
-    // what pose, and which slots are a finger, two, a hand or nothing.
+    // what pose, and whether each visit is a finger, two or a hand.
     seeded: true,
 };
 
@@ -50,13 +50,12 @@ const PARAMS: &[ParamSpec] = &[
 ];
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    Box::new(Veil { seed: Rng::new(seed).f32(), cloth: Cloth::new(), skinned: Vec::new() })
+    Box::new(Veil { seed: Rng::new(seed).f32(), cloth: Cloth::new(), skinned: Vec::new(), visit: None })
 }
 
-/// What can come through in a slot. The shader reads it as X(0).
+/// What comes through.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
-    Nothing = 0,
     Finger = 1,
     Two = 2,
     Hand = 3,
@@ -73,8 +72,12 @@ const DRAWN_AT: f32 = 0.19;
 /// Where the tip is behind the sheet at rest; the sheet is z = 0, we are +z.
 const AWAY: f32 = -0.4;
 
-/// Leave this long at the end of a slot for the sheet to settle.
+/// The most a visit's gestures may run past the longest planned, for the
+/// last move away.
 const SETTLE: f32 = 6.0;
+
+/// After a visit, this long for the sheet to stop shivering before `pause`.
+const REST: f32 = 2.0;
 
 /// How far from the centre anything presses: the Art Frame shows x and y in
 /// -1..1, and the cloth tents a little way out from the tip.
@@ -173,12 +176,11 @@ impl Visit {
         // patch should see what it is.
         let roll = if slot == 0 { 0.5 } else { rng.f32() };
         let kind = match roll {
-            r if r < 0.15 => Kind::Nothing,
-            r if r < 0.70 => Kind::Finger,
-            r if r < 0.88 => Kind::Two,
+            r if r < 0.65 => Kind::Finger,
+            r if r < 0.85 => Kind::Two,
             _ => Kind::Hand,
         };
-        let start = if slot == 0 { 1.5 } else { rng.range(0.0, 2.0) };
+        let start = if slot == 0 { 0.3 } else { rng.range(0.0, 0.5) };
         let mut v = Visit {
             kind,
             keys: Vec::new(),
@@ -310,7 +312,7 @@ impl Visit {
     /// Where everything is at `local` seconds into the slot; `None` while
     /// nothing is there.
     fn moment(&self, local: f32) -> Option<Moment> {
-        if self.kind == Kind::Nothing || local < self.keys[0].t {
+        if local < self.keys[0].t {
             return None;
         }
         let (x, y, z) = self.path().sample(local);
@@ -373,15 +375,26 @@ struct Veil {
     seed: f32,
     cloth: Cloth,
     skinned: Vec<[f32; 3]>,
+    /// The visit under way: its number, when it began, and its plan. The next
+    /// begins as soon as this one has settled and `pause` has passed.
+    visit: Option<(u64, f32, Visit)>,
 }
 
 impl Patch for Veil {
     fn render(&mut self, ctx: &Ctx) -> Frame {
-        let slot_len = VISIT + ctx.get("pause");
         let t = ctx.t as f32;
-        let slot = (t / slot_len).floor().max(0.0);
-        let local = t - slot * slot_len;
-        let moment = Visit::plan(slot as u64, self.seed).moment(local);
+        let next = match &self.visit {
+            // Time went backwards (a restart): begin again.
+            Some((_, start, _)) if t < *start => Some(0),
+            Some((n, start, v)) if t >= start + v.keys.last().unwrap().t + REST + ctx.get("pause") => Some(n + 1),
+            Some(_) => None,
+            None => Some(0),
+        };
+        if let Some(n) = next {
+            self.visit = Some((n, if n == 0 { 0.0 } else { t }, Visit::plan(n, self.seed)));
+        }
+        let (_, start, visit) = self.visit.as_ref().unwrap();
+        let moment = visit.moment(t - start);
         let size = ctx.get("size");
         let model = Model::get();
 
@@ -500,10 +513,10 @@ mod tests {
     }
 
     #[test]
-    fn some_slots_are_empty_and_hands_are_rare() {
+    fn hands_are_rare() {
         let kinds: Vec<Kind> = (1..1000).map(|s| Visit::plan(s, 0.5).kind).collect();
         let count = |k| kinds.iter().filter(|&&x| x == k).count();
-        assert!(count(Kind::Nothing) > 80, "{}", count(Kind::Nothing));
+        assert!(count(Kind::Hand) > 80, "{}", count(Kind::Hand));
         assert!(count(Kind::Hand) < count(Kind::Finger) / 2);
     }
 }
