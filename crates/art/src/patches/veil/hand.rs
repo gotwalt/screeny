@@ -119,19 +119,15 @@ pub struct Pose {
 impl Pose {
     /// The index finger out, the rest folded away.
     pub const POINT: Pose = Pose { curl: [0.85, 0.0, 0.95, 1.0, 1.0], spread: 0.02 };
-    /// Index and middle out together.
-    pub const TWO: Pose = Pose { curl: [0.85, 0.0, 0.05, 0.95, 1.0], spread: 0.03 };
-    /// The index crooked, beckoning.
-    pub const CROOK: Pose = Pose { curl: [0.85, 0.38, 0.95, 1.0, 1.0], spread: 0.02 };
-    /// Flat and spread, as if laid against glass: the fingers bent back a
-    /// little, as they are when a hand presses.
-    pub const FLAT: Pose = Pose { curl: [0.0, -0.14, -0.14, -0.12, -0.1], spread: 0.22 };
-    /// Fingers hooked, grasping at the cloth.
-    pub const CLAW: Pose = Pose { curl: [0.3, 0.42, 0.45, 0.45, 0.5], spread: 0.12 };
+}
 
-    pub fn mix(a: Pose, b: Pose, k: f32) -> Pose {
-        Pose { curl: std::array::from_fn(|i| a.curl[i] + (b.curl[i] - a.curl[i]) * k), spread: a.spread + (b.spread - a.spread) * k }
-    }
+/// Flesh in front of a fingertip's joint, and in front of the palm's middle,
+/// in metres.
+pub const PAD: f32 = 0.009;
+pub const PALM: f32 = 0.016;
+
+pub fn mid(a: V3, b: V3) -> V3 {
+    scale(add(a, b), 0.5)
 }
 
 /// The model, read once.
@@ -261,6 +257,40 @@ impl Model {
     /// and the way the palm faces.
     pub fn axes(&self) -> (V3, V3) {
         (unit(sub(self.rest[11], self.rest[WRIST])), self.palm)
+    }
+
+    /// `pose`, with each digit bent towards `limit` only as far as it must be
+    /// so none of its joints (plus `pad` of flesh) comes nearer us than
+    /// `wall`, once placed by `place`. Bending towards `limit` must move the
+    /// digit back from us: flattening an arched finger, or curling one that
+    /// points at us.
+    pub fn against(&self, pose: Pose, place: &Rigid, wall: f32, pad: f32, limit: f32) -> Pose {
+        let reach = |p: &Pose, digit: usize| {
+            let bones = self.bones(p);
+            CHAINS[digit][1..].iter().map(|&j| place.apply(self.joint(&bones, j))[2]).fold(f32::MIN, f32::max) + pad
+        };
+        let mut out = pose;
+        for digit in 0..5 {
+            if reach(&out, digit) <= wall {
+                continue;
+            }
+            // Bisect between the pose's own bend (too near) and the limit.
+            let (mut near, mut far) = (pose.curl[digit], limit);
+            out.curl[digit] = far;
+            if reach(&out, digit) > wall {
+                continue;
+            }
+            for _ in 0..14 {
+                out.curl[digit] = 0.5 * (near + far);
+                if reach(&out, digit) > wall {
+                    near = out.curl[digit];
+                } else {
+                    far = out.curl[digit];
+                }
+            }
+            out.curl[digit] = far;
+        }
+        out
     }
 
     /// The posed index finger's direction, knuckle to tip.

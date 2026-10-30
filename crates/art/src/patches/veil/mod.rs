@@ -56,9 +56,15 @@ fn make(seed: u64) -> Box<dyn Patch> {
 /// What comes through.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
-    Finger = 1,
-    Two = 2,
-    Hand = 3,
+    /// The index finger alone, pointing at us.
+    Pointer,
+    /// An open hand held up, palm to us, fingers arched forward: they meet
+    /// the cloth first and are pushed flat as the palm comes on, then it backs
+    /// off.
+    Stop,
+    /// The fingers pointing at us: as it pushes in, each bends just enough
+    /// that its tip stops at the cloth, until all five rest there together.
+    Tips,
 }
 
 /// Longest a visit runs, start to settled, so a slot is this plus the pause.
@@ -121,11 +127,9 @@ struct Visit {
     phase: f32,
     /// A hand's size, as a multiple of life size.
     span: f32,
-    /// The pose it comes in with, the one it may change to while it holds,
-    /// and when that change happens (seconds into the slot, and how long).
-    pose: Pose,
-    then: Pose,
-    change: (f32, f32),
+    /// How far the cloth will stretch towards us before it stops the hand
+    /// (`Stop`, `Tips`), at `DRAWN_AT`.
+    wall: f32,
 }
 
 /// Builds a path: each step adds a key, `t` seconds after the last.
@@ -174,11 +178,11 @@ impl Visit {
         let mut rng = Rng::new(((seed * 1e9) as u64) ^ slot.wrapping_mul(0x9e37_79b9_7f4a_7c15));
         // The first slot always has a finger in it, soon: whoever starts the
         // patch should see what it is.
-        let roll = if slot == 0 { 0.5 } else { rng.f32() };
+        let roll = if slot == 0 { 0.2 } else { rng.f32() };
         let kind = match roll {
-            r if r < 0.65 => Kind::Finger,
-            r if r < 0.85 => Kind::Two,
-            _ => Kind::Hand,
+            r if r < 0.5 => Kind::Pointer,
+            r if r < 0.75 => Kind::Stop,
+            _ => Kind::Tips,
         };
         let start = if slot == 0 { 0.3 } else { rng.range(0.0, 0.5) };
         let mut v = Visit {
@@ -187,40 +191,24 @@ impl Visit {
             release: VISIT,
             // Mostly from below, as an arm would be, sometimes from a side.
             toward: -PI / 2.0 + rng.range(-1.1, 1.1),
-            lean: rng.range(0.35, 0.75),
+            lean: rng.range(0.05, 0.3),
             phase: rng.range(0.0, TAU),
             span: rng.range(0.78, 0.9),
-            pose: Pose::POINT,
-            then: Pose::POINT,
-            change: (VISIT, 1.0),
+            wall: rng.range(0.22, 0.3),
         };
-        let path = if kind == Kind::Hand {
-            // Fingers up, give or take: the hand's own direction.
-            v.toward = PI / 2.0 + rng.range(-0.35, 0.35);
-            Self::hand(&mut rng, start)
-        } else {
-            Self::finger(&mut rng, start)
+        let path = match kind {
+            Kind::Pointer => Self::finger(&mut rng, start),
+            Kind::Stop => {
+                // Fingers up, give or take.
+                v.toward = PI / 2.0 + rng.range(-0.3, 0.3);
+                Self::press(&mut rng, start, v.wall, 0.04)
+            }
+            Kind::Tips => Self::press(&mut rng, start, v.wall, 0.5),
         };
         // The cloth comes free a little way into the last move.
         let n = path.keys.len();
         let (a, b) = (path.keys[n - 2], path.keys[n - 1]);
         v.release = a.t + (b.t - a.t) * 0.4;
-        // The pose: a finger visit points, crooks, or puts out two; a hand is
-        // flat, and may hook its fingers into the cloth while it holds.
-        let held = (path.keys[1].t, a.t);
-        v.pose = match kind {
-            Kind::Hand => Pose::FLAT,
-            Kind::Two => Pose::TWO,
-            _ if rng.f32() < 0.25 => Pose::CROOK,
-            _ => Pose::POINT,
-        };
-        v.then = match kind {
-            Kind::Hand if rng.f32() < 0.45 => Pose::CLAW,
-            Kind::Finger if rng.f32() < 0.3 => if v.pose == Pose::POINT { Pose::CROOK } else { Pose::POINT },
-            _ => v.pose,
-        };
-        let at = held.0 + (held.1 - held.0) * rng.range(0.2, 0.7);
-        v.change = (at, rng.range(1.5, 4.0));
         v.keys = path.keys;
         v
     }
@@ -276,22 +264,22 @@ impl Visit {
         p
     }
 
-    /// A hand laid flat against the cloth, pressing forward.
-    fn hand(rng: &mut Rng, start: f32) -> Path {
-        let (x, y) = (rng.range(-0.12, 0.12), rng.range(-0.2, 0.0));
+    /// A hand that comes up against the cloth and is stopped there: in until
+    /// it is `over` past the wall, a hold, perhaps a second press, and back.
+    /// Its z is the hand's own push; the wall decides what the fingers do.
+    fn press(rng: &mut Rng, start: f32, wall: f32, over: f32) -> Path {
+        let (x, y) = (rng.range(-0.1, 0.1), rng.range(-0.15, 0.05));
         let mut p = Path { keys: vec![Key { t: start, x, y, z: AWAY, ease: Ease::Gentle }] };
-        let z = rng.range(0.14, 0.24);
-        p.to(rng.range(5.0, 8.0), x, y, z, Ease::Gentle);
-        p.stay(rng.range(1.0, 2.5));
-        // Then harder, or sliding a little across the cloth.
-        if rng.f32() < 0.5 {
-            p.to(rng.range(2.0, 4.0), x, y, z + rng.range(0.06, 0.14), Ease::Gentle);
-        } else {
-            let (a, d) = (rng.range(0.0, TAU), rng.range(0.05, 0.15));
-            p.to(rng.range(3.0, 5.0), x + a.cos() * d, y + a.sin() * d, z, Ease::Gentle);
+        let full = wall + over;
+        p.to(rng.range(4.0, 7.0), x, y, full, Ease::Gentle);
+        p.stay(rng.range(1.5, 3.0));
+        if rng.f32() < 0.4 {
+            p.to(rng.range(1.5, 2.5), x, y, full - rng.range(0.08, 0.15), Ease::Gentle);
+            p.to(rng.range(1.5, 2.5), x, y, full, Ease::Gentle);
+            p.stay(rng.range(1.0, 2.0));
         }
-        p.stay(rng.range(1.0, 2.0));
-        Self::away(rng, &mut p);
+        let k = p.last();
+        p.to(rng.range(2.5, 4.0), k.x, k.y, AWAY - 0.1, Ease::Gentle);
         p
     }
 
@@ -323,10 +311,10 @@ impl Visit {
         Some(Moment {
             kind: self.kind,
             tip: (x, y, z + breath),
-            toward: self.toward + if self.kind == Kind::Hand { turn * 0.4 } else { turn },
-            lean: self.lean + 0.12 * (local * 0.17 + self.phase * 2.0).sin(),
-            pose: Pose::mix(self.pose, self.then, smooth((local - self.change.0) / self.change.1)),
+            toward: self.toward + if self.kind == Kind::Pointer { turn } else { turn * 0.4 },
+            lean: self.lean + 0.06 * (local * 0.17 + self.phase * 2.0).sin(),
             span: self.span,
+            wall: self.wall,
             ripple: if age > 0.0 { 0.012 * (-age * 0.9).exp() } else { 0.0 },
             age: age.max(0.0),
         })
@@ -340,8 +328,8 @@ struct Moment {
     tip: (f32, f32, f32),
     toward: f32,
     lean: f32,
-    pose: Pose,
     span: f32,
+    wall: f32,
     ripple: f32,
     age: f32,
 }
@@ -350,25 +338,58 @@ struct Moment {
 /// at the default finger size.
 const LIFE: f32 = 10.6 / 0.11;
 
-/// Where the hand goes for a moment: a rigid placement from the model's
-/// rest space into the sheet's (x, y across it, z towards us).
-fn place(model: &Model, bones: &[Rigid; 25], m: &Moment, size: f32) -> Rigid {
+/// How the hand is posed and placed for a moment: a pose, and a rigid
+/// placement from the model's rest space into the sheet's (x, y across it,
+/// z towards us, at the real finger size). `true` when the placement already
+/// puts the hand at its depth; a pointer is placed by its front instead.
+fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
     let (fingers, palm) = model.axes();
-    let (turn, anchor) = if m.kind == Kind::Hand {
-        // Palm towards us, fingers up the sheet (give or take `toward`).
-        let up = [m.toward.cos(), m.toward.sin(), 0.05];
-        (Rigid::between(fingers, palm, up, [0.0, 0.0, 1.0]).scaled(LIFE * size * m.span), 11)
-    } else {
-        // The index finger towards us, leaning back the way the hand is, the
-        // palm facing down the sheet.
-        let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
-        let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
-        (Rigid::between(model.index_dir(bones), palm, out, down).scaled(LIFE * size), hand::INDEX_TIP)
-    };
-    // The anchor joint goes over the tip's spot; the depth is set from the
-    // front-most vertex once it is skinned.
-    let at = turn.apply(model.joint(bones, anchor));
-    turn.moved([m.tip.0 - at[0], m.tip.1 - at[1], -at[2]])
+    let k = size / DRAWN_AT;
+    let scale = LIFE * size;
+    match m.kind {
+        Kind::Pointer => {
+            let pose = Pose::POINT;
+            let bones = model.bones(&pose);
+            // The index finger towards us, leaning back a little the way the
+            // hand is, the palm facing down the sheet.
+            let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
+            let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
+            let turn = Rigid::between(model.index_dir(&bones), palm, out, down).scaled(scale);
+            let at = turn.apply(model.joint(&bones, hand::INDEX_TIP));
+            (pose, turn.moved([m.tip.0 - at[0], m.tip.1 - at[1], -at[2]]), false)
+        }
+        Kind::Stop => {
+            // Palm to us, fingers up the sheet, arched forward at rest.
+            let scale = scale * m.span;
+            let up = [m.toward.cos(), m.toward.sin(), 0.0];
+            let turn = Rigid::between(fingers, palm, up, [0.0, 0.0, 1.0]).scaled(scale);
+            let arched = Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1 };
+            // The palm's front comes to the push, but never past the wall.
+            let bones = model.bones(&arched);
+            let centre = hand::mid(model.joint(&bones, hand::WRIST), model.joint(&bones, 11));
+            let c = turn.apply(centre);
+            let front = (m.tip.2 * k).min(m.wall * k) - hand::PALM * scale;
+            let place = turn.moved([m.tip.0 - c[0], m.tip.1 - c[1], front - c[2]]);
+            // Each finger keeps as much of its arch as the wall allows.
+            let pose = model.against(arched, &place, m.wall * k, hand::PAD * scale, -0.15);
+            (pose, place, true)
+        }
+        Kind::Tips => {
+            // Fingers to us, the palm down the sheet, a little apart.
+            let scale = scale * m.span;
+            let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
+            let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
+            let turn = Rigid::between(fingers, palm, out, down).scaled(scale);
+            let reaching = Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09 };
+            // The hand's push carries the middle fingertip; past the wall each
+            // finger bends so its tip stays there.
+            let bones = model.bones(&reaching);
+            let tip = turn.apply(model.joint(&bones, 14));
+            let place = turn.moved([m.tip.0 - tip[0], m.tip.1 - tip[1], m.tip.2 * k - tip[2] - hand::PAD * scale]);
+            let pose = model.against(reaching, &place, m.wall * k, hand::PAD * scale, 1.4);
+            (pose, place, true)
+        }
+    }
 }
 
 struct Veil {
@@ -401,22 +422,17 @@ impl Patch for Veil {
         self.cloth.clear_under();
         let (mut ripple, mut ripple_at) = (0.0, (0.0, 0.0, 0.0));
         if let Some(m) = &moment {
-            let bones = model.bones(&m.pose);
-            let place = place(model, &bones, m, size);
+            let (pose, place, placed) = arrange(model, m, size);
+            let bones = model.bones(&pose);
             model.skin(&bones, &place, &mut self.skinned);
-            // The front of the hand is where the choreography says the tip is:
-            // for a finger its front-most point, for a hand laid flat the
-            // broad front of it, so the whole palm meets the cloth.
-            let front = if m.kind == Kind::Hand {
-                let mut z: Vec<f32> = self.skinned.iter().map(|p| p[2]).collect();
-                z.sort_by(f32::total_cmp);
-                z[z.len() * 80 / 100]
-            } else {
-                self.skinned.iter().map(|p| p[2]).fold(f32::MIN, f32::max)
-            };
-            let lift = m.tip.2 * size / DRAWN_AT - front;
-            for p in &mut self.skinned {
-                p[2] += lift;
+            // A pointer's front-most point is where the choreography says the
+            // tip is.
+            if !placed {
+                let front = self.skinned.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
+                let lift = m.tip.2 * size / DRAWN_AT - front;
+                for p in &mut self.skinned {
+                    p[2] += lift;
+                }
             }
             for tri in &model.triangles {
                 let [a, b, c] = tri.map(|i| self.skinned[i as usize]);
@@ -502,7 +518,7 @@ mod tests {
     #[test]
     fn the_first_slot_shows_a_finger_early() {
         let v = Visit::plan(0, 0.9);
-        assert_eq!(v.kind, Kind::Finger);
+        assert_eq!(v.kind, Kind::Pointer);
         assert!((1..15).any(|t| v.moment(t as f32).is_some_and(|m| m.tip.2 > 0.2)));
     }
 
@@ -513,10 +529,9 @@ mod tests {
     }
 
     #[test]
-    fn hands_are_rare() {
+    fn every_kind_comes() {
         let kinds: Vec<Kind> = (1..1000).map(|s| Visit::plan(s, 0.5).kind).collect();
         let count = |k| kinds.iter().filter(|&&x| x == k).count();
-        assert!(count(Kind::Hand) > 80, "{}", count(Kind::Hand));
-        assert!(count(Kind::Hand) < count(Kind::Finger) / 2);
+        assert!(count(Kind::Stop) > 150 && count(Kind::Tips) > 150, "{} {}", count(Kind::Stop), count(Kind::Tips));
     }
 }
