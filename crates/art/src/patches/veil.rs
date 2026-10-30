@@ -35,7 +35,7 @@ const PARAMS: &[ParamSpec] = &[
     param("hue", "Hue", 0.0, 360.0, 1.0, 220.0),
     param("tint", "Tint", 0.0, 0.12, 0.001, 0.015),
     param("pallor", "Pallor at the fingertip", 0.0, 2.0, 0.01, 1.0),
-    param("size", "Finger size", 0.08, 0.35, 0.005, 0.19),
+    param("size", "Finger size", 0.05, 0.35, 0.005, 0.11),
     param("folds", "Folds", 0.0, 2.0, 0.01, 1.0),
     param("pause", "Stillness between visits (s)", 0.0, 60.0, 1.0, 12.0),
     param("steps", "Palette steps", 2.0, 31.0, 1.0, 16.0),
@@ -58,6 +58,11 @@ enum Kind {
 
 /// Longest a visit runs, start to settled, so a slot is this plus the pause.
 const VISIT: f32 = 30.0;
+
+/// The finger size the choreography's depths and spacings are written for;
+/// at any other size they scale with it, so a smaller finger presses in
+/// proportion and its neighbour stays a finger's width away.
+const DRAWN_AT: f32 = 0.19;
 
 /// Where the tip is behind the sheet at rest; the sheet is z = 0, we are +z.
 const AWAY: f32 = -0.4;
@@ -125,7 +130,8 @@ impl Visit {
         v
     }
 
-    fn extra(&self, local: f32) -> [f32; MAX_EXTRA] {
+    /// `k` is the finger size over [`DRAWN_AT`].
+    fn extra(&self, local: f32, k: f32) -> [f32; MAX_EXTRA] {
         let mut x = [0.0; MAX_EXTRA];
         let tau = local - self.start;
         let (a, h, w) = (self.approach, self.hold, self.withdraw);
@@ -144,7 +150,7 @@ impl Visit {
             held + (AWAY - 0.1 - held) * u * u
         };
         let roam = smooth((tau - a - h * 0.45) / (h * 0.5));
-        let tip = (self.at.0 + self.wander.0 * roam, self.at.1 + self.wander.1 * roam);
+        let tip = (self.at.0 + self.wander.0 * roam * k, self.at.1 + self.wander.1 * roam * k);
         // The glow gathers before it touches and goes with it.
         let presence = smooth(tau / (a * 0.7)) * (1.0 - smooth((tau - a - h) / (w * 0.8)));
         // The sheet shivers once it is let go.
@@ -154,7 +160,7 @@ impl Visit {
         x[0] = self.kind as u8 as f32;
         x[1] = tip.0;
         x[2] = tip.1;
-        x[3] = push;
+        x[3] = push * k;
         x[4] = self.toward;
         x[5] = self.lean;
         x[6] = presence;
@@ -162,10 +168,10 @@ impl Visit {
         x[8] = age.max(0.0);
         x[9] = self.at.0;
         x[10] = self.at.1;
-        x[11] = self.other.0;
-        x[12] = self.other.1;
+        x[11] = self.other.0 * k;
+        x[12] = self.other.1 * k;
         // The second finger arrives a little behind the first and stops shorter.
-        x[13] = if self.kind == Kind::Two { push - 0.08 - 0.12 * (1.0 - smooth((tau - 1.5) / a)) } else { 0.0 };
+        x[13] = if self.kind == Kind::Two { (push - 0.08 - 0.12 * (1.0 - smooth((tau - 1.5) / a))) * k } else { 0.0 };
         x
     }
 }
@@ -177,7 +183,7 @@ fn scene(ctx: &Ctx, seed: f32) -> Scene {
     let visit = Visit::plan(slot as u64, seed);
 
     Scene {
-        extra: visit.extra(t - slot * slot_len),
+        extra: visit.extra(t - slot * slot_len, ctx.get("size") / DRAWN_AT),
         palette: Some(Palette::ramps(&[ctx.get("hue")], ctx.get("steps") as usize, (0.28, 0.95), ctx.get("tint"))),
         dither: ctx.get("dither"),
     }
@@ -193,7 +199,7 @@ mod tests {
             let v = Visit::plan(slot, 0.37);
             let end = v.start + v.approach + v.hold + v.withdraw;
             assert!(end + 6.0 <= VISIT, "slot {slot}: ends at {end}");
-            let x = v.extra(VISIT);
+            let x = v.extra(VISIT, 1.0);
             assert!(x[0] == 0.0 || x[3] <= AWAY, "slot {slot}: still pressing at the end");
         }
     }
@@ -202,7 +208,7 @@ mod tests {
     fn the_first_slot_shows_a_finger_early() {
         let v = Visit::plan(0, 0.9);
         assert_eq!(v.kind, Kind::Finger);
-        assert!(v.extra(v.start + v.approach)[3] > 0.2);
+        assert!(v.extra(v.start + v.approach, 1.0)[3] > 0.2);
     }
 
     #[test]

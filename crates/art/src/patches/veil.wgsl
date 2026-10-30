@@ -67,19 +67,21 @@ fn sheet(xy: vec2<f32>) -> vec2<f32> {
     // a thumb pressing a little ahead of it, each by its own amount.
     let along = vec2<f32>(cos(X(4)), sin(X(4)));
     let across = vec2<f32>(-along.y, along.x);
+    // Laid out for a finger of 0.19 and scaled to the one asked for.
+    let k = r / 0.19;
     let f = r * 0.62;
-    let palm = vec3<f32>(tip.xy + along * 0.36, tip.z - 0.12);
-    best = digit(xy, palm, heading(X(4), 0.2), 0.5, 0.3);
+    let palm = vec3<f32>(tip.xy + along * 0.36 * k, tip.z - 0.12 * k);
+    best = digit(xy, palm, heading(X(4), 0.2), 0.5 * k, 0.3 * k);
     for (var i = 0; i < 5; i++) {
-      let k = f32(i);
-      var spot = across * (k - 1.5) * f * 2.15 - along * (0.06 - 0.05 * abs(k - 1.6));
+      let k5 = f32(i);
+      var spot = across * (k5 - 1.5) * f * 2.15 - along * (0.06 - 0.05 * abs(k5 - 1.6)) * k;
       var lean = 1.05;
       if (i == 4) {
-        spot = across * 2.8 * f * 1.8 + along * 0.3;
+        spot = across * 2.8 * f * 1.8 + along * 0.3 * k;
         lean = 1.25;
       }
-      let press = tip.z - 0.06 * hash13(vec3<f32>(k, u.seed * 9.0, 3.0)) - select(0.0, 0.07, i == 4);
-      let d = digit(xy, vec3<f32>(tip.xy + spot, press), heading(X(4), lean), 0.45, f);
+      let press = tip.z - (0.06 * hash13(vec3<f32>(k5, u.seed * 9.0, 3.0)) + select(0.0, 0.07, i == 4)) * k;
+      let d = digit(xy, vec3<f32>(tip.xy + spot, press), heading(X(4), lean), 0.45 * k, f);
       best = vec2<f32>(smax(best.x, d.x, f * 0.6), max(best.y, d.y));
     }
   }
