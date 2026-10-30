@@ -3,7 +3,7 @@
 // P: 0 hue, 1 tint (chroma), 2 pallor at the fingertip, 3 finger size, 4 folds
 // X: 0 kind (0 none, 1 finger, 2 two, 3 hand), 1-2 tip, 3 push, 4 toward,
 //    5 lean, 6 presence, 7 ripple, 8 ripple age, 9-10 ripple centre,
-//    11-12 second finger offset, 13 second finger push
+//    11-12 second finger offset, 13 second finger push, 14 hand span over finger size
 
 // Where the cloth is pinned, as a multiple of the finger's radius: the tent
 // falls off as a stretched membrane does, logarithmically, out to here.
@@ -48,6 +48,55 @@ fn heading(toward: f32, lean: f32) -> vec3<f32> {
   return normalize(vec3<f32>(cos(toward) * sin(lean), sin(toward) * sin(lean), -cos(lean)));
 }
 
+// The sheet over one part of a hand: `d` is the distance to the part's
+// outline (negative inside), `z` how far it presses, `r` how round its edge is.
+fn part(d: f32, z: f32, r: f32) -> vec2<f32> {
+  let inside = clamp(-d / r, 0.0, 1.0);
+  let cap = select(-9.0, z + r * sqrt(1.0 - (1.0 - inside) * (1.0 - inside)), d < 0.0);
+  let tent = max(z + 0.4 * r, 0.0) * clamp(1.0 - log(1.0 + max(d, 0.0) / r) / log(PINNED), 0.0, 1.0);
+  return vec2<f32>(smax(cap, tent, r * 0.25), inside * smoothstep(0.0, 0.05, z));
+}
+
+fn segment(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
+  let pa = p - a;
+  let ba = b - a;
+  return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0));
+}
+
+// A hand pressed flat against the cloth from behind, palm first, `s` across
+// the palm. Its fingers point along X(4); `tip` is the middle of the palm.
+fn hand(xy: vec2<f32>, tip: vec3<f32>, s: f32) -> vec2<f32> {
+  let up = vec2<f32>(cos(X(4)), sin(X(4)));
+  let side = vec2<f32>(up.y, -up.x);
+  let q = vec2<f32>(dot(xy - tip.xy, side), dot(xy - tip.xy, up));
+  let w = 0.1 * s;
+
+  // The palm: a rounded box, pressing furthest at its heel and middle.
+  let pb = abs(q - vec2<f32>(0.0, -0.05 * s)) - vec2<f32>(0.42 * s - w, 0.46 * s - w);
+  let dp = length(max(pb, vec2<f32>(0.0))) + min(max(pb.x, pb.y), 0.0) - w;
+  var best = part(dp, tip.z, w * 1.8);
+
+  // Four fingers, splayed, each pressing by its own amount, then the thumb.
+  for (var i = 0; i < 5; i++) {
+    let k = f32(i);
+    var base = vec2<f32>((k - 1.5) * 0.22 * s, 0.36 * s);
+    var ang = (k - 1.5) * 0.22 + 0.1 * (hash13(vec3<f32>(k, u.seed * 7.0, 1.0)) - 0.5);
+    var len = (0.74 - 0.07 * abs(k - 1.3) - select(0.0, 0.14, i == 3)) * s;
+    var rad = w * (1.0 - 0.05 * abs(k - 1.5));
+    if (i == 4) {
+      base = vec2<f32>(0.38 * s, -0.12 * s);
+      ang = 1.1;
+      len = 0.46 * s;
+      rad = w * 1.1;
+    }
+    let tipq = base + vec2<f32>(sin(ang), cos(ang)) * len;
+    let z = tip.z - s * (0.03 + 0.05 * hash13(vec3<f32>(k, u.seed * 9.0, 3.0)));
+    let f = part(segment(q, base, tipq) - rad, z, rad);
+    best = vec2<f32>(smax(best.x, f.x, w * 0.3), max(best.y, f.y));
+  }
+  return best;
+}
+
 // Height of the sheet and how pressed it is, at xy.
 fn sheet(xy: vec2<f32>) -> vec2<f32> {
   let kind = X(0);
@@ -63,27 +112,7 @@ fn sheet(xy: vec2<f32>) -> vec2<f32> {
       best = vec2<f32>(smax(best.x, o.x, r * 0.5), max(best.y, o.y));
     }
   } else if (kind > 2.5) {
-    // A hand laid flat against the cloth: the palm behind, four fingertips and
-    // a thumb pressing a little ahead of it, each by its own amount.
-    let along = vec2<f32>(cos(X(4)), sin(X(4)));
-    let across = vec2<f32>(-along.y, along.x);
-    // Laid out for a finger of 0.19 and scaled to the one asked for.
-    let k = r / 0.19;
-    let f = r * 0.62;
-    let palm = vec3<f32>(tip.xy + along * 0.36 * k, tip.z - 0.12 * k);
-    best = digit(xy, palm, heading(X(4), 0.2), 0.5 * k, 0.3 * k);
-    for (var i = 0; i < 5; i++) {
-      let k5 = f32(i);
-      var spot = across * (k5 - 1.5) * f * 2.15 - along * (0.06 - 0.05 * abs(k5 - 1.6)) * k;
-      var lean = 1.05;
-      if (i == 4) {
-        spot = across * 2.8 * f * 1.8 + along * 0.3 * k;
-        lean = 1.25;
-      }
-      let press = tip.z - (0.06 * hash13(vec3<f32>(k5, u.seed * 9.0, 3.0)) + select(0.0, 0.07, i == 4)) * k;
-      let d = digit(xy, vec3<f32>(tip.xy + spot, press), heading(X(4), lean), 0.45 * k, f);
-      best = vec2<f32>(smax(best.x, d.x, f * 0.6), max(best.y, d.y));
-    }
+    best = hand(xy, tip, X(14) * r);
   }
 
   // The sheet itself breathes a little, and shivers once it is let go.
@@ -94,6 +123,8 @@ fn sheet(xy: vec2<f32>) -> vec2<f32> {
 }
 
 fn shade(uv: vec2<f32>) -> vec3<f32> {
+  // Composed for the Art Frame, which shows x in -1..1.
+  if (abs(uv.x) > 1.1) { return vec3<f32>(0.0); }
   let eye = vec3<f32>(0.0, 0.0, 4.0);
   let dir = normalize(vec3<f32>(uv * 0.27, -1.0));
   // March the heightfield from just in front of anything that can stick out.
