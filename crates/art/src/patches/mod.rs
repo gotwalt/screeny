@@ -30,6 +30,9 @@ mod metaballs;
 #[cfg(feature = "gpu")]
 mod overland;
 pub(crate) mod vesta;
+// A fingertip through a veil, for the 32x32 Art Frame (2026-10-29, an experiment).
+#[cfg(feature = "gpu")]
+mod veil;
 
 /// Card 178 took two out of this list, at the author's word ("let's also kill
 /// the plasma and test card patches - they're not interesting"):
@@ -59,6 +62,8 @@ pub static ALL: &[PatchDef] = &[
     flavortime::DEF,
     #[cfg(feature = "gpu")]
     physarum::DEF,
+    #[cfg(feature = "gpu")]
+    veil::DEF,
     #[cfg(feature = "gpu")]
     ghosts::DEF,
     #[cfg(feature = "gpu")]
@@ -95,6 +100,8 @@ static GPU_PATCHES: &[(&str, Need)] = &[
     (flavortime::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (physarum::DEF.id, Need::Hardware),
+    #[cfg(feature = "gpu")]
+    (veil::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
     (ghosts::DEF.id, Need::Hardware),
     #[cfg(feature = "gpu")]
