@@ -40,6 +40,8 @@ pub const DEF: PatchDef = PatchDef {
 const PARAMS: &[ParamSpec] = &[
     param("hue", "Hue", 0.0, 360.0, 1.0, 220.0),
     param("tint", "Tint", 0.0, 0.12, 0.001, 0.015),
+    param("glow", "The hand's light through the veil", 0.0, 2.0, 0.01, 1.0),
+    param("sheen", "Light on the cloth", 0.0, 2.0, 0.01, 0.5),
     param("pallor", "Pallor where the cloth lies on the hand", 0.0, 2.0, 0.01, 1.0),
     param("size", "Finger size", 0.05, 0.35, 0.005, 0.11),
     param("stiff", "Cloth stiffness", 0.0, 0.4, 0.001, 0.08),
@@ -488,11 +490,16 @@ impl Patch for Veil {
             }
         }
         self.cloth.step(dt, ctx.get("stiff"));
+        self.cloth.shine();
 
         let colour = oklch(0.97, ctx.get("tint"), ctx.get("hue"));
         let pallor = ctx.get("pallor");
         let cloth = &self.cloth;
-        let height = |x: f32, y: f32| cloth.at(x, y);
+        let (glow_w, sheen_w) = (ctx.get("glow"), ctx.get("sheen"));
+        let height = |x: f32, y: f32| {
+            let (h, touch, _) = cloth.at(x, y);
+            (h, touch)
+        };
         // The Art Frame's 32 LEDs span 2.16 units; the frame is 64 wide.
         let unit = 2.16 / frame::H as f32;
         let key_l = norm([-0.55, 0.78, 0.3]);
@@ -523,7 +530,10 @@ impl Patch for Veil {
             let open = (1.0 - lap.max(0.0) * 40.0).clamp(0.35, 1.0);
             // Where it lies on the hand the cloth is thinnest, and a little of
             // the hand's pallor comes through.
-            let light = (key * 0.8 + gleam * 0.45 + rim * 0.12) * open + crate::color::smoothstep(0.3, 1.0, touch) * 0.3 * pallor;
+            let glow = cloth.at(x, y).2;
+            let light = glow * glow_w
+                + (key * 0.8 + gleam * 0.45 + rim * 0.12) * open * sheen_w
+                + crate::color::smoothstep(0.3, 1.0, touch) * 0.3 * pallor;
             Rgb { r: colour.r * light, g: colour.g * light, b: colour.b * light }
         });
         // As many steps as the panel can show, down to just above black, so
