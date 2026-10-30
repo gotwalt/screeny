@@ -32,13 +32,13 @@ pub const DEF: PatchDef = PatchDef {
 
 // The shader reads the first five as P(0)..P(4); the rest are used here.
 const PARAMS: &[ParamSpec] = &[
-    param("hue", "Glow hue", 0.0, 360.0, 1.0, 160.0),
-    param("hue2", "Sheen hue", 0.0, 360.0, 1.0, 235.0),
-    param("glow", "Glow through the veil", 0.0, 2.0, 0.01, 1.0),
+    param("hue", "Hue", 0.0, 360.0, 1.0, 220.0),
+    param("tint", "Tint", 0.0, 0.12, 0.001, 0.015),
+    param("pallor", "Pallor at the fingertip", 0.0, 2.0, 0.01, 1.0),
     param("size", "Finger size", 0.08, 0.35, 0.005, 0.19),
     param("folds", "Folds", 0.0, 2.0, 0.01, 1.0),
     param("pause", "Stillness between visits (s)", 0.0, 60.0, 1.0, 12.0),
-    param("steps", "Palette steps", 2.0, 15.0, 1.0, 8.0),
+    param("steps", "Palette steps", 2.0, 31.0, 1.0, 16.0),
     param("dither", "Palette dither", 0.0, 1.0, 0.01, 0.8),
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 5.0),
 ];
@@ -101,7 +101,7 @@ impl Visit {
         };
         let hand = kind == Kind::Hand;
         let reach = if hand { 0.15 } else { 0.42 };
-        let first = rng.range(0.22, 0.36);
+        let first = rng.range(0.32, 0.46);
         let mut v = Visit {
             kind,
             start: if slot == 0 { 1.5 } else { rng.range(0.0, 3.0) },
@@ -112,9 +112,9 @@ impl Visit {
             wander: (0.0, 0.0),
             // Mostly from below, as an arm would be, sometimes from a side.
             toward: -PI / 2.0 + rng.range(-1.1, 1.1),
-            lean: rng.range(0.08, 0.35),
+            lean: rng.range(0.35, 0.75),
             first,
-            deeper: first + rng.range(0.08, 0.22),
+            deeper: first + rng.range(0.12, 0.28),
             other: (0.0, 0.0),
         };
         let (a, d) = (rng.range(0.0, TAU), rng.range(0.0, if hand { 0.08 } else { 0.25 }));
@@ -175,10 +175,10 @@ fn scene(ctx: &Ctx, seed: f32) -> Scene {
     let t = ctx.t as f32;
     let slot = (t / slot_len).floor().max(0.0);
     let visit = Visit::plan(slot as u64, seed);
-    let (hue, hue2) = (ctx.get("hue"), ctx.get("hue2"));
+
     Scene {
         extra: visit.extra(t - slot * slot_len),
-        palette: Some(Palette::ramps(&[hue, hue2], ctx.get("steps") as usize, (0.3, 0.92), 0.09)),
+        palette: Some(Palette::ramps(&[ctx.get("hue")], ctx.get("steps") as usize, (0.28, 0.95), ctx.get("tint"))),
         dither: ctx.get("dither"),
     }
 }
