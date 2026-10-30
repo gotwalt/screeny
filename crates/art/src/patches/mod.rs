@@ -261,8 +261,8 @@ mod tests {
         }
         assert!(blocked(&hardware).is_empty());
         if cfg!(feature = "gpu") {
-            assert_eq!(blocked(&software), vec!["hearth", "flavortime", "physarum", "ghosts", "overland"]);
-            assert_eq!(blocked(&none).len(), 8);
+            assert_eq!(blocked(&software), vec!["hearth", "flavortime", "physarum", "veil", "ghosts", "overland"]);
+            assert_eq!(blocked(&none).len(), 9);
             let why = playable("overland", &software).unwrap_err();
             assert!(why.contains("software (llvmpipe)"), "{why}");
             for id in ["leaves", "lattice", "knot"] {
