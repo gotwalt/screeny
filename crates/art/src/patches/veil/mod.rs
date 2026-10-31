@@ -4,9 +4,9 @@
 //! fabric is pushed - the flat sheet is black.
 //!
 //! What presses is a real hand (`hand.rs`, a skinned model posed by bending
-//! its fingers): pointing, two fingers, a crooked beckoning finger, or a whole
-//! hand flat against the cloth that may hook its fingers while it holds. The
-//! sheet (`cloth.rs`) is a membrane relaxed over it every frame. This file is
+//! its fingers), always the whole hand, like something living in the box:
+//! held up to stop against the cloth, or reaching fingertips first, its
+//! fingers working all the while. The sheet (`cloth.rs`) is a membrane relaxed over it every frame. This file is
 //! the choreography - one visit after another, each planned from the seed and
 //! its number as a path of gestures picked at random - and the lighting.
 //!
@@ -58,8 +58,6 @@ fn make(seed: u64) -> Box<dyn Patch> {
 /// What comes through.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
-    /// The index finger alone, pointing at us.
-    Pointer,
     /// An open hand held up, palm to us, fingers arched forward: they meet
     /// the cloth first and are pushed flat as the palm comes on, then it backs
     /// off.
@@ -69,9 +67,6 @@ enum Kind {
     Tips,
 }
 
-/// Longest a visit runs, start to settled, so a slot is this plus the pause.
-const VISIT: f32 = 30.0;
-
 /// The finger size the choreography's depths and spacings are written for;
 /// at any other size they scale with it, so a smaller finger presses in
 /// proportion and its neighbour stays a finger's width away.
@@ -79,10 +74,6 @@ const DRAWN_AT: f32 = 0.19;
 
 /// Where the tip is behind the sheet at rest; the sheet is z = 0, we are +z.
 const AWAY: f32 = -0.4;
-
-/// The most a visit's gestures may run past the longest planned, for the
-/// last move away.
-const SETTLE: f32 = 6.0;
 
 /// After a visit, this long for the sheet to stop shivering before `pause`.
 const REST: f32 = 2.0;
@@ -184,14 +175,9 @@ impl Path {
 impl Visit {
     fn plan(slot: u64, seed: f32) -> Self {
         let mut rng = Rng::new(((seed * 1e9) as u64) ^ slot.wrapping_mul(0x9e37_79b9_7f4a_7c15));
-        // The first slot always has a finger in it, soon: whoever starts the
-        // patch should see what it is.
-        let roll = if slot == 0 { 0.2 } else { rng.f32() };
-        let kind = match roll {
-            r if r < 0.5 => Kind::Pointer,
-            r if r < 0.75 => Kind::Stop,
-            _ => Kind::Tips,
-        };
+        // The first slot is fingertips coming towards us, soon: whoever
+        // starts the patch should see what it is.
+        let kind = if slot == 0 || rng.f32() < 0.5 { Kind::Tips } else { Kind::Stop };
         let start = if slot == 0 { 0.3 } else { rng.range(0.0, 0.5) };
         let mut v = Visit {
             kind,
@@ -205,7 +191,6 @@ impl Visit {
             pitch: PI / 2.0 - ARM + rng.range(0.05, 0.25),
         };
         let path = match kind {
-            Kind::Pointer => Self::finger(&mut rng, start),
             Kind::Stop => {
                 // Fingers up, give or take.
                 v.toward = PI / 2.0 + rng.range(-0.3, 0.3);
@@ -215,57 +200,6 @@ impl Visit {
         };
         v.keys = path.keys;
         v
-    }
-
-    /// A fingertip: in, then one to four gestures, then away.
-    fn finger(rng: &mut Rng, start: f32) -> Path {
-        let (x, y) = (rng.range(-0.42, 0.42), rng.range(-0.42, 0.34));
-        let mut p = Path { keys: vec![Key { t: start, x, y, z: AWAY, ease: Ease::Gentle }] };
-        // Some come in slowly and some quickly; some touch first and then push.
-        if rng.f32() < 0.4 {
-            p.to(rng.range(2.5, 6.0), x, y, rng.range(0.04, 0.12), Ease::Gentle);
-            p.stay(rng.range(0.5, 2.5));
-        }
-        p.to(rng.range(2.0, 6.0), x, y, rng.range(0.3, 0.46), Ease::Gentle);
-        let last_out = 4.0;
-        let gestures = 1 + (rng.u64() % 4) as usize;
-        for _ in 0..gestures {
-            let before = p.keys.len();
-            let k = p.last();
-            match rng.u64() % 6 {
-                // Linger, barely moving.
-                0 => p.to(rng.range(2.0, 6.0), k.x + rng.range(-0.04, 0.04), k.y + rng.range(-0.04, 0.04), k.z + 0.03, Ease::Gentle),
-                // Further through.
-                1 => p.to(rng.range(1.5, 4.0), k.x, k.y, (k.z + rng.range(0.1, 0.25)).min(0.75), Ease::Gentle),
-                // Trace across the cloth, dragging it.
-                2 => {
-                    let (a, d) = (rng.range(0.0, TAU), rng.range(0.15, 0.45));
-                    p.to(d * rng.range(12.0, 24.0), k.x + a.cos() * d, k.y + a.sin() * d, k.z * rng.range(0.8, 1.15), Ease::Gentle);
-                }
-                // Ease off until it barely touches, then press again nearby.
-                3 => {
-                    p.to(rng.range(1.0, 2.5), k.x, k.y, rng.range(0.02, 0.1), Ease::Gentle);
-                    p.stay(rng.range(0.3, 2.5));
-                    let (a, d) = (rng.range(0.0, TAU), rng.range(0.0, 0.3));
-                    p.to(rng.range(1.5, 4.0), k.x + a.cos() * d, k.y + a.sin() * d, rng.range(0.3, 0.5), Ease::Gentle);
-                }
-                // Taps: drawn back a little and pressed again, once or twice.
-                4 => {
-                    for _ in 0..1 + rng.u64() % 2 {
-                        p.to(rng.range(0.5, 0.8), k.x, k.y, k.z - rng.range(0.15, 0.3), Ease::Gentle);
-                        p.to(rng.range(0.6, 1.0), k.x, k.y, k.z, Ease::Gentle);
-                    }
-                }
-                // Stillness.
-                _ => p.stay(rng.range(1.5, 4.0)),
-            }
-            if p.last().t > VISIT - SETTLE - last_out {
-                p.keys.truncate(before);
-                break;
-            }
-        }
-        Self::away(rng, &mut p);
-        p
     }
 
     /// A hand that comes up against the cloth and is stopped there: in until
@@ -282,19 +216,14 @@ impl Visit {
             p.to(rng.range(1.5, 2.5), x, y, full, Ease::Gentle);
             p.stay(rng.range(1.0, 2.0));
         }
+        // Snatched back, or sinking slowly away.
         let k = p.last();
-        p.to(rng.range(2.5, 4.0), k.x, k.y, AWAY - 0.1, Ease::Gentle);
-        p
-    }
-
-    /// Snatched back, or sinking slowly away.
-    fn away(rng: &mut Rng, p: &mut Path) {
-        let k = p.last();
-        if rng.f32() < 0.6 {
+        if rng.f32() < 0.4 {
             p.to(rng.range(0.7, 1.6), k.x, k.y, AWAY - 0.1, Ease::Snatch);
         } else {
             p.to(rng.range(2.5, 4.0), k.x, k.y, AWAY - 0.1, Ease::Gentle);
         }
+        p
     }
 
     fn path(&self) -> Path {
@@ -314,7 +243,7 @@ impl Visit {
         Some(Moment {
             kind: self.kind,
             tip: (x, y, z + breath),
-            toward: self.toward + if self.kind == Kind::Pointer { turn } else { turn * 0.4 },
+            toward: self.toward + turn * 0.4,
             lean: self.lean + 0.06 * (local * 0.17 + self.phase * 2.0).sin(),
             span: self.span,
             wall: self.wall,
@@ -344,9 +273,8 @@ const LIFE: f32 = 10.6 / 0.11;
 
 /// How the hand is posed and placed for a moment: a pose, and a rigid
 /// placement from the model's rest space into the sheet's (x, y across it,
-/// z towards us, at the real finger size). `true` when the placement already
-/// puts the hand at its depth; a pointer is placed by its front instead.
-fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
+/// z towards us, at the real finger size).
+fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
     let (fingers, palm) = model.axes();
     let k = size / DRAWN_AT;
     let scale = LIFE * size;
@@ -357,17 +285,6 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
         p
     };
     match m.kind {
-        Kind::Pointer => {
-            let pose = feeling(Pose::POINT);
-            let bones = model.bones(&pose);
-            // The index finger towards us, leaning back a little the way the
-            // hand is, the palm facing down the sheet.
-            let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
-            let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
-            let turn = Rigid::between(model.index_dir(&bones), palm, out, down).scaled(scale);
-            let at = turn.apply(model.joint(&bones, hand::INDEX_TIP));
-            (pose, turn.moved([m.tip.0 - at[0], m.tip.1 - at[1], -at[2]]), false)
-        }
         Kind::Stop => {
             // Palm to us, fingers up the sheet and tipped towards us, so the
             // wrist runs back and down to the arm; arched forward at rest.
@@ -386,7 +303,7 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
             // Each finger keeps as much of its arch as the wall allows, and
             // bends back flat against it when pressed.
             let pose = model.against(arched, &place, m.wall * k, hand::PAD * scale, -0.6);
-            (pose, place, true)
+            (pose, place)
         }
         Kind::Tips => {
             // Fingers to us, the palm down the sheet, a little apart.
@@ -401,7 +318,7 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
             let tip = turn.apply(model.joint(&bones, 14));
             let place = turn.moved([m.tip.0 - tip[0], m.tip.1 - tip[1], m.tip.2 * k - tip[2] - hand::PAD * scale]);
             let pose = model.against(reaching, &place, m.wall * k, hand::PAD * scale, 1.4);
-            (pose, place, true)
+            (pose, place)
         }
     }
 }
@@ -437,7 +354,7 @@ const FINGER_SPRING: (f32, f32) = (9.0, 0.65);
 /// way out of a shell: a ripple from the little finger to the index while
 /// the hand comes towards us, barely a stir while it holds, and all of them
 /// drawn in as it goes back. `closing` is how fast it comes (z a second).
-fn feel(kind: Kind, t: f32, phase: f32, closing: f32) -> [f32; 5] {
+fn feel(t: f32, phase: f32, closing: f32) -> [f32; 5] {
     let coming = smooth(closing / 0.15);
     let going = smooth(-closing / 0.25);
     let stir = 0.05 + 0.25 * coming;
@@ -445,17 +362,8 @@ fn feel(kind: Kind, t: f32, phase: f32, closing: f32) -> [f32; 5] {
     for (d, f) in out.iter_mut().enumerate() {
         let d_ = d as f32;
         let w = (TAU * 0.85 * t + d_ * 0.9 + phase).sin() + 0.5 * (TAU * 1.45 * t + 2.3 * d_ + 3.0 * phase).sin();
-        let mut a = w / 1.5 * stir;
-        a *= match (kind, d) {
-            // The thumb moves less; a pointing finger holds its aim.
-            (_, 0) => 0.4,
-            (Kind::Pointer, 1) => 0.3,
-            _ => 1.0,
-        };
-        // A pointer's curled fingers can only open.
-        if kind == Kind::Pointer && d > 1 {
-            a = -a.abs() * 1.4;
-        }
+        // The thumb moves less.
+        let a = w / 1.5 * stir * if d == 0 { 0.4 } else { 1.0 };
         *f = a + 0.35 * going;
     }
     out
@@ -504,9 +412,9 @@ impl Patch for Veil {
                 spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
             }
             m.tip = (body.at[0], body.at[1], body.at[2]);
-            m.feel = feel(m.kind, t, visit.phase, body.speed[2]);
+            m.feel = feel(t, visit.phase, body.speed[2]);
 
-            let (mut pose, place, placed) = arrange(model, m, size);
+            let (mut pose, place) = arrange(model, m, size);
             // The fingers follow their bends through springs, but never into
             // the cloth: the wall's answer is a bound, not a suggestion.
             for d in 0..5 {
@@ -518,7 +426,6 @@ impl Patch for Veil {
                 let bound = match m.kind {
                     Kind::Stop => body.curl[d].min(target),
                     Kind::Tips => body.curl[d].max(target),
-                    Kind::Pointer => body.curl[d],
                 };
                 if bound != body.curl[d] {
                     body.curl[d] = bound;
@@ -528,15 +435,6 @@ impl Patch for Veil {
             }
             let bones = model.bones(&pose);
             model.skin(&bones, &place, &mut self.skinned);
-            // A pointer's front-most point is where the choreography says the
-            // tip is.
-            if !placed {
-                let front = self.skinned.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
-                let lift = m.tip.2 * size / DRAWN_AT - front;
-                for p in &mut self.skinned {
-                    p[2] += lift;
-                }
-            }
             for tri in &model.triangles {
                 let [a, b, c] = tri.map(|i| self.skinned[i as usize]);
                 self.cloth.press(a, b, c);
@@ -608,6 +506,10 @@ fn norm(a: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
 
+    /// Longest a visit should run, and time left after it for the cloth.
+    const VISIT: f32 = 30.0;
+    const SETTLE: f32 = 6.0;
+
     #[test]
     fn every_visit_is_over_before_its_slot_ends() {
         for slot in 0..500 {
@@ -619,16 +521,17 @@ mod tests {
     }
 
     #[test]
-    fn the_first_slot_shows_a_finger_early() {
+    fn the_first_slot_shows_a_hand_early() {
         let v = Visit::plan(0, 0.9);
-        assert_eq!(v.kind, Kind::Pointer);
+        assert_eq!(v.kind, Kind::Tips);
         assert!((1..15).any(|t| v.moment(t as f32).is_some_and(|m| m.tip.2 > 0.2)));
     }
 
     #[test]
     fn visits_move_differently() {
-        let shapes: std::collections::HashSet<usize> = (1..60).map(|s| Visit::plan(s, 0.5).keys.len()).collect();
-        assert!(shapes.len() >= 5, "only {} different lengths of path", shapes.len());
+        let shapes: std::collections::HashSet<(usize, u32)> =
+            (1..60).map(|s| Visit::plan(s, 0.5)).map(|v| (v.keys.len(), v.keys.last().unwrap().t as u32)).collect();
+        assert!(shapes.len() >= 10, "only {} different paths", shapes.len());
     }
 
     #[test]
@@ -638,8 +541,8 @@ mod tests {
             let v = Visit::plan(slot, 0.61);
             for i in 0..60 {
                 let Some(mut m) = v.moment(i as f32 * 0.5) else { continue };
-                m.feel = feel(m.kind, i as f32 * 0.5, v.phase, 0.2);
-                let (pose, place, _) = arrange(model, &m, 0.11);
+                m.feel = feel(i as f32 * 0.5, v.phase, 0.2);
+                let (pose, place) = arrange(model, &m, 0.11);
                 let bones = model.bones(&pose);
                 let (w, k) = (place.apply(model.joint(&bones, hand::WRIST)), place.apply(model.joint(&bones, 11)));
                 let arm = norm([w[0] - k[0], w[1] - k[1], w[2] - k[2]]);
@@ -652,6 +555,6 @@ mod tests {
     fn every_kind_comes() {
         let kinds: Vec<Kind> = (1..1000).map(|s| Visit::plan(s, 0.5).kind).collect();
         let count = |k| kinds.iter().filter(|&&x| x == k).count();
-        assert!(count(Kind::Stop) > 150 && count(Kind::Tips) > 150, "{} {}", count(Kind::Stop), count(Kind::Tips));
+        assert!(count(Kind::Stop) > 400 && count(Kind::Tips) > 400, "{} {}", count(Kind::Stop), count(Kind::Tips));
     }
 }

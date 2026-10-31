@@ -116,11 +116,6 @@ pub struct Pose {
     pub spread: f32,
 }
 
-impl Pose {
-    /// The index finger out, the rest folded away.
-    pub const POINT: Pose = Pose { curl: [0.85, 0.0, 0.95, 1.0, 1.0], spread: 0.02 };
-}
-
 /// Flesh in front of a fingertip's joint, and in front of the palm's middle,
 /// in metres.
 pub const PAD: f32 = 0.009;
@@ -140,7 +135,6 @@ pub struct Model {
 
 /// The WebXR order: wrist, then thumb (4 joints), then four fingers (5 each).
 pub const WRIST: usize = 0;
-pub const INDEX_TIP: usize = 9;
 const CHAINS: [&[usize]; 5] = [&[1, 2, 3, 4], &[5, 6, 7, 8, 9], &[10, 11, 12, 13, 14], &[15, 16, 17, 18, 19], &[20, 21, 22, 23, 24]];
 
 impl Model {
@@ -287,10 +281,5 @@ impl Model {
             out.curl[digit] = far;
         }
         out
-    }
-
-    /// The posed index finger's direction, knuckle to tip.
-    pub fn index_dir(&self, bones: &[Rigid; 25]) -> V3 {
-        unit(sub(self.joint(bones, INDEX_TIP), self.joint(bones, 6)))
     }
 }
