@@ -126,10 +126,6 @@ impl Pose {
 pub const PAD: f32 = 0.009;
 pub const PALM: f32 = 0.016;
 
-pub fn mid(a: V3, b: V3) -> V3 {
-    scale(add(a, b), 0.5)
-}
-
 /// The model, read once.
 pub struct Model {
     positions: Vec<V3>,
