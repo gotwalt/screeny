@@ -6,13 +6,15 @@
 //! What presses is a real hand (`hand.rs`, a skinned model posed by bending
 //! its fingers), always the whole hand, like something living in the box:
 //! held up to stop against the cloth, or reaching fingertips first, its
-//! fingers working all the while. The sheet (`cloth.rs`) is a membrane relaxed over it every frame. This file is
+//! fingers working all the while - as a captured take of a real hand moved
+//! them (`clips.rs`), or by a few waves of their own. The sheet (`cloth.rs`) is a membrane relaxed over it every frame. This file is
 //! the choreography - one visit after another, each planned from the seed and
 //! its number as a path of gestures picked at random - and the lighting.
 //!
 //! Everything is composed in the centre square, x in -1..1 of the frame's
 //! -2..2, which is what the Art Frame shows of the 64x32 frame.
 
+mod clips;
 mod cloth;
 mod hand;
 
@@ -49,6 +51,8 @@ const PARAMS: &[ParamSpec] = &[
     param("steps", "Palette steps", 2.0, 200.0, 1.0, 120.0),
     param("dither", "Palette dither", 0.0, 1.0, 0.01, 0.8),
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 4.0),
+    param("mocap", "Fingers move as captured (0: by their own waves)", 0.0, 1.0, 1.0, 1.0),
+    param("take", "Captured take (0: a different one each visit)", 0.0, clips::COUNT as f32, 1.0, 0.0),
 ];
 
 fn make(seed: u64) -> Box<dyn Patch> {
@@ -129,6 +133,10 @@ struct Visit {
     /// How far a `Stop` hand tips its fingers towards us off the sheet's
     /// plane, so its wrist and the arm behind it run back into the dark.
     pitch: f32,
+    /// The captured take its fingers play, how fast, and from where in it.
+    take: usize,
+    rate: f32,
+    from: f32,
 }
 
 /// Builds a path: each step adds a key, `t` seconds after the last.
@@ -189,6 +197,9 @@ impl Visit {
             span: rng.range(0.78, 0.9),
             wall: rng.range(0.22, 0.3),
             pitch: PI / 2.0 - ARM + rng.range(0.05, 0.25),
+            take: (rng.u64() % clips::COUNT as u64) as usize,
+            rate: rng.range(0.8, 1.1),
+            from: rng.range(0.0, 20.0),
         };
         let path = match kind {
             Kind::Stop => {
@@ -249,6 +260,7 @@ impl Visit {
             wall: self.wall,
             pitch: self.pitch,
             feel: [0.0; 5],
+            captured: None,
         })
     }
 }
@@ -265,6 +277,8 @@ struct Moment {
     pitch: f32,
     /// What the fingers are doing on their own, added to the pose's bends.
     feel: [f32; 5],
+    /// Or how a captured take has them, instead of the pose's own bends.
+    captured: Option<hand::Captured>,
 }
 
 /// Life size on the Art Frame: 8 inches is 2.16 units, so 10.6 units a metre,
@@ -278,7 +292,12 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
     let (fingers, palm) = model.axes();
     let k = size / DRAWN_AT;
     let scale = LIFE * size;
+    // A captured take bends the fingers instead of the pose; the wall then
+    // bends them further from there.
     let feeling = |mut p: Pose| {
+        if let Some(c) = m.captured {
+            return Pose { curl: [0.0; 5], spread: 0.0, captured: Some(c) };
+        }
         for d in 0..5 {
             p.curl[d] = (p.curl[d] + m.feel[d]).clamp(-0.1, 1.0);
         }
@@ -293,7 +312,7 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
             let along = [up[0] * c, up[1] * c, s];
             let facing = [-up[0] * s, -up[1] * s, c];
             let turn = Rigid::between(fingers, palm, along, facing).scaled(scale);
-            let arched = feeling(Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1 });
+            let arched = feeling(Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1, captured: None });
             // The knuckles come to the push, but never past the wall; the
             // fingers beyond them meet it first.
             let bones = model.bones(&arched);
@@ -311,7 +330,7 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
             let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
             let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
             let turn = Rigid::between(fingers, palm, out, down).scaled(scale);
-            let reaching = feeling(Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09 });
+            let reaching = feeling(Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09, captured: None });
             // The hand's push carries the middle fingertip; past the wall each
             // finger bends so its tip stays there.
             let bones = model.bones(&reaching);
@@ -412,7 +431,14 @@ impl Patch for Veil {
                 spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
             }
             m.tip = (body.at[0], body.at[1], body.at[2]);
-            m.feel = feel(t, visit.phase, body.speed[2]);
+            if ctx.get("mocap") >= 0.5 {
+                let all = clips::all();
+                let pick = ctx.get("take") as usize;
+                let take = if pick >= 1 { &all[(pick - 1).min(all.len() - 1)] } else { &all[visit.take] };
+                m.captured = Some(model.captured(&take.at((t - start) * visit.rate + visit.from)));
+            } else {
+                m.feel = feel(t, visit.phase, body.speed[2]);
+            }
 
             let (mut pose, place) = arrange(model, m, size);
             // The fingers follow their bends through springs, but never into
@@ -542,6 +568,9 @@ mod tests {
             for i in 0..60 {
                 let Some(mut m) = v.moment(i as f32 * 0.5) else { continue };
                 m.feel = feel(i as f32 * 0.5, v.phase, 0.2);
+                if i % 2 == 0 {
+                    m.captured = Some(model.captured(&clips::all()[slot as usize % clips::COUNT].at(i as f32 * 0.5)));
+                }
                 let (pose, place) = arrange(model, &m, 0.11);
                 let bones = model.bones(&pose);
                 let (w, k) = (place.apply(model.joint(&bones, hand::WRIST)), place.apply(model.joint(&bones, 11)));

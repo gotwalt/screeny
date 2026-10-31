@@ -1,6 +1,7 @@
 //! The hand behind the veil: a real skinned model (`hand.glb`, the WebXR
 //! generic right hand, MIT - see `hand.LICENSE`), posed by bending its
-//! fingers, then laid against the sheet.
+//! fingers - by hand, or as a captured take (`clips.rs`) bent them - then
+//! laid against the sheet.
 //!
 //! The model's joints are all children of one root and carry their rest
 //! transforms directly, so a pose is built here rather than read: each
@@ -99,6 +100,27 @@ impl Rigid {
         self
     }
 
+    /// The rotation undone.
+    fn inverse_turn(&self) -> Rigid {
+        let r = std::array::from_fn(|i| std::array::from_fn(|j| self.r[j][i]));
+        Rigid { r, t: [0.0; 3] }
+    }
+
+    /// The shortest rotation taking direction `a` onto `b` (both unit).
+    fn swing(a: V3, b: V3) -> Rigid {
+        let axis = cross(a, b);
+        let s = dot(axis, axis).sqrt();
+        if s < 1e-6 {
+            return Rigid::ID;
+        }
+        Rigid::about([0.0; 3], scale(axis, 1.0 / s), s.atan2(dot(a, b)))
+    }
+
+    /// This rotation, about `pivot` instead of the origin.
+    fn pivoted(&self, pivot: V3) -> Rigid {
+        Rigid { r: self.r, t: sub(pivot, self.turn(pivot)) }
+    }
+
     pub fn scaled(mut self, k: f32) -> Rigid {
         for row in &mut self.r {
             *row = scale(*row, k);
@@ -110,11 +132,24 @@ impl Rigid {
 
 /// How the hand is held: how far each digit curls (thumb first, 0 straight,
 /// 1 a fist) and how wide the fingers spread (radians between neighbours).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// With `captured`, each knuckle first bends as a take bent it (see
+/// `Model::captured`), and the curl is a bend on top of that.
+#[derive(Clone, Copy, Debug)]
 pub struct Pose {
     pub curl: [f32; 5],
     pub spread: f32,
+    pub captured: Option<Captured>,
 }
+
+/// Each knuckle's turn, digit by digit from the thumb, root to tip, as a
+/// take held it: a rotation in the rest pose's space, relative to the bone
+/// before it.
+pub type Captured = [[Rigid; 4]; 5];
+
+/// For each digit's chain, the MediaPipe joint at the same place, or `NONE`
+/// (the fingers' metacarpal roots, which MediaPipe does not see).
+const NONE: usize = usize::MAX;
+const TRACKED: [[usize; 5]; 5] = [[1, 2, 3, 4, NONE], [NONE, 5, 6, 7, 8], [NONE, 9, 10, 11, 12], [NONE, 13, 14, 15, 16], [NONE, 17, 18, 19, 20]];
 
 /// Flesh in front of a fingertip's joint, and in front of the palm's middle,
 /// in metres.
@@ -211,6 +246,9 @@ impl Model {
                     // Bending turns the bone towards the palm.
                     let axis = unit(cross(along, self.palm));
                     let mut here = Rigid::about(p, axis, curl * share[k]);
+                    if let Some(c) = &pose.captured {
+                        here = c[digit][k].pivoted(p).then_after(&here);
+                    }
                     if k == 1 && digit > 0 {
                         // Spread fans the fingers about the middle one.
                         let fan = (digit as f32 - 2.0) * pose.spread;
@@ -219,6 +257,37 @@ impl Model {
                     at = at.then_after(&here);
                 }
                 out[j] = at;
+            }
+        }
+        out
+    }
+
+    /// How each knuckle is bent in one frame of a take (MediaPipe's 21
+    /// joints): the take's palm is turned onto the model's, so only how the
+    /// fingers move against the palm comes across, and each bone is swung
+    /// from where its parent left it to the take's direction. The model keeps
+    /// its own bone lengths.
+    pub fn captured(&self, take: &[V3; 21]) -> Captured {
+        let onto = Rigid::between(
+            sub(take[9], take[0]),
+            sub(take[5], take[17]),
+            sub(self.rest[11], self.rest[WRIST]),
+            sub(self.rest[6], self.rest[21]),
+        );
+        let mut out = [[Rigid::ID; 4]; 5];
+        for (digit, chain) in CHAINS.iter().enumerate() {
+            let tracked = TRACKED[digit];
+            // The bone before's turn, from the rest pose.
+            let mut parent = Rigid::ID;
+            for k in 0..chain.len() - 1 {
+                if tracked[k] == NONE || tracked[k + 1] == NONE {
+                    continue;
+                }
+                let rest = unit(sub(self.rest[chain[k + 1]], self.rest[chain[k]]));
+                let want = unit(onto.turn(sub(take[tracked[k + 1]], take[tracked[k]])));
+                let swing = Rigid::swing(parent.turn(rest), want);
+                out[digit][k] = parent.inverse_turn().then_after(&swing).then_after(&parent);
+                parent = swing.then_after(&parent);
             }
         }
         out
@@ -281,5 +350,41 @@ impl Model {
             out.curl[digit] = far;
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Posed from a take, every tracked bone points where the take's did,
+    /// once the take's palm is turned onto the model's.
+    #[test]
+    fn a_captured_pose_points_its_bones_as_the_take_did() {
+        let model = Model::get();
+        for clip in crate::patches::veil::clips::all() {
+            for i in 0..20 {
+                let take = clip.at(i as f32 * 0.37);
+                let pose = Pose { curl: [0.0; 5], spread: 0.0, captured: Some(model.captured(&take)) };
+                let bones = model.bones(&pose);
+                let onto = Rigid::between(
+                    sub(take[9], take[0]),
+                    sub(take[5], take[17]),
+                    sub(model.rest[11], model.rest[WRIST]),
+                    sub(model.rest[6], model.rest[21]),
+                );
+                for (digit, chain) in CHAINS.iter().enumerate() {
+                    for k in 0..chain.len() - 1 {
+                        let (a, b) = (TRACKED[digit][k], TRACKED[digit][k + 1]);
+                        if a == NONE || b == NONE {
+                            continue;
+                        }
+                        let posed = unit(sub(model.joint(&bones, chain[k + 1]), model.joint(&bones, chain[k])));
+                        let want = unit(onto.turn(sub(take[b], take[a])));
+                        assert!(dot(posed, want) > 0.9998, "digit {digit} bone {k}: off by {:.2} degrees", dot(posed, want).clamp(-1.0, 1.0).acos().to_degrees());
+                    }
+                }
+            }
+        }
     }
 }

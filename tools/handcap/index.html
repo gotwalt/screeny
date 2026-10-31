@@ -162,9 +162,9 @@ function frame(now, meta) {
     world = r.worldLandmarks[0].map((p, i) => ({
       x: filters[3 * i].step(p.x, dt), y: filters[3 * i + 1].step(p.y, dt), z: filters[3 * i + 2].step(p.z, dt),
     }));
-    // MediaPipe names the hand as if the picture were mirrored, a selfie;
-    // this frame is not, so the real hand is the other one.
-    hand = r.handedness[0][0].categoryName === "Left" ? "Right" : "Left";
+    // MediaPipe names the hand as it is (checked against the 3D shape of
+    // the first takes: fingers curl to the palm's side).
+    hand = r.handedness[0][0].categoryName;
   } else {
     filters.forEach((f) => (f.x = null));
   }
@@ -245,7 +245,7 @@ function record() {
     clearInterval(countdown);
     countdown = null;
     count.textContent = "";
-    take = { t0: lastT ?? 0, frames: [], hands: {}, name: $("name").value.trim() || "take" };
+    take = { t0: lastT ?? 0, frames: [], hands: {}, name: $("name").value.trim().replace(/[^\w-]+/g, "-") || "take" };
     paint();
   }, 1000);
   paint();
