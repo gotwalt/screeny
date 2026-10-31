@@ -158,6 +158,10 @@ pub struct Model {
     joints: Vec<[u8; 4]>,
     weights: Vec<[f32; 4]>,
     pub triangles: Vec<[u16; 3]>,
+    /// How much light each vertex gives: none at the wrist, rising to full
+    /// by halfway to the knuckles, so the hand fades back into the dark as
+    /// if it went on into an arm, and the wrist's cut end never shows.
+    pub light: Vec<f32>,
     /// Rest positions of the 25 joints, in the WebXR order.
     rest: Vec<V3>,
     /// Which way the palm faces (-X), from the knuckles.
@@ -200,7 +204,7 @@ impl Model {
         let prim = &json["meshes"][0]["primitives"][0];
         let attr = |name: &str| prim["attributes"][name].as_u64().unwrap();
 
-        let positions = floats(attr("POSITION")).chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let positions: Vec<V3> = floats(attr("POSITION")).chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
         let weights = floats(attr("WEIGHTS_0")).chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
         let (jb, jn, _) = accessor(attr("JOINTS_0"));
         assert_eq!(json["accessors"][attr("JOINTS_0") as usize]["componentType"], 5121, "hand.glb: joints as bytes");
@@ -222,7 +226,15 @@ impl Model {
             .collect();
         assert_eq!(rest.len(), 25, "hand.glb: the 25 WebXR joints");
         let palm = unit(cross(sub(rest[6], rest[WRIST]), sub(rest[21], rest[WRIST])));
-        Model { positions, joints, weights, triangles, rest, palm }
+        let (along, length) = (unit(sub(rest[11], rest[WRIST])), dot(sub(rest[11], rest[WRIST]), sub(rest[11], rest[WRIST])).sqrt());
+        let light = positions
+            .iter()
+            .map(|&p: &V3| {
+                let u = ((dot(sub(p, rest[WRIST]), along) / length - 0.05) / 0.5).clamp(0.0, 1.0);
+                u * u * (3.0 - 2.0 * u)
+            })
+            .collect();
+        Model { positions, joints, weights, triangles, light, rest, palm }
     }
 
     /// Each joint's motion away from the rest pose, for a pose.

@@ -31,10 +31,10 @@ pub const COUNT: usize = TAKES.len();
 
 /// Frames a second, after resampling.
 const RATE: f32 = 30.0;
-/// The smoothing, a gaussian this many frames wide (one sigma, 130 ms):
+/// The smoothing, a gaussian this many frames wide (one sigma, 200 ms):
 /// the tracker's millimetre jitter, played slowly, reads as a tremble, so
 /// only the hand's deliberate motion is kept.
-const SIGMA: f32 = 4.0;
+const SIGMA: f32 = 6.0;
 
 /// A glitch: a joint further than this (mm) from where it was across the
 /// frames around it - the median of `GLITCH_SPAN` either side - is the

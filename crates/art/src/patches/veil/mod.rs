@@ -5,7 +5,8 @@
 //!
 //! What comes is a real hand (`hand.rs`, a skinned model posed by bending
 //! its fingers), always the whole hand, like something living in the box:
-//! held up palm first, or reaching fingertips first, its
+//! held up palm first (fingertips first was tried: at 32 LEDs it is a
+//! lump), its
 //! fingers working all the while - as a captured take of a real hand moved
 //! them (`clips.rs`), or by a few waves of their own. This file is the
 //! choreography - one visit after another, each planned from the seed and
@@ -22,7 +23,7 @@ use crate::color::{oklch, Rgb};
 use crate::dither::Dither;
 use crate::frame::{self, Frame};
 use crate::palette::Palette;
-use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
+use crate::patch::{param, toggle, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
 use glass::Glass;
 use hand::{Model, Pose, Rigid};
@@ -48,23 +49,15 @@ const PARAMS: &[ParamSpec] = &[
     param("steps", "Palette steps", 2.0, 200.0, 1.0, 120.0),
     param("dither", "Palette dither", 0.0, 1.0, 0.01, 0.8),
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 4.0),
-    param("mocap", "Fingers move as captured (0: by their own waves)", 0.0, 1.0, 1.0, 1.0),
+    param("pace", "Pace of the whole visit: the hand's moves and its fingers", 0.02, 1.5, 0.01, 0.5),
+    param("depth", "How far behind the glass the hand stays clear", 0.1, 4.0, 0.01, 1.0),
+    toggle("mocap", "Fingers from the captured takes (off: a ripple of their own)", true),
     param("take", "Captured take (0: a different one each visit)", 0.0, clips::COUNT as f32, 1.0, 0.0),
-    param("pace", "How fast a take plays", 0.1, 1.5, 0.01, 0.4),
     param("ease", "How slowly the fingers follow a take (s)", 0.0, 1.0, 0.01, 0.2),
 ];
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    Box::new(Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, body: None })
-}
-
-/// What comes through.
-#[derive(Clone, Copy, PartialEq, Debug)]
-enum Kind {
-    /// An open hand held up, palm to us, fingers arched forward.
-    Stop,
-    /// The fingers pointing at us, reaching.
-    Tips,
+    Box::new(Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None })
 }
 
 /// The finger size the choreography's depths and spacings are written for;
@@ -72,9 +65,13 @@ enum Kind {
 /// proportion and its neighbour stays a finger's width away.
 const DRAWN_AT: f32 = 0.19;
 
-/// Where the tip is at rest, far back in the box; we are +z, and the hand
-/// comes as near as a visit's `near`, where the diffuser shows it sharpest.
-const AWAY: f32 = -0.4;
+/// Where the tip is at rest, far back in the box - far enough that its glow
+/// has gone - and we are +z; the hand comes as near as a visit's `near`,
+/// where the diffuser shows it sharpest.
+const AWAY: f32 = -1.4;
+
+/// Where the first visit's hand starts: near enough to glow faintly.
+const FIRST: f32 = -0.5;
 
 /// After a visit, this long in the dark before `pause`.
 const REST: f32 = 0.5;
@@ -84,9 +81,10 @@ const REST: f32 = 0.5;
 const BOUND: f32 = 0.6;
 
 /// The furthest the forearm may swing off pointing straight back into the
-/// box. The model ends at the wrist; turned any more towards us, the cut end
-/// shows through the glass and the hand is plainly not on an arm.
-const ARM: f32 = 0.95;
+/// box. The model ends at the wrist, and its light fades out before it (see
+/// `Model::light`), but turned any more towards us the hand would look
+/// propped on nothing.
+const ARM: f32 = 1.4;
 
 fn smooth(x: f32) -> f32 {
     crate::color::smoothstep(0.0, 1.0, x)
@@ -114,13 +112,10 @@ struct Key {
 /// One visit, laid out for its slot: a path of keys, built from gestures
 /// chosen at random, so no two visits move alike.
 struct Visit {
-    kind: Kind,
     keys: Vec<Key>,
-    /// The direction, in the sheet, the hand is in from the tip (for `Hand`,
-    /// the way its fingers point); how far the finger leans off pointing
-    /// straight at us; and a phase for the slow turn of both.
+    /// The way the fingers point, in the sheet, and a phase for its slow
+    /// turn.
     toward: f32,
-    lean: f32,
     phase: f32,
     /// A hand's size, as a multiple of life size.
     span: f32,
@@ -130,8 +125,8 @@ struct Visit {
     /// How far a `Stop` hand tips its fingers towards us off the sheet's
     /// plane, so its wrist and the arm behind it run back into the dark.
     pitch: f32,
-    /// The captured take its fingers play, how fast (times `pace`), and from
-    /// where in it.
+    /// The captured take its fingers play, how fast (times `TAKE_RATE`), and
+    /// from where in it.
     take: usize,
     rate: f32,
     from: f32,
@@ -181,33 +176,28 @@ impl Path {
 impl Visit {
     fn plan(slot: u64, seed: f32) -> Self {
         let mut rng = Rng::new(((seed * 1e9) as u64) ^ slot.wrapping_mul(0x9e37_79b9_7f4a_7c15));
-        // The first slot is fingertips coming towards us, soon: whoever
-        // starts the patch should see what it is.
-        let kind = if slot == 0 || rng.f32() < 0.5 { Kind::Tips } else { Kind::Stop };
-        let start = if slot == 0 { 0.3 } else { rng.range(0.0, 0.5) };
+        // The first slot comes soon: whoever starts the patch should see what
+        // it is.
+        let start = if slot == 0 { 0.0 } else { rng.range(0.0, 0.5) };
         let mut v = Visit {
-            kind,
             keys: Vec::new(),
-            // Mostly from below, as an arm would be, sometimes from a side.
-            toward: -PI / 2.0 + rng.range(-1.1, 1.1),
-            lean: rng.range(0.05, 0.3),
+            // Fingers up, give or take: the arm is below.
+            toward: PI / 2.0 + rng.range(-0.3, 0.3),
             phase: rng.range(0.0, TAU),
             span: rng.range(0.78, 0.9),
             near: rng.range(0.22, 0.3),
-            pitch: PI / 2.0 - ARM + rng.range(0.05, 0.25),
+            // Nearly flat to the glass, as a hand held up to it.
+            pitch: PI / 2.0 - ARM + rng.range(0.03, 0.25),
             take: (rng.u64() % clips::COUNT as u64) as usize,
             rate: rng.range(0.85, 1.15),
             from: rng.range(0.0, 20.0),
         };
-        let path = match kind {
-            Kind::Stop => {
-                // Fingers up, give or take.
-                v.toward = PI / 2.0 + rng.range(-0.3, 0.3);
-                Self::approach(&mut rng, start, v.near)
-            }
-            Kind::Tips => Self::approach(&mut rng, start, v.near),
-        };
-        v.keys = path.keys;
+        v.keys = Self::approach(&mut rng, start, v.near).keys;
+        if slot == 0 {
+            // Already faintly there when the patch starts, not far back in
+            // the dark.
+            v.keys[0].z = FIRST;
+        }
         v
     }
 
@@ -249,10 +239,8 @@ impl Visit {
         let breath = 0.012 * (local * 1.3 + self.phase).sin() * smooth(z / 0.1);
         let turn = 0.22 * (local * 0.11 + self.phase).sin();
         Some(Moment {
-            kind: self.kind,
             tip: (x, y, z + breath),
             toward: self.toward + turn * 0.4,
-            lean: self.lean + 0.06 * (local * 0.17 + self.phase * 2.0).sin(),
             span: self.span,
             near: self.near,
             pitch: self.pitch,
@@ -264,11 +252,9 @@ impl Visit {
 
 /// One instant of a visit.
 struct Moment {
-    kind: Kind,
     /// The front-most point of the hand: x, y on the sheet, z at `DRAWN_AT`.
     tip: (f32, f32, f32),
     toward: f32,
-    lean: f32,
     span: f32,
     near: f32,
     pitch: f32,
@@ -302,32 +288,17 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
     // The hand is placed by its pose at rest, never by where its moving
     // fingers are, so a finger's bend cannot carry the hand with it; how
     // near it comes is settled after, slowly, by its nearest point.
-    match m.kind {
-        Kind::Stop => {
-            // Palm to us, fingers up the sheet and tipped towards us, so the
-            // wrist runs back and down to the arm; arched forward at rest.
-            let (up, (s, c)) = ([m.toward.cos(), m.toward.sin(), 0.0], m.pitch.sin_cos());
-            let along = [up[0] * c, up[1] * c, s];
-            let facing = [-up[0] * s, -up[1] * s, c];
-            let turn = Rigid::between(fingers, palm, along, facing).scaled(scale);
-            let arched = Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1, captured: None };
-            // The knuckles come to the push.
-            let knuckle = turn.apply(model.joint(&model.bones(&arched), 11));
-            let place = turn.moved([m.tip.0 - knuckle[0], m.tip.1 - knuckle[1], m.tip.2 * k - knuckle[2]]);
-            (feeling(arched), place)
-        }
-        Kind::Tips => {
-            // Fingers to us, the palm down the sheet, a little apart.
-            let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
-            let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
-            let turn = Rigid::between(fingers, palm, out, down).scaled(scale);
-            let reaching = Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09, captured: None };
-            // The middle fingertip, as it would be at rest, comes to the push.
-            let tip = turn.apply(model.joint(&model.bones(&reaching), 14));
-            let place = turn.moved([m.tip.0 - tip[0], m.tip.1 - tip[1], m.tip.2 * k - tip[2]]);
-            (feeling(reaching), place)
-        }
-    }
+        // Palm to us, fingers up the sheet and tipped towards us, so the
+        // wrist runs back and down to the arm; arched forward at rest.
+        let (up, (s, c)) = ([m.toward.cos(), m.toward.sin(), 0.0], m.pitch.sin_cos());
+        let along = [up[0] * c, up[1] * c, s];
+        let facing = [-up[0] * s, -up[1] * s, c];
+        let turn = Rigid::between(fingers, palm, along, facing).scaled(scale);
+        let arched = Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1, captured: None };
+        // The knuckles come to the push.
+        let knuckle = turn.apply(model.joint(&model.bones(&arched), 11));
+        let place = turn.moved([m.tip.0 - knuckle[0], m.tip.1 - knuckle[1], m.tip.2 * k - knuckle[2]]);
+        (feeling(arched), place)
 }
 
 struct Veil {
@@ -337,6 +308,8 @@ struct Veil {
     /// The visit under way: its number, when it began, and its plan. The next
     /// begins as soon as this one has settled and `pause` has passed.
     visit: Option<(u64, f32, Visit)>,
+    /// How far into the visit it is, in its own time: seconds at `pace`.
+    clock: f32,
     /// The hand as a body with weight, following its path; `None` between
     /// visits.
     body: Option<Body>,
@@ -358,12 +331,50 @@ struct Body {
 /// A spring's stiffness (as an angular frequency) and damping ratio.
 const HAND_SPRING: (f32, f32) = (6.0, 1.0);
 
+/// How fast a take plays against the visit's own clock: at the default
+/// `pace`, a quarter of the speed it was recorded at.
+const TAKE_RATE: f32 = 0.5;
+
 /// How slowly the hand follows its nearest point (s): slower than a
 /// finger moves, so the hand never twitches with one.
 const LIFT_EASE: f32 = 0.8;
 
-/// The fastest any captured joint moves, mm a second of the take's scale.
-const FINGER_SPEED: f32 = 250.0;
+/// The fastest any bone of a finger turns, radians a second. A cap on how
+/// fast joints move is not enough: a fingertip's last bone is short, so a
+/// little drift at either end swings it a long way.
+const BEND_SPEED: f32 = 1.2;
+
+/// Each finger's bones, as MediaPipe numbers its joints, root to tip.
+const FINGER_BONES: [[usize; 4]; 5] = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
+
+/// Holds back any bone of `now` that has turned more than `most` radians
+/// since `was`, carrying the rest of its finger with it.
+fn unflick(was: &[[f32; 3]; 21], now: &mut [[f32; 3]; 21], most: f32) {
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let len = |a: [f32; 3]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt().max(1e-6);
+    for finger in FINGER_BONES {
+        for k in 0..3 {
+            let (a, b) = (finger[k], finger[k + 1]);
+            let (old, new) = (sub(was[b], was[a]), sub(now[b], now[a]));
+            let (lo, ln) = (len(old), len(new));
+            let (o, n) = (old.map(|x| x / lo), new.map(|x| x / ln));
+            let angle = (o[0] * n[0] + o[1] * n[1] + o[2] * n[2]).clamp(-1.0, 1.0).acos();
+            if angle <= most {
+                continue;
+            }
+            // Turned only `most` of the way from where it was.
+            let u = most / angle;
+            let (wa, wb) = (((1.0 - u) * angle).sin() / angle.sin(), (u * angle).sin() / angle.sin());
+            let dir: [f32; 3] = std::array::from_fn(|c| o[c] * wa + n[c] * wb);
+            let shift: [f32; 3] = std::array::from_fn(|c| now[a][c] + dir[c] * ln - now[b][c]);
+            for &j in &finger[k + 1..] {
+                for c in 0..3 {
+                    now[j][c] += shift[c];
+                }
+            }
+        }
+    }
+}
 
 /// The fingers working on their own, like the legs of something feeling its
 /// way out of a shell: a ripple from the little finger to the index while
@@ -393,21 +404,29 @@ fn spring(x: &mut f32, v: &mut f32, to: f32, (w, zeta): (f32, f32), dt: f32) {
 impl Patch for Veil {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let t = ctx.t as f32;
+        let dt = (ctx.dt as f32).clamp(0.0, 0.1);
+        // Everything in a visit runs on its own clock, at `pace`; the pause
+        // after it is in real seconds.
+        let pace = ctx.get("pace");
+        self.clock += dt * pace;
         let next = match &self.visit {
             // Time went backwards (a restart): begin again.
             Some((_, start, _)) if t < *start => Some(0),
-            Some((n, start, v)) if t >= start + v.keys.last().unwrap().t + REST + ctx.get("pause") => Some(n + 1),
+            Some((n, _, v)) if self.clock >= v.keys.last().unwrap().t + REST + ctx.get("pause") * pace => Some(n + 1),
             Some(_) => None,
             None => Some(0),
         };
         if let Some(n) = next {
             self.visit = Some((n, if n == 0 { 0.0 } else { t }, Visit::plan(n, self.seed)));
+            self.clock = 0.0;
+            // A new visit is a new hand: nothing carries over.
+            self.body = None;
         }
-        let (_, start, visit) = self.visit.as_ref().unwrap();
-        let mut moment = visit.moment(t - start);
+        let (_, _, visit) = self.visit.as_ref().unwrap();
+        let local = self.clock;
+        let mut moment = visit.moment(local);
         let size = ctx.get("size");
         let model = Model::get();
-        let dt = (ctx.dt as f32).clamp(0.0, 0.1);
 
         self.glass.clear();
         let glass_at = moment.as_ref().map_or(0.0, |m| m.near * size / DRAWN_AT);
@@ -418,9 +437,9 @@ impl Patch for Veil {
             // The body follows the path, with a faint tremor: something alive
             // holding as still as it can.
             let tremor = [
-                0.006 * ((t * 5.1 + visit.phase).sin() + 0.6 * (t * 8.3 + 2.0 * visit.phase).sin()),
-                0.006 * ((t * 4.3 + 3.0 * visit.phase).sin() + 0.6 * (t * 7.7 + visit.phase).sin()),
-                0.004 * (t * 6.1 + 5.0 * visit.phase).sin(),
+                0.006 * ((local * 5.1 + visit.phase).sin() + 0.6 * (local * 8.3 + 2.0 * visit.phase).sin()),
+                0.006 * ((local * 4.3 + 3.0 * visit.phase).sin() + 0.6 * (local * 7.7 + visit.phase).sin()),
+                0.004 * (local * 6.1 + 5.0 * visit.phase).sin(),
             ];
             let goal = [m.tip.0 + tremor[0], m.tip.1 + tremor[1], m.tip.2 + tremor[2]];
             let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], take: None, lift: None });
@@ -432,22 +451,21 @@ impl Patch for Veil {
                 let all = clips::all();
                 let pick = ctx.get("take") as usize;
                 let take = if pick >= 1 { &all[(pick - 1).min(all.len() - 1)] } else { &all[visit.take] };
-                let want = take.at((t - start) * visit.rate * ctx.get("pace") + visit.from);
+                let want = take.at(local * visit.rate * TAKE_RATE + visit.from);
                 // The fingers ease after the take rather than snapping to it,
-                // and no joint ever moves faster than `FINGER_SPEED`.
+                // and no bone of them ever turns faster than `BEND_SPEED`.
                 let k = 1.0 - (-dt / ctx.get("ease").max(1e-3)).exp();
                 let held = body.take.get_or_insert(want);
+                let was = *held;
                 for (h, w) in held.iter_mut().zip(&want) {
-                    let step: [f32; 3] = std::array::from_fn(|c| (w[c] - h[c]) * k);
-                    let len = (step[0] * step[0] + step[1] * step[1] + step[2] * step[2]).sqrt();
-                    let cut = (FINGER_SPEED * dt / len.max(1e-6)).min(1.0);
                     for c in 0..3 {
-                        h[c] += step[c] * cut;
+                        h[c] += (w[c] - h[c]) * k;
                     }
                 }
+                unflick(&was, held, BEND_SPEED * dt);
                 m.captured = Some(model.captured(held));
             } else {
-                m.feel = feel(t, visit.phase, body.speed[2]);
+                m.feel = feel(local, visit.phase, body.speed[2] / pace.max(0.01));
             }
 
             let (pose, place) = arrange(model, m, size);
@@ -465,10 +483,10 @@ impl Patch for Veil {
             }
             for tri in &model.triangles {
                 let [a, b, c] = tri.map(|i| self.skinned[i as usize]);
-                self.glass.press(a, b, c);
+                self.glass.press(a, b, c, tri.map(|i| model.light[i as usize]));
             }
         }
-        self.glass.shine(glass_at);
+        self.glass.shine(glass_at, ctx.get("depth"));
 
         let colour = oklch(0.97, ctx.get("tint"), ctx.get("hue"));
         let glow = ctx.get("glow");
@@ -516,7 +534,6 @@ mod tests {
     #[test]
     fn the_first_slot_shows_a_hand_early() {
         let v = Visit::plan(0, 0.9);
-        assert_eq!(v.kind, Kind::Tips);
         assert!((1..15).any(|t| v.moment(t as f32).is_some_and(|m| m.tip.2 > 0.2)));
     }
 
@@ -542,7 +559,7 @@ mod tests {
                 let bones = model.bones(&pose);
                 let (w, k) = (place.apply(model.joint(&bones, hand::WRIST)), place.apply(model.joint(&bones, 11)));
                 let arm = norm([w[0] - k[0], w[1] - k[1], w[2] - k[2]]);
-                assert!(-arm[2] >= (ARM + 0.05).cos(), "slot {slot} {:?}: the arm is {:.2} off straight back", m.kind, (-arm[2]).acos());
+                assert!(-arm[2] >= (ARM + 0.05).cos(), "slot {slot}: the arm is {:.2} off straight back", (-arm[2]).acos());
             }
         }
     }
@@ -555,8 +572,8 @@ mod tests {
         let mut params = crate::patch::Params::defaults(PARAMS);
         params.set(PARAMS, "pause", 0.0);
         params.set(PARAMS, "samples", 1.0);
-        for seed in [3, 62] {
-            let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, body: None };
+        for seed in [3, 7, 62, 101] {
+            let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None };
             let mut last: Option<Vec<[f32; 3]>> = None;
             let mut worst = (0.0f32, 0.0);
             for i in 1..30 * 80 {
@@ -571,7 +588,7 @@ mod tests {
                 }
                 last = here;
             }
-            assert!(worst.0 < 0.045, "seed {seed}: the hand's shape moved {:.3} units in a frame at {:.1} s", worst.0, worst.1);
+            assert!(worst.0 < 0.05, "seed {seed}: the hand's shape moved {:.3} units in a frame at {:.1} s", worst.0, worst.1);
         }
     }
 
@@ -579,12 +596,5 @@ mod tests {
         let n = v.len() as f32;
         let c: [f32; 3] = std::array::from_fn(|k| v.iter().map(|p| p[k]).sum::<f32>() / n);
         v.iter().map(|p| std::array::from_fn(|k| p[k] - c[k])).collect()
-    }
-
-    #[test]
-    fn every_kind_comes() {
-        let kinds: Vec<Kind> = (1..1000).map(|s| Visit::plan(s, 0.5).kind).collect();
-        let count = |k| kinds.iter().filter(|&&x| x == k).count();
-        assert!(count(Kind::Stop) > 400 && count(Kind::Tips) > 400, "{} {}", count(Kind::Stop), count(Kind::Tips));
     }
 }

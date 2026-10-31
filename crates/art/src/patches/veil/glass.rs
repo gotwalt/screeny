@@ -13,36 +13,46 @@ pub const EXTENT: f32 = 1.2;
 /// `under` where nothing is behind the glass.
 const NOTHING: f32 = -9.0;
 
-/// How far behind the glass (sheet units) the hand's light has faded by
-/// 1/e, and the depths at which it has spread to each blur radius (cells).
-const FADE: f32 = 0.12;
-const BANDS: [(f32, usize); 5] = [(0.0, 0), (0.03, 2), (0.09, 5), (0.2, 10), (0.4, 18)];
+/// How far behind the glass (sheet units, at `depth` 1) the hand's light has
+/// faded by 1/e, and the depths at which it has spread to each blur radius
+/// (cells). A hand is about 1.6 units long, so at `depth` 1 its nearest
+/// knuckles are clear and its wrist is a glow.
+const FADE: f32 = 0.5;
+/// How sharply the light falls as the surface turns away from us.
+const FACING: f32 = 2.0;
+const BANDS: [(f32, usize); 5] = [(0.0, 0), (0.12, 2), (0.36, 5), (0.8, 10), (1.6, 18)];
 
 fn cell(v: f32) -> f32 {
     (v + EXTENT) / (2.0 * EXTENT) * (N - 1) as f32
 }
 
 pub struct Glass {
-    /// The front of whatever is behind the glass, or `NOTHING`.
+    /// The front of whatever is behind the glass, or `NOTHING`, and how much
+    /// light that front gives.
     under: Vec<f32>,
+    light: Vec<f32>,
     /// Its light as it comes through (see `shine`).
     glow: Vec<f32>,
+    /// How squarely each cell of the hand faces us: 1 face on, falling to 0
+    /// at its edges.
+    facing: Vec<f32>,
     layer: Vec<f32>,
     scratch: Vec<f32>,
 }
 
 impl Glass {
     pub fn new() -> Self {
-        Glass { under: vec![NOTHING; N * N], glow: vec![0.0; N * N], layer: vec![0.0; N * N], scratch: vec![0.0; N * N] }
+        Glass { under: vec![NOTHING; N * N], light: vec![0.0; N * N], glow: vec![0.0; N * N], facing: vec![0.0; N * N], layer: vec![0.0; N * N], scratch: vec![0.0; N * N] }
     }
 
     pub fn clear(&mut self) {
         self.under.fill(NOTHING);
     }
 
-    /// Lays one triangle of the hand (x, y in sheet units, z towards us) into
-    /// `under`, keeping the front-most surface.
-    pub fn press(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3]) {
+    /// Lays one triangle of the hand (x, y in sheet units, z towards us, and
+    /// the light each corner gives) into `under`, keeping the front-most
+    /// surface.
+    pub fn press(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3], light: [f32; 3]) {
         let (ax, ay, bx, by, cx, cy) = (cell(a[0]), cell(a[1]), cell(b[0]), cell(b[1]), cell(c[0]), cell(c[1]));
         let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
         if area.abs() < 1e-6 {
@@ -65,15 +75,36 @@ impl Glass {
                     continue;
                 }
                 let z = wa * a[2] + wb * b[2] + wc * c[2];
-                let u = &mut self.under[y * N + x];
-                *u = u.max(z);
+                let i = y * N + x;
+                if z > self.under[i] {
+                    self.under[i] = z;
+                    self.light[i] = wa * light[0] + wb * light[1] + wc * light[2];
+                }
             }
         }
     }
 
     /// Works out `glow` for glass at `at` (z): each cell of the hand gives
-    /// light that fades and spreads with how far behind the glass it is.
-    pub fn shine(&mut self, at: f32) {
+    /// light that fades and spreads with how far behind the glass it is,
+    /// over distances `depth` times the usual.
+    pub fn shine(&mut self, at: f32, depth: f32) {
+        // The hand is brightest where it faces us and darkens as its surface
+        // turns away, so each finger is lit down its middle with a dark edge
+        // and the gaps between fingers stay dark: a form, not a blob.
+        let cell_size = 2.0 * EXTENT / (N - 1) as f32;
+        self.facing.fill(0.0);
+        for y in 1..N - 1 {
+            for x in 1..N - 1 {
+                let i = y * N + x;
+                let around = [self.under[i - 1], self.under[i + 1], self.under[i - N], self.under[i + N]];
+                if self.under[i] <= NOTHING || around.iter().any(|&u| u <= NOTHING) {
+                    continue;
+                }
+                let gx = (around[1] - around[0]) / (2.0 * cell_size);
+                let gy = (around[3] - around[2]) / (2.0 * cell_size);
+                self.facing[i] = (1.0 + gx * gx + gy * gy).sqrt().recip().powf(FACING);
+            }
+        }
         self.glow.fill(0.0);
         for band in 0..BANDS.len() {
             // Each cell's light goes to the two bands its depth lies between.
@@ -83,7 +114,7 @@ impl Glass {
                 if self.under[i] <= NOTHING {
                     continue;
                 }
-                let gap = (at - self.under[i]).max(0.0);
+                let gap = (at - self.under[i]).max(0.0) / depth.max(0.01);
                 let near = BANDS[band].0;
                 let w = if band + 1 < BANDS.len() && gap >= near {
                     1.0 - ((gap - near) / (BANDS[band + 1].0 - near)).min(1.0)
@@ -96,7 +127,7 @@ impl Glass {
                     0.0
                 };
                 if w > 0.0 {
-                    self.layer[i] = w * (-gap / FADE).exp();
+                    self.layer[i] = w * (-gap / FADE).exp() * self.facing[i] * self.light[i];
                     any = true;
                 }
             }
