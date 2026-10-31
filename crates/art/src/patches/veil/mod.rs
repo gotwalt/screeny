@@ -5,7 +5,7 @@
 //!
 //! What comes is a real hand (`hand.rs`, a skinned model posed by bending
 //! its fingers), always the whole hand, like something living in the box:
-//! held up to stop against the glass, or reaching fingertips first, its
+//! held up palm first, or reaching fingertips first, its
 //! fingers working all the while - as a captured take of a real hand moved
 //! them (`clips.rs`), or by a few waves of their own. This file is the
 //! choreography - one visit after another, each planned from the seed and
@@ -61,12 +61,9 @@ fn make(seed: u64) -> Box<dyn Patch> {
 /// What comes through.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
-    /// An open hand held up, palm to us, fingers arched forward: they meet
-    /// the glass first and are pushed flat as the palm comes on, then it backs
-    /// off.
+    /// An open hand held up, palm to us, fingers arched forward.
     Stop,
-    /// The fingers pointing at us: as it pushes in, each bends just enough
-    /// that its tip stops at the glass, until all five rest there together.
+    /// The fingers pointing at us, reaching.
     Tips,
 }
 
@@ -75,8 +72,8 @@ enum Kind {
 /// proportion and its neighbour stays a finger's width away.
 const DRAWN_AT: f32 = 0.19;
 
-/// Where the tip is at rest, far back in the box; we are +z, and the glass
-/// is a visit's `wall` in front of z = 0.
+/// Where the tip is at rest, far back in the box; we are +z, and the hand
+/// comes as near as a visit's `near`, where the diffuser shows it sharpest.
 const AWAY: f32 = -0.4;
 
 /// After a visit, this long in the dark before `pause`.
@@ -127,8 +124,9 @@ struct Visit {
     phase: f32,
     /// A hand's size, as a multiple of life size.
     span: f32,
-    /// Where the glass is, which stops the hand, at `DRAWN_AT`.
-    wall: f32,
+    /// How near the hand comes: the diffuser shows it sharpest there, at
+    /// `DRAWN_AT`.
+    near: f32,
     /// How far a `Stop` hand tips its fingers towards us off the sheet's
     /// plane, so its wrist and the arm behind it run back into the dark.
     pitch: f32,
@@ -195,7 +193,7 @@ impl Visit {
             lean: rng.range(0.05, 0.3),
             phase: rng.range(0.0, TAU),
             span: rng.range(0.78, 0.9),
-            wall: rng.range(0.22, 0.3),
+            near: rng.range(0.22, 0.3),
             pitch: PI / 2.0 - ARM + rng.range(0.05, 0.25),
             take: (rng.u64() % clips::COUNT as u64) as usize,
             rate: rng.range(0.85, 1.15),
@@ -205,21 +203,20 @@ impl Visit {
             Kind::Stop => {
                 // Fingers up, give or take.
                 v.toward = PI / 2.0 + rng.range(-0.3, 0.3);
-                Self::press(&mut rng, start, v.wall, 0.04)
+                Self::approach(&mut rng, start, v.near)
             }
-            Kind::Tips => Self::press(&mut rng, start, v.wall, 0.5),
+            Kind::Tips => Self::approach(&mut rng, start, v.near),
         };
         v.keys = path.keys;
         v
     }
 
-    /// A hand that comes up against the glass and is stopped there: in until
-    /// it is `over` past the wall, a hold, perhaps a second press, and back.
-    /// Its z is the hand's own push; the wall decides what the fingers do.
-    fn press(rng: &mut Rng, start: f32, wall: f32, over: f32) -> Path {
+    /// A hand that comes up near, holds, perhaps eases back and comes again,
+    /// and goes.
+    fn approach(rng: &mut Rng, start: f32, near: f32) -> Path {
         let (x, y) = (rng.range(-0.1, 0.1), rng.range(-0.15, 0.05));
         let mut p = Path { keys: vec![Key { t: start, x, y, z: AWAY, ease: Ease::Gentle }] };
-        let full = wall + over;
+        let full = near;
         p.to(rng.range(4.0, 7.0), x, y, full, Ease::Gentle);
         p.stay(rng.range(1.5, 3.0));
         if rng.f32() < 0.4 {
@@ -257,7 +254,7 @@ impl Visit {
             toward: self.toward + turn * 0.4,
             lean: self.lean + 0.06 * (local * 0.17 + self.phase * 2.0).sin(),
             span: self.span,
-            wall: self.wall,
+            near: self.near,
             pitch: self.pitch,
             feel: [0.0; 5],
             captured: None,
@@ -273,7 +270,7 @@ struct Moment {
     toward: f32,
     lean: f32,
     span: f32,
-    wall: f32,
+    near: f32,
     pitch: f32,
     /// What the fingers are doing on their own, added to the pose's bends.
     feel: [f32; 5],
@@ -291,9 +288,8 @@ const LIFE: f32 = 10.6 / 0.11;
 fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
     let (fingers, palm) = model.axes();
     let k = size / DRAWN_AT;
-    let scale = LIFE * size;
-    // A captured take bends the fingers instead of the pose; the wall then
-    // bends them further from there.
+    let scale = LIFE * size * m.span;
+    // A captured take bends the fingers instead of the pose.
     let feeling = |mut p: Pose| {
         if let Some(c) = m.captured {
             return Pose { curl: [0.0; 5], spread: 0.0, captured: Some(c) };
@@ -303,41 +299,33 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
         }
         p
     };
+    // The hand is placed by its pose at rest, never by where its moving
+    // fingers are, so a finger's bend cannot carry the hand with it; how
+    // near it comes is settled after, slowly, by its nearest point.
     match m.kind {
         Kind::Stop => {
             // Palm to us, fingers up the sheet and tipped towards us, so the
             // wrist runs back and down to the arm; arched forward at rest.
-            let scale = scale * m.span;
             let (up, (s, c)) = ([m.toward.cos(), m.toward.sin(), 0.0], m.pitch.sin_cos());
             let along = [up[0] * c, up[1] * c, s];
             let facing = [-up[0] * s, -up[1] * s, c];
             let turn = Rigid::between(fingers, palm, along, facing).scaled(scale);
-            let arched = feeling(Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1, captured: None });
-            // The knuckles come to the push, but never past the wall; the
-            // fingers beyond them meet it first.
-            let bones = model.bones(&arched);
-            let knuckle = turn.apply(model.joint(&bones, 11));
-            let front = (m.tip.2 * k).min(m.wall * k) - hand::PALM * scale;
-            let place = turn.moved([m.tip.0 - knuckle[0], m.tip.1 - knuckle[1], front - knuckle[2]]);
-            // Each finger keeps as much of its arch as the wall allows, and
-            // bends back flat against it when pressed.
-            let pose = model.against(arched, &place, m.wall * k, hand::PAD * scale, -0.6);
-            (pose, place)
+            let arched = Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1, captured: None };
+            // The knuckles come to the push.
+            let knuckle = turn.apply(model.joint(&model.bones(&arched), 11));
+            let place = turn.moved([m.tip.0 - knuckle[0], m.tip.1 - knuckle[1], m.tip.2 * k - knuckle[2]]);
+            (feeling(arched), place)
         }
         Kind::Tips => {
             // Fingers to us, the palm down the sheet, a little apart.
-            let scale = scale * m.span;
             let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
             let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
             let turn = Rigid::between(fingers, palm, out, down).scaled(scale);
-            let reaching = feeling(Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09, captured: None });
-            // The hand's push carries the middle fingertip; past the wall each
-            // finger bends so its tip stays there.
-            let bones = model.bones(&reaching);
-            let tip = turn.apply(model.joint(&bones, 14));
-            let place = turn.moved([m.tip.0 - tip[0], m.tip.1 - tip[1], m.tip.2 * k - tip[2] - hand::PAD * scale]);
-            let pose = model.against(reaching, &place, m.wall * k, hand::PAD * scale, 1.4);
-            (pose, place)
+            let reaching = Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09, captured: None };
+            // The middle fingertip, as it would be at rest, comes to the push.
+            let tip = turn.apply(model.joint(&model.bones(&reaching), 14));
+            let place = turn.moved([m.tip.0 - tip[0], m.tip.1 - tip[1], m.tip.2 * k - tip[2]]);
+            (feeling(reaching), place)
         }
     }
 }
@@ -354,22 +342,28 @@ struct Veil {
     body: Option<Body>,
 }
 
-/// The hand's own motion: where it is and how fast it moves, and the same for
-/// each digit's bend. Each follows what the choreography and the glass ask of
-/// it through a critically damped spring, so the hand has weight - it eases
-/// in and out - but never bounces, and the fingers trail it a beat behind.
+/// The hand's own motion: where it is and how fast it moves, following the
+/// choreography through a critically damped spring, so the hand has weight -
+/// it eases in and out - but never bounces.
 struct Body {
     at: [f32; 3],
     speed: [f32; 3],
-    curl: [f32; 5],
-    curling: [f32; 5],
     /// Where the fingers have got to in the captured take they follow.
     take: Option<[[f32; 3]; 21]>,
+    /// How far the hand is moved towards us to bring its nearest point
+    /// where the path has it.
+    lift: Option<f32>,
 }
 
 /// A spring's stiffness (as an angular frequency) and damping ratio.
 const HAND_SPRING: (f32, f32) = (6.0, 1.0);
-const FINGER_SPRING: (f32, f32) = (9.0, 1.0);
+
+/// How slowly the hand follows its nearest point (s): slower than a
+/// finger moves, so the hand never twitches with one.
+const LIFT_EASE: f32 = 0.8;
+
+/// The fastest any captured joint moves, mm a second of the take's scale.
+const FINGER_SPEED: f32 = 250.0;
 
 /// The fingers working on their own, like the legs of something feeling its
 /// way out of a shell: a ripple from the little finger to the index while
@@ -416,7 +410,7 @@ impl Patch for Veil {
         let dt = (ctx.dt as f32).clamp(0.0, 0.1);
 
         self.glass.clear();
-        let glass_at = moment.as_ref().map_or(0.0, |m| m.wall * size / DRAWN_AT);
+        let glass_at = moment.as_ref().map_or(0.0, |m| m.near * size / DRAWN_AT);
         if moment.is_none() {
             self.body = None;
         }
@@ -429,7 +423,7 @@ impl Patch for Veil {
                 0.004 * (t * 6.1 + 5.0 * visit.phase).sin(),
             ];
             let goal = [m.tip.0 + tremor[0], m.tip.1 + tremor[1], m.tip.2 + tremor[2]];
-            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], curl: [f32::NAN; 5], curling: [0.0; 5], take: None });
+            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], take: None, lift: None });
             for k in 0..3 {
                 spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
             }
@@ -439,12 +433,16 @@ impl Patch for Veil {
                 let pick = ctx.get("take") as usize;
                 let take = if pick >= 1 { &all[(pick - 1).min(all.len() - 1)] } else { &all[visit.take] };
                 let want = take.at((t - start) * visit.rate * ctx.get("pace") + visit.from);
-                // The fingers ease after the take rather than snapping to it.
+                // The fingers ease after the take rather than snapping to it,
+                // and no joint ever moves faster than `FINGER_SPEED`.
                 let k = 1.0 - (-dt / ctx.get("ease").max(1e-3)).exp();
                 let held = body.take.get_or_insert(want);
                 for (h, w) in held.iter_mut().zip(&want) {
+                    let step: [f32; 3] = std::array::from_fn(|c| (w[c] - h[c]) * k);
+                    let len = (step[0] * step[0] + step[1] * step[1] + step[2] * step[2]).sqrt();
+                    let cut = (FINGER_SPEED * dt / len.max(1e-6)).min(1.0);
                     for c in 0..3 {
-                        h[c] += (w[c] - h[c]) * k;
+                        h[c] += step[c] * cut;
                     }
                 }
                 m.captured = Some(model.captured(held));
@@ -452,27 +450,19 @@ impl Patch for Veil {
                 m.feel = feel(t, visit.phase, body.speed[2]);
             }
 
-            let (mut pose, place) = arrange(model, m, size);
-            // The fingers follow their bends through springs, but never into
-            // the glass: the wall's answer is a bound, not a suggestion.
-            for d in 0..5 {
-                let target = pose.curl[d];
-                if body.curl[d].is_nan() {
-                    body.curl[d] = target;
-                }
-                spring(&mut body.curl[d], &mut body.curling[d], target, FINGER_SPRING, dt);
-                let bound = match m.kind {
-                    Kind::Stop => body.curl[d].min(target),
-                    Kind::Tips => body.curl[d].max(target),
-                };
-                if bound != body.curl[d] {
-                    body.curl[d] = bound;
-                    body.curling[d] = 0.0;
-                }
-                pose.curl[d] = bound;
-            }
+            let (pose, place) = arrange(model, m, size);
             let bones = model.bones(&pose);
             model.skin(&bones, &place, &mut self.skinned);
+            // The hand's nearest point, whatever its fingers are doing, comes
+            // where the path says; the hand follows that slowly, so a finger
+            // that bends never pulls the hand along with it.
+            let front = self.skinned.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
+            let want = m.tip.2 * size / DRAWN_AT - front;
+            let lift = body.lift.get_or_insert(want);
+            *lift += (want - *lift) * (1.0 - (-dt / LIFT_EASE).exp());
+            for p in &mut self.skinned {
+                p[2] += *lift;
+            }
             for tri in &model.triangles {
                 let [a, b, c] = tri.map(|i| self.skinned[i as usize]);
                 self.glass.press(a, b, c);
@@ -555,6 +545,40 @@ mod tests {
                 assert!(-arm[2] >= (ARM + 0.05).cos(), "slot {slot} {:?}: the arm is {:.2} off straight back", m.kind, (-arm[2]).acos());
             }
         }
+    }
+
+    /// Played for real, frame by frame, the hand never changes shape
+    /// suddenly: against its own centre (so a snatch back does not count),
+    /// no point of it moves more than a little in a frame.
+    #[test]
+    fn the_hand_never_jumps() {
+        let mut params = crate::patch::Params::defaults(PARAMS);
+        params.set(PARAMS, "pause", 0.0);
+        params.set(PARAMS, "samples", 1.0);
+        for seed in [3, 62] {
+            let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, body: None };
+            let mut last: Option<Vec<[f32; 3]>> = None;
+            let mut worst = (0.0f32, 0.0);
+            for i in 1..30 * 80 {
+                let t = i as f64 / 30.0;
+                veil.render(&Ctx { t, dt: 1.0 / 30.0, now: 0.0, params: &params });
+                let here = if veil.body.is_some() && !veil.skinned.is_empty() { Some(centred(&veil.skinned)) } else { None };
+                if let (Some(a), Some(b)) = (&last, &here) {
+                    let moved = a.iter().zip(b).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).fold(0.0, f32::max);
+                    if moved > worst.0 {
+                        worst = (moved, t);
+                    }
+                }
+                last = here;
+            }
+            assert!(worst.0 < 0.045, "seed {seed}: the hand's shape moved {:.3} units in a frame at {:.1} s", worst.0, worst.1);
+        }
+    }
+
+    fn centred(v: &[[f32; 3]]) -> Vec<[f32; 3]> {
+        let n = v.len() as f32;
+        let c: [f32; 3] = std::array::from_fn(|k| v.iter().map(|p| p[k]).sum::<f32>() / n);
+        v.iter().map(|p| std::array::from_fn(|k| p[k] - c[k])).collect()
     }
 
     #[test]

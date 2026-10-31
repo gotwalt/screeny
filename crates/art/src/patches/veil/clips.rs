@@ -1,7 +1,9 @@
 //! Captured finger motion: takes recorded from a webcam with
 //! `tools/handcap` (MediaPipe's hand landmarker, 21 joints a frame in
-//! millimetres about the hand's centre), read once, filled where the tracker
-//! lost the hand, resampled to an even rate and smoothed of its jitter.
+//! millimetres about the hand's centre), read once and cleaned: turned to sit
+//! on the palm, rid of the frames where the tracker glitched a finger
+//! somewhere it never was, filled where it lost the hand, resampled to an
+//! even rate and smoothed of its jitter.
 //! `hand.rs` turns a frame into the bend of each of the model's knuckles.
 
 use serde_json::Value;
@@ -34,6 +36,14 @@ const RATE: f32 = 30.0;
 /// only the hand's deliberate motion is kept.
 const SIGMA: f32 = 4.0;
 
+/// A glitch: a joint further than this (mm) from where it was across the
+/// frames around it - the median of `GLITCH_SPAN` either side - is the
+/// tracker's mistake, not the hand's motion, and is filled in from the
+/// frames that agree. Real fingers sweep smoothly; a glitch jumps there and
+/// back, or jumps and stays only a few frames.
+const GLITCH_MM: f32 = 9.0;
+const GLITCH_SPAN: usize = 5;
+
 pub struct Clip {
     frames: Vec<[V3; 21]>,
 }
@@ -59,6 +69,10 @@ impl Clip {
             })
             .collect();
         assert!(seen.len() > 10, "clip {name}: the hand is barely in it");
+        let mut seen: Vec<(f32, [V3; 21])> = seen.into_iter().map(|(t, p)| (t, on_palm(&p))).collect();
+        for _ in 0..2 {
+            unglitch(&mut seen);
+        }
 
         // An even rate, straight across where the hand was lost.
         let (first, last) = (seen[0].0, seen[seen.len() - 1].0);
@@ -125,6 +139,70 @@ impl Clip {
     }
 }
 
+/// The joints as the palm holds them: from the wrist, along the middle
+/// knuckle, across the knuckles and out of the palm. Only how the fingers
+/// move against the palm is kept, so a turn of the whole hand cannot look
+/// like a finger moving, and a glitch is found in one finger alone.
+fn on_palm(p: &[V3; 21]) -> [V3; 21] {
+    let sub = |a: V3, b: V3| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: V3, b: V3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let unit = |a: V3| {
+        let l = dot(a, a).sqrt().max(1e-6);
+        [a[0] / l, a[1] / l, a[2] / l]
+    };
+    let along = unit(sub(p[9], p[0]));
+    let across = sub(p[5], p[17]);
+    let k = dot(along, across);
+    let across = unit([across[0] - along[0] * k, across[1] - along[1] * k, across[2] - along[2] * k]);
+    let out = [along[1] * across[2] - along[2] * across[1], along[2] * across[0] - along[0] * across[2], along[0] * across[1] - along[1] * across[0]];
+    p.map(|q| {
+        let d = sub(q, p[0]);
+        [dot(d, along), dot(d, across), dot(d, out)]
+    })
+}
+
+/// Finds each joint's glitches against the median of the frames around it,
+/// and fills them in straight between the nearest frames on either side that
+/// are not.
+fn unglitch(seen: &mut [(f32, [V3; 21])]) {
+    let n = seen.len();
+    let median = |v: &mut Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v[v.len() / 2]
+    };
+    for j in 0..21 {
+        let bad: Vec<bool> = (0..n)
+            .map(|i| {
+                let span = i.saturating_sub(GLITCH_SPAN)..(i + GLITCH_SPAN + 1).min(n);
+                let m: [f32; 3] = std::array::from_fn(|c| median(&mut seen[span.clone()].iter().map(|f| f.1[j][c]).collect()));
+                let d = seen[i].1[j];
+                ((d[0] - m[0]).powi(2) + (d[1] - m[1]).powi(2) + (d[2] - m[2]).powi(2)).sqrt() > GLITCH_MM
+            })
+            .collect();
+        let mut i = 0;
+        while i < n {
+            if !bad[i] {
+                i += 1;
+                continue;
+            }
+            let end = (i..n).find(|&k| !bad[k]).unwrap_or(n);
+            let (before, after) = (i.checked_sub(1), (end < n).then_some(end));
+            for k in i..end {
+                seen[k].1[j] = match (before, after) {
+                    (Some(a), Some(b)) => {
+                        let u = (seen[k].0 - seen[a].0) / (seen[b].0 - seen[a].0);
+                        std::array::from_fn(|c| seen[a].1[j][c] + (seen[b].1[j][c] - seen[a].1[j][c]) * u)
+                    }
+                    (Some(a), None) => seen[a].1[j],
+                    (None, Some(b)) => seen[b].1[j],
+                    (None, None) => seen[k].1[j],
+                };
+            }
+            i = end;
+        }
+    }
+}
+
 /// Whether the take is of a right hand: fingers curl towards the palm, and
 /// on a right hand (MediaPipe's axes being right-handed) the palm is the
 /// side `(index knuckle - wrist) x (little knuckle - wrist)` points to.
@@ -151,6 +229,20 @@ mod tests {
         for (c, (name, _)) in all().iter().zip(TAKES) {
             assert!(c.seconds() > 3.0, "{name}: {} s", c.seconds());
             assert!(right_handed(&c.frames), "{name}");
+        }
+    }
+
+    /// Cleaned, no joint moves faster than a hand deliberately moves a
+    /// finger, frame to frame, in any take.
+    #[test]
+    fn no_take_has_a_finger_jump() {
+        for (c, (name, _)) in all().iter().zip(TAKES) {
+            for (i, w) in c.frames.windows(2).enumerate() {
+                let fastest = (0..21)
+                    .map(|j| ((w[1][j][0] - w[0][j][0]).powi(2) + (w[1][j][1] - w[0][j][1]).powi(2) + (w[1][j][2] - w[0][j][2]).powi(2)).sqrt())
+                    .fold(0.0, f32::max);
+                assert!(fastest * RATE < 450.0, "{name}: a joint moves {:.0} mm/s at frame {i}", fastest * RATE);
+            }
         }
     }
 

@@ -1,7 +1,7 @@
 //! The hand behind the veil: a real skinned model (`hand.glb`, the WebXR
 //! generic right hand, MIT - see `hand.LICENSE`), posed by bending its
 //! fingers - by hand, or as a captured take (`clips.rs`) bent them - then
-//! laid against the sheet.
+//! placed in the box.
 //!
 //! The model's joints are all children of one root and carry their rest
 //! transforms directly, so a pose is built here rather than read: each
@@ -151,10 +151,6 @@ pub type Captured = [[Rigid; 4]; 5];
 const NONE: usize = usize::MAX;
 const TRACKED: [[usize; 5]; 5] = [[1, 2, 3, 4, NONE], [NONE, 5, 6, 7, 8], [NONE, 9, 10, 11, 12], [NONE, 13, 14, 15, 16], [NONE, 17, 18, 19, 20]];
 
-/// Flesh in front of a fingertip's joint, and in front of the palm's middle,
-/// in metres.
-pub const PAD: f32 = 0.009;
-pub const PALM: f32 = 0.016;
 
 /// The model, read once.
 pub struct Model {
@@ -316,40 +312,6 @@ impl Model {
     /// and the way the palm faces.
     pub fn axes(&self) -> (V3, V3) {
         (unit(sub(self.rest[11], self.rest[WRIST])), self.palm)
-    }
-
-    /// `pose`, with each digit bent towards `limit` only as far as it must be
-    /// so none of its joints (plus `pad` of flesh) comes nearer us than
-    /// `wall`, once placed by `place`. Bending towards `limit` must move the
-    /// digit back from us: flattening an arched finger, or curling one that
-    /// points at us.
-    pub fn against(&self, pose: Pose, place: &Rigid, wall: f32, pad: f32, limit: f32) -> Pose {
-        let reach = |p: &Pose, digit: usize| {
-            let bones = self.bones(p);
-            CHAINS[digit][1..].iter().map(|&j| place.apply(self.joint(&bones, j))[2]).fold(f32::MIN, f32::max) + pad
-        };
-        let mut out = pose;
-        for digit in 0..5 {
-            if reach(&out, digit) <= wall {
-                continue;
-            }
-            // Bisect between the pose's own bend (too near) and the limit.
-            let (mut near, mut far) = (pose.curl[digit], limit);
-            out.curl[digit] = far;
-            if reach(&out, digit) > wall {
-                continue;
-            }
-            for _ in 0..14 {
-                out.curl[digit] = 0.5 * (near + far);
-                if reach(&out, digit) > wall {
-                    near = out.curl[digit];
-                } else {
-                    far = out.curl[digit];
-                }
-            }
-            out.curl[digit] = far;
-        }
-        out
     }
 }
 
