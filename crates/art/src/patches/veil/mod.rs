@@ -91,6 +91,11 @@ const REST: f32 = 2.0;
 /// -1..1, and the cloth tents a little way out from the tip.
 const BOUND: f32 = 0.6;
 
+/// The furthest the forearm may swing off pointing straight back into the
+/// box. The model ends at the wrist; turned any more towards us, the cut end
+/// shows through the cloth and the hand is plainly not on an arm.
+const ARM: f32 = 0.95;
+
 fn smooth(x: f32) -> f32 {
     crate::color::smoothstep(0.0, 1.0, x)
 }
@@ -130,6 +135,9 @@ struct Visit {
     /// How far the cloth will stretch towards us before it stops the hand
     /// (`Stop`, `Tips`), at `DRAWN_AT`.
     wall: f32,
+    /// How far a `Stop` hand tips its fingers towards us off the sheet's
+    /// plane, so its wrist and the arm behind it run back into the dark.
+    pitch: f32,
 }
 
 /// Builds a path: each step adds a key, `t` seconds after the last.
@@ -194,6 +202,7 @@ impl Visit {
             phase: rng.range(0.0, TAU),
             span: rng.range(0.78, 0.9),
             wall: rng.range(0.22, 0.3),
+            pitch: PI / 2.0 - ARM + rng.range(0.05, 0.25),
         };
         let path = match kind {
             Kind::Pointer => Self::finger(&mut rng, start),
@@ -309,6 +318,8 @@ impl Visit {
             lean: self.lean + 0.06 * (local * 0.17 + self.phase * 2.0).sin(),
             span: self.span,
             wall: self.wall,
+            pitch: self.pitch,
+            feel: [0.0; 5],
         })
     }
 }
@@ -322,6 +333,9 @@ struct Moment {
     lean: f32,
     span: f32,
     wall: f32,
+    pitch: f32,
+    /// What the fingers are doing on their own, added to the pose's bends.
+    feel: [f32; 5],
 }
 
 /// Life size on the Art Frame: 8 inches is 2.16 units, so 10.6 units a metre,
@@ -336,9 +350,15 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
     let (fingers, palm) = model.axes();
     let k = size / DRAWN_AT;
     let scale = LIFE * size;
+    let feeling = |mut p: Pose| {
+        for d in 0..5 {
+            p.curl[d] = (p.curl[d] + m.feel[d]).clamp(-0.1, 1.0);
+        }
+        p
+    };
     match m.kind {
         Kind::Pointer => {
-            let pose = Pose::POINT;
+            let pose = feeling(Pose::POINT);
             let bones = model.bones(&pose);
             // The index finger towards us, leaning back a little the way the
             // hand is, the palm facing down the sheet.
@@ -349,19 +369,23 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
             (pose, turn.moved([m.tip.0 - at[0], m.tip.1 - at[1], -at[2]]), false)
         }
         Kind::Stop => {
-            // Palm to us, fingers up the sheet, arched forward at rest.
+            // Palm to us, fingers up the sheet and tipped towards us, so the
+            // wrist runs back and down to the arm; arched forward at rest.
             let scale = scale * m.span;
-            let up = [m.toward.cos(), m.toward.sin(), 0.0];
-            let turn = Rigid::between(fingers, palm, up, [0.0, 0.0, 1.0]).scaled(scale);
-            let arched = Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1 };
-            // The palm's front comes to the push, but never past the wall.
+            let (up, (s, c)) = ([m.toward.cos(), m.toward.sin(), 0.0], m.pitch.sin_cos());
+            let along = [up[0] * c, up[1] * c, s];
+            let facing = [-up[0] * s, -up[1] * s, c];
+            let turn = Rigid::between(fingers, palm, along, facing).scaled(scale);
+            let arched = feeling(Pose { curl: [0.15, 0.32, 0.3, 0.32, 0.36], spread: 0.1 });
+            // The knuckles come to the push, but never past the wall; the
+            // fingers beyond them meet it first.
             let bones = model.bones(&arched);
-            let centre = hand::mid(model.joint(&bones, hand::WRIST), model.joint(&bones, 11));
-            let c = turn.apply(centre);
+            let knuckle = turn.apply(model.joint(&bones, 11));
             let front = (m.tip.2 * k).min(m.wall * k) - hand::PALM * scale;
-            let place = turn.moved([m.tip.0 - c[0], m.tip.1 - c[1], front - c[2]]);
-            // Each finger keeps as much of its arch as the wall allows.
-            let pose = model.against(arched, &place, m.wall * k, hand::PAD * scale, -0.15);
+            let place = turn.moved([m.tip.0 - knuckle[0], m.tip.1 - knuckle[1], front - knuckle[2]]);
+            // Each finger keeps as much of its arch as the wall allows, and
+            // bends back flat against it when pressed.
+            let pose = model.against(arched, &place, m.wall * k, hand::PAD * scale, -0.6);
             (pose, place, true)
         }
         Kind::Tips => {
@@ -370,7 +394,7 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid, bool) {
             let out = [-m.toward.cos() * m.lean.sin(), -m.toward.sin() * m.lean.sin(), m.lean.cos()];
             let down = [(m.toward + 0.3).cos(), (m.toward + 0.3).sin(), 0.0];
             let turn = Rigid::between(fingers, palm, out, down).scaled(scale);
-            let reaching = Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09 };
+            let reaching = feeling(Pose { curl: [0.55, 0.12, 0.1, 0.12, 0.16], spread: 0.09 });
             // The hand's push carries the middle fingertip; past the wall each
             // finger bends so its tip stays there.
             let bones = model.bones(&reaching);
@@ -408,6 +432,34 @@ struct Body {
 /// A spring's stiffness (as an angular frequency) and damping ratio.
 const HAND_SPRING: (f32, f32) = (6.0, 0.8);
 const FINGER_SPRING: (f32, f32) = (9.0, 0.65);
+
+/// The fingers working on their own, like the legs of something feeling its
+/// way out of a shell: a ripple from the little finger to the index while
+/// the hand comes towards us, barely a stir while it holds, and all of them
+/// drawn in as it goes back. `closing` is how fast it comes (z a second).
+fn feel(kind: Kind, t: f32, phase: f32, closing: f32) -> [f32; 5] {
+    let coming = smooth(closing / 0.15);
+    let going = smooth(-closing / 0.25);
+    let stir = 0.05 + 0.25 * coming;
+    let mut out = [0.0; 5];
+    for (d, f) in out.iter_mut().enumerate() {
+        let d_ = d as f32;
+        let w = (TAU * 0.85 * t + d_ * 0.9 + phase).sin() + 0.5 * (TAU * 1.45 * t + 2.3 * d_ + 3.0 * phase).sin();
+        let mut a = w / 1.5 * stir;
+        a *= match (kind, d) {
+            // The thumb moves less; a pointing finger holds its aim.
+            (_, 0) => 0.4,
+            (Kind::Pointer, 1) => 0.3,
+            _ => 1.0,
+        };
+        // A pointer's curled fingers can only open.
+        if kind == Kind::Pointer && d > 1 {
+            a = -a.abs() * 1.4;
+        }
+        *f = a + 0.35 * going;
+    }
+    out
+}
 
 /// One step of a damped spring pulling `x` (moving at `v`) towards `to`.
 fn spring(x: &mut f32, v: &mut f32, to: f32, (w, zeta): (f32, f32), dt: f32) {
@@ -452,6 +504,7 @@ impl Patch for Veil {
                 spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
             }
             m.tip = (body.at[0], body.at[1], body.at[2]);
+            m.feel = feel(m.kind, t, visit.phase, body.speed[2]);
 
             let (mut pose, place, placed) = arrange(model, m, size);
             // The fingers follow their bends through springs, but never into
@@ -576,6 +629,23 @@ mod tests {
     fn visits_move_differently() {
         let shapes: std::collections::HashSet<usize> = (1..60).map(|s| Visit::plan(s, 0.5).keys.len()).collect();
         assert!(shapes.len() >= 5, "only {} different lengths of path", shapes.len());
+    }
+
+    #[test]
+    fn the_arm_runs_back_into_the_box() {
+        let model = Model::get();
+        for slot in 0..120 {
+            let v = Visit::plan(slot, 0.61);
+            for i in 0..60 {
+                let Some(mut m) = v.moment(i as f32 * 0.5) else { continue };
+                m.feel = feel(m.kind, i as f32 * 0.5, v.phase, 0.2);
+                let (pose, place, _) = arrange(model, &m, 0.11);
+                let bones = model.bones(&pose);
+                let (w, k) = (place.apply(model.joint(&bones, hand::WRIST)), place.apply(model.joint(&bones, 11)));
+                let arm = norm([w[0] - k[0], w[1] - k[1], w[2] - k[2]]);
+                assert!(-arm[2] >= (ARM + 0.05).cos(), "slot {slot} {:?}: the arm is {:.2} off straight back", m.kind, (-arm[2]).acos());
+            }
+        }
     }
 
     #[test]
