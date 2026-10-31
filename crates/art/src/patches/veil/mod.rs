@@ -1,21 +1,21 @@
-//! Veil: something on the far side of a gossamer sheet reaches through towards
-//! us. Made for the 32x32 Art Frame, whose diffuser is already a veil: the
-//! sheet here is the panel's own front, and what it shows is only where the
-//! fabric is pushed - the flat sheet is black.
+//! Veil: something living inside the frame comes up to the glass. Made for
+//! the 32x32 Art Frame, whose white diffuser is frosted glass: what is
+//! behind it is seen only by its own light, sharp where it touches and soft
+//! and faint further back (`glass.rs`).
 //!
-//! What presses is a real hand (`hand.rs`, a skinned model posed by bending
+//! What comes is a real hand (`hand.rs`, a skinned model posed by bending
 //! its fingers), always the whole hand, like something living in the box:
-//! held up to stop against the cloth, or reaching fingertips first, its
+//! held up to stop against the glass, or reaching fingertips first, its
 //! fingers working all the while - as a captured take of a real hand moved
-//! them (`clips.rs`), or by a few waves of their own. The sheet (`cloth.rs`) is a membrane relaxed over it every frame. This file is
-//! the choreography - one visit after another, each planned from the seed and
-//! its number as a path of gestures picked at random - and the lighting.
+//! them (`clips.rs`), or by a few waves of their own. This file is the
+//! choreography - one visit after another, each planned from the seed and
+//! its number as a path of gestures picked at random - and the light.
 //!
 //! Everything is composed in the centre square, x in -1..1 of the frame's
 //! -2..2, which is what the Art Frame shows of the 64x32 frame.
 
 mod clips;
-mod cloth;
+mod glass;
 mod hand;
 
 use crate::color::{oklch, Rgb};
@@ -24,14 +24,14 @@ use crate::frame::{self, Frame};
 use crate::palette::Palette;
 use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
-use cloth::Cloth;
+use glass::Glass;
 use hand::{Model, Pose, Rigid};
 use std::f32::consts::{PI, TAU};
 
 pub const DEF: PatchDef = PatchDef {
     id: "veil",
     name: "Veil",
-    blurb: "A hand behind a gossamer veil presses through towards us: a posed 3D hand, cloth relaxed over it, lit on black. Made for the 32x32 Art Frame.",
+    blurb: "A hand inside the frame comes up to the frosted glass and draws back: a posed 3D hand, its fingers moving as a captured hand moved. Made for the 32x32 Art Frame.",
     params: PARAMS,
     make,
     // The seed picks where each visit presses, from which side, how far, in
@@ -43,10 +43,7 @@ const PARAMS: &[ParamSpec] = &[
     param("hue", "Hue", 0.0, 360.0, 1.0, 220.0),
     param("tint", "Tint", 0.0, 0.12, 0.001, 0.015),
     param("glow", "The hand's light through the veil", 0.0, 2.0, 0.01, 1.0),
-    param("sheen", "Light on the cloth", 0.0, 2.0, 0.01, 0.5),
-    param("pallor", "Pallor where the cloth lies on the hand", 0.0, 2.0, 0.01, 1.0),
     param("size", "Finger size", 0.05, 0.35, 0.005, 0.11),
-    param("stiff", "Cloth stiffness", 0.0, 0.4, 0.001, 0.08),
     param("pause", "Stillness between visits (s)", 0.0, 60.0, 1.0, 12.0),
     param("steps", "Palette steps", 2.0, 200.0, 1.0, 120.0),
     param("dither", "Palette dither", 0.0, 1.0, 0.01, 0.8),
@@ -58,18 +55,18 @@ const PARAMS: &[ParamSpec] = &[
 ];
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    Box::new(Veil { seed: Rng::new(seed).f32(), cloth: Cloth::new(), skinned: Vec::new(), visit: None, body: None })
+    Box::new(Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, body: None })
 }
 
 /// What comes through.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
     /// An open hand held up, palm to us, fingers arched forward: they meet
-    /// the cloth first and are pushed flat as the palm comes on, then it backs
+    /// the glass first and are pushed flat as the palm comes on, then it backs
     /// off.
     Stop,
     /// The fingers pointing at us: as it pushes in, each bends just enough
-    /// that its tip stops at the cloth, until all five rest there together.
+    /// that its tip stops at the glass, until all five rest there together.
     Tips,
 }
 
@@ -78,19 +75,20 @@ enum Kind {
 /// proportion and its neighbour stays a finger's width away.
 const DRAWN_AT: f32 = 0.19;
 
-/// Where the tip is behind the sheet at rest; the sheet is z = 0, we are +z.
+/// Where the tip is at rest, far back in the box; we are +z, and the glass
+/// is a visit's `wall` in front of z = 0.
 const AWAY: f32 = -0.4;
 
-/// After a visit, this long for the sheet to stop shivering before `pause`.
-const REST: f32 = 2.0;
+/// After a visit, this long in the dark before `pause`.
+const REST: f32 = 0.5;
 
 /// How far from the centre anything presses: the Art Frame shows x and y in
-/// -1..1, and the cloth tents a little way out from the tip.
+/// -1..1, and the glow spreads a little way out from the hand.
 const BOUND: f32 = 0.6;
 
 /// The furthest the forearm may swing off pointing straight back into the
 /// box. The model ends at the wrist; turned any more towards us, the cut end
-/// shows through the cloth and the hand is plainly not on an arm.
+/// shows through the glass and the hand is plainly not on an arm.
 const ARM: f32 = 0.95;
 
 fn smooth(x: f32) -> f32 {
@@ -129,8 +127,7 @@ struct Visit {
     phase: f32,
     /// A hand's size, as a multiple of life size.
     span: f32,
-    /// How far the cloth will stretch towards us before it stops the hand
-    /// (`Stop`, `Tips`), at `DRAWN_AT`.
+    /// Where the glass is, which stops the hand, at `DRAWN_AT`.
     wall: f32,
     /// How far a `Stop` hand tips its fingers towards us off the sheet's
     /// plane, so its wrist and the arm behind it run back into the dark.
@@ -216,7 +213,7 @@ impl Visit {
         v
     }
 
-    /// A hand that comes up against the cloth and is stopped there: in until
+    /// A hand that comes up against the glass and is stopped there: in until
     /// it is `over` past the wall, a hold, perhaps a second press, and back.
     /// Its z is the hand's own push; the wall decides what the fingers do.
     fn press(rng: &mut Rng, start: f32, wall: f32, over: f32) -> Path {
@@ -347,7 +344,7 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
 
 struct Veil {
     seed: f32,
-    cloth: Cloth,
+    glass: Glass,
     skinned: Vec<[f32; 3]>,
     /// The visit under way: its number, when it began, and its plan. The next
     /// begins as soon as this one has settled and `pause` has passed.
@@ -358,9 +355,9 @@ struct Veil {
 }
 
 /// The hand's own motion: where it is and how fast it moves, and the same for
-/// each digit's bend. Each follows what the choreography and the cloth ask of
-/// it through a spring, so the hand eases in, overshoots a hair and settles,
-/// and the fingers trail it and re-arch a beat after the palm lets go.
+/// each digit's bend. Each follows what the choreography and the glass ask of
+/// it through a critically damped spring, so the hand has weight - it eases
+/// in and out - but never bounces, and the fingers trail it a beat behind.
 struct Body {
     at: [f32; 3],
     speed: [f32; 3],
@@ -371,8 +368,8 @@ struct Body {
 }
 
 /// A spring's stiffness (as an angular frequency) and damping ratio.
-const HAND_SPRING: (f32, f32) = (6.0, 0.8);
-const FINGER_SPRING: (f32, f32) = (9.0, 0.65);
+const HAND_SPRING: (f32, f32) = (6.0, 1.0);
+const FINGER_SPRING: (f32, f32) = (9.0, 1.0);
 
 /// The fingers working on their own, like the legs of something feeling its
 /// way out of a shell: a ripple from the little finger to the index while
@@ -418,7 +415,8 @@ impl Patch for Veil {
         let model = Model::get();
         let dt = (ctx.dt as f32).clamp(0.0, 0.1);
 
-        self.cloth.clear_under();
+        self.glass.clear();
+        let glass_at = moment.as_ref().map_or(0.0, |m| m.wall * size / DRAWN_AT);
         if moment.is_none() {
             self.body = None;
         }
@@ -456,7 +454,7 @@ impl Patch for Veil {
 
             let (mut pose, place) = arrange(model, m, size);
             // The fingers follow their bends through springs, but never into
-            // the cloth: the wall's answer is a bound, not a suggestion.
+            // the glass: the wall's answer is a bound, not a suggestion.
             for d in 0..5 {
                 let target = pose.curl[d];
                 if body.curl[d].is_nan() {
@@ -477,76 +475,41 @@ impl Patch for Veil {
             model.skin(&bones, &place, &mut self.skinned);
             for tri in &model.triangles {
                 let [a, b, c] = tri.map(|i| self.skinned[i as usize]);
-                self.cloth.press(a, b, c);
+                self.glass.press(a, b, c);
             }
         }
-        self.cloth.step(dt, ctx.get("stiff"));
-        self.cloth.shine();
+        self.glass.shine(glass_at);
 
         let colour = oklch(0.97, ctx.get("tint"), ctx.get("hue"));
-        let pallor = ctx.get("pallor");
-        let cloth = &self.cloth;
-        let (glow_w, sheen_w) = (ctx.get("glow"), ctx.get("sheen"));
-        let height = |x: f32, y: f32| {
-            let (h, touch, _) = cloth.at(x, y);
-            (h, touch)
-        };
+        let glow = ctx.get("glow");
+        let glass = &self.glass;
         // The Art Frame's 32 LEDs span 2.16 units; the frame is 64 wide.
         let unit = 2.16 / frame::H as f32;
-        let key_l = norm([-0.55, 0.78, 0.3]);
-        let rim_l = norm([0.6, -0.75, 0.05]);
-        let ss = ctx.get("samples") as usize;
-        let lit = Frame::supersample(ss, |px, py| {
+        let lit = Frame::supersample(ctx.get("samples") as usize, |px, py| {
             let x = (px - frame::W as f32 / 2.0) * unit;
             let y = (frame::H as f32 / 2.0 - py) * unit;
             if x.abs() > 1.15 {
                 return Rgb::BLACK;
             }
-            let e = 0.012;
-            let (h, touch) = height(x, y);
-            let gx = (height(x + e, y).0 - height(x - e, y).0) / (2.0 * e);
-            let gy = (height(x, y + e).0 - height(x, y - e).0) / (2.0 * e);
-            let n = norm([-gx, -gy, 1.0]);
-            let slope = (gx * gx + gy * gy).sqrt();
-            // Only what turns towards the light more than the flat sheet does
-            // is lit, so the sheet is black and the form has a lit side and a
-            // dark one.
-            let key = crate::color::smoothstep(0.0, 0.85, (dot(n, key_l) - key_l[2]) / (1.0 - key_l[2]));
-            let half = norm([key_l[0], key_l[1], key_l[2] + 1.0]);
-            let gleam = dot(n, half).max(0.0).powf(18.0) * crate::color::smoothstep(0.05, 0.3, slope);
-            let rim = crate::color::smoothstep(0.15, 0.9, (dot(n, rim_l) - rim_l[2]) / (1.0 - rim_l[2]));
-            // Creases: where the sheet is cupped it sees less of anything.
-            let d = 0.02;
-            let lap = height(x + d, y).0 + height(x - d, y).0 + height(x, y + d).0 + height(x, y - d).0 - 4.0 * h;
-            let open = (1.0 - lap.max(0.0) * 40.0).clamp(0.35, 1.0);
-            // Where it lies on the hand the cloth is thinnest, and a little of
-            // the hand's pallor comes through.
-            let glow = cloth.at(x, y).2;
-            let light = glow * glow_w
-                + (key * 0.8 + gleam * 0.45 + rim * 0.12) * open * sheen_w
-                + crate::color::smoothstep(0.3, 1.0, touch) * 0.3 * pallor;
+            let light = glass.at(x, y) * glow;
             Rgb { r: colour.r * light, g: colour.g * light, b: colour.b * light }
         });
         // As many steps as the panel can show, down to just above black, so
-        // the light falls off the cloth in a gradient, not a step.
+        // the light falls off in a gradient, not a step.
         Palette::ramps(&[ctx.get("hue")], ctx.get("steps") as usize, (0.1, 0.96), ctx.get("tint")).map(&lit, Dither::BlueNoise, ctx.get("dither"))
     }
-}
-
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn norm(a: [f32; 3]) -> [f32; 3] {
-    let l = dot(a, a).sqrt();
-    [a[0] / l, a[1] / l, a[2] / l]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Longest a visit should run, and time left after it for the cloth.
+    fn norm(a: [f32; 3]) -> [f32; 3] {
+        let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+        [a[0] / l, a[1] / l, a[2] / l]
+    }
+
+    /// Longest a visit should run, and time left after it.
     const VISIT: f32 = 30.0;
     const SETTLE: f32 = 6.0;
 
