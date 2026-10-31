@@ -29,10 +29,10 @@ pub const COUNT: usize = TAKES.len();
 
 /// Frames a second, after resampling.
 const RATE: f32 = 30.0;
-/// The smoothing, a gaussian this many frames wide (one sigma): enough to
-/// still the tracker's millimetre jitter, not so much that a finger's flick
-/// goes soft.
-const SIGMA: f32 = 1.6;
+/// The smoothing, a gaussian this many frames wide (one sigma, 130 ms):
+/// the tracker's millimetre jitter, played slowly, reads as a tremble, so
+/// only the hand's deliberate motion is kept.
+const SIGMA: f32 = 4.0;
 
 pub struct Clip {
     frames: Vec<[V3; 21]>,

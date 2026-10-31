@@ -53,6 +53,8 @@ const PARAMS: &[ParamSpec] = &[
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 4.0),
     param("mocap", "Fingers move as captured (0: by their own waves)", 0.0, 1.0, 1.0, 1.0),
     param("take", "Captured take (0: a different one each visit)", 0.0, clips::COUNT as f32, 1.0, 0.0),
+    param("pace", "How fast a take plays", 0.1, 1.5, 0.01, 0.4),
+    param("ease", "How slowly the fingers follow a take (s)", 0.0, 1.0, 0.01, 0.2),
 ];
 
 fn make(seed: u64) -> Box<dyn Patch> {
@@ -133,7 +135,8 @@ struct Visit {
     /// How far a `Stop` hand tips its fingers towards us off the sheet's
     /// plane, so its wrist and the arm behind it run back into the dark.
     pitch: f32,
-    /// The captured take its fingers play, how fast, and from where in it.
+    /// The captured take its fingers play, how fast (times `pace`), and from
+    /// where in it.
     take: usize,
     rate: f32,
     from: f32,
@@ -198,7 +201,7 @@ impl Visit {
             wall: rng.range(0.22, 0.3),
             pitch: PI / 2.0 - ARM + rng.range(0.05, 0.25),
             take: (rng.u64() % clips::COUNT as u64) as usize,
-            rate: rng.range(0.8, 1.1),
+            rate: rng.range(0.85, 1.15),
             from: rng.range(0.0, 20.0),
         };
         let path = match kind {
@@ -363,6 +366,8 @@ struct Body {
     speed: [f32; 3],
     curl: [f32; 5],
     curling: [f32; 5],
+    /// Where the fingers have got to in the captured take they follow.
+    take: Option<[[f32; 3]; 21]>,
 }
 
 /// A spring's stiffness (as an angular frequency) and damping ratio.
@@ -426,7 +431,7 @@ impl Patch for Veil {
                 0.004 * (t * 6.1 + 5.0 * visit.phase).sin(),
             ];
             let goal = [m.tip.0 + tremor[0], m.tip.1 + tremor[1], m.tip.2 + tremor[2]];
-            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], curl: [f32::NAN; 5], curling: [0.0; 5] });
+            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], curl: [f32::NAN; 5], curling: [0.0; 5], take: None });
             for k in 0..3 {
                 spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
             }
@@ -435,7 +440,16 @@ impl Patch for Veil {
                 let all = clips::all();
                 let pick = ctx.get("take") as usize;
                 let take = if pick >= 1 { &all[(pick - 1).min(all.len() - 1)] } else { &all[visit.take] };
-                m.captured = Some(model.captured(&take.at((t - start) * visit.rate + visit.from)));
+                let want = take.at((t - start) * visit.rate * ctx.get("pace") + visit.from);
+                // The fingers ease after the take rather than snapping to it.
+                let k = 1.0 - (-dt / ctx.get("ease").max(1e-3)).exp();
+                let held = body.take.get_or_insert(want);
+                for (h, w) in held.iter_mut().zip(&want) {
+                    for c in 0..3 {
+                        h[c] += (w[c] - h[c]) * k;
+                    }
+                }
+                m.captured = Some(model.captured(held));
             } else {
                 m.feel = feel(t, visit.phase, body.speed[2]);
             }
