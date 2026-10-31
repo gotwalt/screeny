@@ -7,8 +7,8 @@
 //! its fingers), always the whole hand, like something living in the box:
 //! held up palm first (fingertips first was tried: at 32 LEDs it is a
 //! lump), its
-//! fingers working all the while - as a captured take of a real hand moved
-//! them (`clips.rs`), or by a few waves of their own. This file is the
+//! fingers working all the while as a captured take of a real hand moved
+//! them (`clips.rs`). This file is the
 //! choreography - one visit after another, each planned from the seed and
 //! its number as a path of gestures picked at random - and the light.
 //!
@@ -23,7 +23,7 @@ use crate::color::{oklch, Rgb};
 use crate::dither::Dither;
 use crate::frame::{self, Frame};
 use crate::palette::Palette;
-use crate::patch::{param, toggle, Ctx, ParamSpec, Patch, PatchDef};
+use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
 use glass::Glass;
 use hand::{Model, Pose, Rigid};
@@ -51,7 +51,6 @@ const PARAMS: &[ParamSpec] = &[
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 4.0),
     param("speed", "Speed of the whole visit (1: the fingers as fast as they were captured)", 0.25, 1.0, 0.01, 0.6),
     param("depth", "How far behind the glass the hand stays clear", 0.1, 4.0, 0.01, 1.0),
-    toggle("mocap", "Fingers from the captured takes (off: a ripple of their own)", true),
     param("take", "Captured take (0: a different one each visit)", 0.0, clips::COUNT as f32, 1.0, 0.0),
     param("ease", "How slowly the fingers follow a take (s)", 0.0, 1.0, 0.01, 0.2),
 ];
@@ -244,7 +243,6 @@ impl Visit {
             span: self.span,
             near: self.near,
             pitch: self.pitch,
-            feel: [0.0; 5],
             captured: None,
         })
     }
@@ -258,9 +256,7 @@ struct Moment {
     span: f32,
     near: f32,
     pitch: f32,
-    /// What the fingers are doing on their own, added to the pose's bends.
-    feel: [f32; 5],
-    /// Or how a captured take has them, instead of the pose's own bends.
+    /// How the captured take has the fingers; until then, the hand at rest.
     captured: Option<hand::Captured>,
 }
 
@@ -276,14 +272,9 @@ fn arrange(model: &Model, m: &Moment, size: f32) -> (Pose, Rigid) {
     let k = size / DRAWN_AT;
     let scale = LIFE * size * m.span;
     // A captured take bends the fingers instead of the pose.
-    let feeling = |mut p: Pose| {
-        if let Some(c) = m.captured {
-            return Pose { curl: [0.0; 5], spread: 0.0, captured: Some(c) };
-        }
-        for d in 0..5 {
-            p.curl[d] = (p.curl[d] + m.feel[d]).clamp(-0.1, 1.0);
-        }
-        p
+    let feeling = |p: Pose| match m.captured {
+        Some(c) => Pose { curl: [0.0; 5], spread: 0.0, captured: Some(c) },
+        None => p,
     };
     // The hand is placed by its pose at rest, never by where its moving
     // fingers are, so a finger's bend cannot carry the hand with it; how
@@ -323,8 +314,6 @@ struct Body {
     speed: [f32; 3],
     /// Where the fingers have got to in the captured take they follow.
     take: Option<[[f32; 3]; 21]>,
-    /// Or where they have got to in their own ripple.
-    feel: Option<[f32; 5]>,
     /// How far the hand is moved towards us to bring its nearest point
     /// where the path has it.
     lift: Option<f32>,
@@ -377,25 +366,6 @@ fn unflick(was: &[[f32; 3]; 21], now: &mut [[f32; 3]; 21], most: f32) {
     }
 }
 
-/// The fingers working on their own, like the legs of something feeling its
-/// way out of a shell: a ripple from the little finger to the index while
-/// the hand comes towards us, barely a stir while it holds, and all of them
-/// drawn in as it goes back. `closing` is how fast it comes (z a second).
-fn feel(t: f32, phase: f32, closing: f32) -> [f32; 5] {
-    let coming = smooth(closing / 0.15);
-    let going = smooth(-closing / 0.25);
-    let stir = 0.05 + 0.25 * coming;
-    let mut out = [0.0; 5];
-    for (d, f) in out.iter_mut().enumerate() {
-        let d_ = d as f32;
-        let w = (TAU * 0.85 * t + d_ * 0.9 + phase).sin() + 0.5 * (TAU * 1.45 * t + 2.3 * d_ + 3.0 * phase).sin();
-        // The thumb moves less.
-        let a = w / 1.5 * stir * if d == 0 { 0.4 } else { 1.0 };
-        *f = a + 0.35 * going;
-    }
-    out
-}
-
 /// One step of a damped spring pulling `x` (moving at `v`) towards `to`.
 fn spring(x: &mut f32, v: &mut f32, to: f32, (w, zeta): (f32, f32), dt: f32) {
     *v += (w * w * (to - *x) - 2.0 * zeta * w * *v) * dt;
@@ -443,38 +413,27 @@ impl Patch for Veil {
                 0.004 * (local * 6.1 + 5.0 * visit.phase).sin(),
             ];
             let goal = [m.tip.0 + tremor[0], m.tip.1 + tremor[1], m.tip.2 + tremor[2]];
-            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], take: None, feel: None, lift: None });
+            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], take: None, lift: None });
             for k in 0..3 {
                 spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
             }
             m.tip = (body.at[0], body.at[1], body.at[2]);
             let k = 1.0 - (-dt / ctx.get("ease").max(1e-3)).exp();
-            if ctx.get("mocap") >= 0.5 {
-                let all = clips::all();
-                let pick = ctx.get("take") as usize;
-                let take = if pick >= 1 { &all[(pick - 1).min(all.len() - 1)] } else { &all[visit.take] };
-                let want = take.at(local * visit.rate + visit.from);
-                // The fingers ease after the take rather than snapping to it,
-                // and no bone of them ever turns faster than `BEND_SPEED`.
-                let held = body.take.get_or_insert(want);
-                let was = *held;
-                for (h, w) in held.iter_mut().zip(&want) {
-                    for c in 0..3 {
-                        h[c] += (w[c] - h[c]) * k;
-                    }
+            let all = clips::all();
+            let pick = ctx.get("take") as usize;
+            let take = if pick >= 1 { &all[(pick - 1).min(all.len() - 1)] } else { &all[visit.take] };
+            let want = take.at(local * visit.rate + visit.from);
+            // The fingers ease after the take rather than snapping to it,
+            // and no bone of them ever turns faster than `BEND_SPEED`.
+            let held = body.take.get_or_insert(want);
+            let was = *held;
+            for (h, w) in held.iter_mut().zip(&want) {
+                for c in 0..3 {
+                    h[c] += (w[c] - h[c]) * k;
                 }
-                unflick(&was, held, BEND_SPEED * pace * dt);
-                m.captured = Some(model.captured(held));
-            } else {
-                // Eased the same way, so drawing in as it snatches back
-                // takes a moment however fast the visit runs.
-                let want = feel(local, visit.phase, body.speed[2] / pace.max(0.01));
-                let held = body.feel.get_or_insert(want);
-                for (h, w) in held.iter_mut().zip(&want) {
-                    *h += (w - *h) * k;
-                }
-                m.feel = *held;
             }
+            unflick(&was, held, BEND_SPEED * pace * dt);
+            m.captured = Some(model.captured(held));
 
             let (pose, place) = arrange(model, m, size);
             let bones = model.bones(&pose);
@@ -559,7 +518,6 @@ mod tests {
             let v = Visit::plan(slot, 0.61);
             for i in 0..60 {
                 let Some(mut m) = v.moment(i as f32 * 0.5) else { continue };
-                m.feel = feel(i as f32 * 0.5, v.phase, 0.2);
                 if i % 2 == 0 {
                     m.captured = Some(model.captured(&clips::all()[slot as usize % clips::COUNT].at(i as f32 * 0.5)));
                 }
@@ -581,9 +539,8 @@ mod tests {
         let mut params = crate::patch::Params::defaults(PARAMS);
         params.set(PARAMS, "pause", 0.0);
         params.set(PARAMS, "samples", 1.0);
-        for (seed, speed, mocap) in [(3, 1.0, 1.0), (62, 1.0, 1.0), (62, 0.6, 1.0), (62, 0.25, 1.0), (101, 0.25, 1.0), (3, 1.0, 0.0), (7, 0.25, 0.0)] {
+        for (seed, speed) in [(3, 1.0), (62, 1.0), (7, 0.6), (62, 0.25), (101, 0.25)] {
             params.set(PARAMS, "speed", speed);
-            params.set(PARAMS, "mocap", mocap);
             let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None };
             let mut last: Option<Vec<[f32; 3]>> = None;
             let mut worst = (0.0f32, 0.0);
@@ -599,7 +556,7 @@ mod tests {
                 }
                 last = here;
             }
-            let what = format!("seed {seed} at speed {speed}{}", if mocap > 0.5 { "" } else { " without takes" });
+            let what = format!("seed {seed} at speed {speed}");
             assert!(worst.0 < 0.05 * speed / 0.25, "{what}: the hand's shape moved {:.3} units in a frame at {:.1} s", worst.0, worst.1);
         }
     }
