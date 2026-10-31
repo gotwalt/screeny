@@ -49,7 +49,7 @@ const PARAMS: &[ParamSpec] = &[
     param("steps", "Palette steps", 2.0, 200.0, 1.0, 120.0),
     param("dither", "Palette dither", 0.0, 1.0, 0.01, 0.8),
     param("samples", "Samples per axis", 1.0, 8.0, 1.0, 4.0),
-    param("pace", "Pace of the whole visit: the hand's moves and its fingers", 0.02, 1.5, 0.01, 0.5),
+    param("speed", "Speed of the whole visit (1: the fingers as fast as they were captured)", 0.25, 1.0, 0.01, 0.6),
     param("depth", "How far behind the glass the hand stays clear", 0.1, 4.0, 0.01, 1.0),
     toggle("mocap", "Fingers from the captured takes (off: a ripple of their own)", true),
     param("take", "Captured take (0: a different one each visit)", 0.0, clips::COUNT as f32, 1.0, 0.0),
@@ -125,8 +125,8 @@ struct Visit {
     /// How far a `Stop` hand tips its fingers towards us off the sheet's
     /// plane, so its wrist and the arm behind it run back into the dark.
     pitch: f32,
-    /// The captured take its fingers play, how fast (times `TAKE_RATE`), and
-    /// from where in it.
+    /// The captured take its fingers play, how fast (never faster than it
+    /// was captured), and from where in it.
     take: usize,
     rate: f32,
     from: f32,
@@ -189,7 +189,7 @@ impl Visit {
             // Nearly flat to the glass, as a hand held up to it.
             pitch: PI / 2.0 - ARM + rng.range(0.03, 0.25),
             take: (rng.u64() % clips::COUNT as u64) as usize,
-            rate: rng.range(0.85, 1.15),
+            rate: rng.range(0.85, 1.0),
             from: rng.range(0.0, 20.0),
         };
         v.keys = Self::approach(&mut rng, start, v.near).keys;
@@ -308,7 +308,7 @@ struct Veil {
     /// The visit under way: its number, when it began, and its plan. The next
     /// begins as soon as this one has settled and `pause` has passed.
     visit: Option<(u64, f32, Visit)>,
-    /// How far into the visit it is, in its own time: seconds at `pace`.
+    /// How far into the visit it is, in its own time: seconds at `speed`.
     clock: f32,
     /// The hand as a body with weight, following its path; `None` between
     /// visits.
@@ -323,6 +323,8 @@ struct Body {
     speed: [f32; 3],
     /// Where the fingers have got to in the captured take they follow.
     take: Option<[[f32; 3]; 21]>,
+    /// Or where they have got to in their own ripple.
+    feel: Option<[f32; 5]>,
     /// How far the hand is moved towards us to bring its nearest point
     /// where the path has it.
     lift: Option<f32>,
@@ -331,18 +333,17 @@ struct Body {
 /// A spring's stiffness (as an angular frequency) and damping ratio.
 const HAND_SPRING: (f32, f32) = (6.0, 1.0);
 
-/// How fast a take plays against the visit's own clock: at the default
-/// `pace`, a quarter of the speed it was recorded at.
-const TAKE_RATE: f32 = 0.5;
-
 /// How slowly the hand follows its nearest point (s): slower than a
 /// finger moves, so the hand never twitches with one.
 const LIFT_EASE: f32 = 0.8;
 
-/// The fastest any bone of a finger turns, radians a second. A cap on how
+/// The fastest any bone of a finger turns, radians a second of the visit's
+/// own clock (so a quarter of this at the slowest `speed`): hardly ever
+/// slower than the captured hand, but a check on the moments the model
+/// sweeps a whole finger where the hand only moved a knuckle. A cap on how
 /// fast joints move is not enough: a fingertip's last bone is short, so a
 /// little drift at either end swings it a long way.
-const BEND_SPEED: f32 = 1.2;
+const BEND_SPEED: f32 = 3.0;
 
 /// Each finger's bones, as MediaPipe numbers its joints, root to tip.
 const FINGER_BONES: [[usize; 4]; 5] = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
@@ -405,9 +406,9 @@ impl Patch for Veil {
     fn render(&mut self, ctx: &Ctx) -> Frame {
         let t = ctx.t as f32;
         let dt = (ctx.dt as f32).clamp(0.0, 0.1);
-        // Everything in a visit runs on its own clock, at `pace`; the pause
+        // Everything in a visit runs on its own clock, at `speed`; the pause
         // after it is in real seconds.
-        let pace = ctx.get("pace");
+        let pace = ctx.get("speed");
         self.clock += dt * pace;
         let next = match &self.visit {
             // Time went backwards (a restart): begin again.
@@ -442,19 +443,19 @@ impl Patch for Veil {
                 0.004 * (local * 6.1 + 5.0 * visit.phase).sin(),
             ];
             let goal = [m.tip.0 + tremor[0], m.tip.1 + tremor[1], m.tip.2 + tremor[2]];
-            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], take: None, lift: None });
+            let body = self.body.get_or_insert(Body { at: goal, speed: [0.0; 3], take: None, feel: None, lift: None });
             for k in 0..3 {
                 spring(&mut body.at[k], &mut body.speed[k], goal[k], HAND_SPRING, dt);
             }
             m.tip = (body.at[0], body.at[1], body.at[2]);
+            let k = 1.0 - (-dt / ctx.get("ease").max(1e-3)).exp();
             if ctx.get("mocap") >= 0.5 {
                 let all = clips::all();
                 let pick = ctx.get("take") as usize;
                 let take = if pick >= 1 { &all[(pick - 1).min(all.len() - 1)] } else { &all[visit.take] };
-                let want = take.at(local * visit.rate * TAKE_RATE + visit.from);
+                let want = take.at(local * visit.rate + visit.from);
                 // The fingers ease after the take rather than snapping to it,
                 // and no bone of them ever turns faster than `BEND_SPEED`.
-                let k = 1.0 - (-dt / ctx.get("ease").max(1e-3)).exp();
                 let held = body.take.get_or_insert(want);
                 let was = *held;
                 for (h, w) in held.iter_mut().zip(&want) {
@@ -462,10 +463,17 @@ impl Patch for Veil {
                         h[c] += (w[c] - h[c]) * k;
                     }
                 }
-                unflick(&was, held, BEND_SPEED * dt);
+                unflick(&was, held, BEND_SPEED * pace * dt);
                 m.captured = Some(model.captured(held));
             } else {
-                m.feel = feel(local, visit.phase, body.speed[2] / pace.max(0.01));
+                // Eased the same way, so drawing in as it snatches back
+                // takes a moment however fast the visit runs.
+                let want = feel(local, visit.phase, body.speed[2] / pace.max(0.01));
+                let held = body.feel.get_or_insert(want);
+                for (h, w) in held.iter_mut().zip(&want) {
+                    *h += (w - *h) * k;
+                }
+                m.feel = *held;
             }
 
             let (pose, place) = arrange(model, m, size);
@@ -564,15 +572,18 @@ mod tests {
         }
     }
 
-    /// Played for real, frame by frame, the hand never changes shape
-    /// suddenly: against its own centre (so a snatch back does not count),
-    /// no point of it moves more than a little in a frame.
+    /// The hand's shape never changes suddenly: against its own centre (so
+    /// a snatch back does not count), no point of it moves more than a
+    /// little in a frame - a little more the faster it plays, up to as fast
+    /// as the captured fingers really moved.
     #[test]
     fn the_hand_never_jumps() {
         let mut params = crate::patch::Params::defaults(PARAMS);
         params.set(PARAMS, "pause", 0.0);
         params.set(PARAMS, "samples", 1.0);
-        for seed in [3, 7, 62, 101] {
+        for (seed, speed, mocap) in [(3, 1.0, 1.0), (62, 1.0, 1.0), (62, 0.6, 1.0), (62, 0.25, 1.0), (101, 0.25, 1.0), (3, 1.0, 0.0), (7, 0.25, 0.0)] {
+            params.set(PARAMS, "speed", speed);
+            params.set(PARAMS, "mocap", mocap);
             let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None };
             let mut last: Option<Vec<[f32; 3]>> = None;
             let mut worst = (0.0f32, 0.0);
@@ -581,15 +592,20 @@ mod tests {
                 veil.render(&Ctx { t, dt: 1.0 / 30.0, now: 0.0, params: &params });
                 let here = if veil.body.is_some() && !veil.skinned.is_empty() { Some(centred(&veil.skinned)) } else { None };
                 if let (Some(a), Some(b)) = (&last, &here) {
-                    let moved = a.iter().zip(b).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).fold(0.0, f32::max);
+                    let moved = a.iter().zip(b).map(|(p, q)| dist(p, q)).fold(0.0, f32::max);
                     if moved > worst.0 {
                         worst = (moved, t);
                     }
                 }
                 last = here;
             }
-            assert!(worst.0 < 0.05, "seed {seed}: the hand's shape moved {:.3} units in a frame at {:.1} s", worst.0, worst.1);
+            let what = format!("seed {seed} at speed {speed}{}", if mocap > 0.5 { "" } else { " without takes" });
+            assert!(worst.0 < 0.05 * speed / 0.25, "{what}: the hand's shape moved {:.3} units in a frame at {:.1} s", worst.0, worst.1);
         }
+    }
+
+    fn dist(p: &[f32; 3], q: &[f32; 3]) -> f32 {
+        ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
     }
 
     fn centred(v: &[[f32; 3]]) -> Vec<[f32; 3]> {
