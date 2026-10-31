@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hand Capture</title>
+<!--
+  Records hand motion from a webcam for veil (crates/art/src/patches/veil):
+  MediaPipe's hand landmarker finds 21 joints a frame, in metres about the
+  hand's centre, and each take is saved as a small JSON clip. Serve it from
+  localhost (the camera needs a secure origin):
+      python3 -m http.server --bind 127.0.0.1 8790 -d tools/handcap
+  then open http://127.0.0.1:8790/.
+-->
+<style>
+  :root {
+    --bg: #111214; --panel: #1b1d21; --line: #2c2f35; --text: #e6e6e3;
+    --dim: #8b8f97; --accent: #9fc3ff; --rec: #ff5a4f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 -apple-system, system-ui, sans-serif; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  p { margin: 0 0 8px; color: var(--dim); }
+  .stage { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 16 / 9; }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); }
+  .count { position: absolute; inset: 0; display: grid; place-items: center; font-size: 140px; font-weight: 700; color: #fff; text-shadow: 0 0 30px #000; pointer-events: none; }
+  .badge { position: absolute; top: 12px; left: 12px; padding: 4px 10px; border-radius: 99px; background: #000a; font-size: 13px; }
+  .badge.rec { background: var(--rec); }
+  .views { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .views figure { margin: 0; background: var(--panel); border-radius: 8px; padding: 8px; }
+  .views canvas { width: 100%; aspect-ratio: 1; display: block; }
+  figcaption { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  aside { display: flex; flex-direction: column; gap: 12px; }
+  .box { background: var(--panel); border-radius: 8px; padding: 12px; }
+  button { font: inherit; color: var(--text); background: #2a2d33; border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:hover { background: #33373e; }
+  button.big { width: 100%; padding: 12px; font-size: 16px; font-weight: 600; }
+  button.big.rec { background: var(--rec); border-color: var(--rec); color: #fff; }
+  input[type=text] { font: inherit; width: 100%; background: #0d0e10; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 4px; }
+  .takes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .takes li { display: flex; align-items: center; gap: 6px; background: #0d0e10; border-radius: 6px; padding: 6px 8px; }
+  .takes li span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .takes li small { color: var(--dim); }
+  .takes button { padding: 2px 8px; font-size: 12px; }
+  .status { font-size: 12px; color: var(--dim); }
+  kbd { background: #2a2d33; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <div class="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="badge" id="badge">Starting…</div>
+      <div class="count" id="count"></div>
+    </div>
+    <div class="views">
+      <figure><canvas id="top" width="400" height="400"></canvas><figcaption>From above: camera at the bottom</figcaption></figure>
+      <figure><canvas id="side" width="400" height="400"></canvas><figcaption>From the side: camera on the right</figcaption></figure>
+    </div>
+  </section>
+  <aside>
+    <div class="box">
+      <h1>Hand capture for Veil</h1>
+      <p>Reach towards the camera as if it were the panel. Hold the hand 30–45° off pointing straight at the lens: fingers aimed dead at it hide each other.</p>
+      <p><kbd>Space</kbd> starts a take after a 3 s count, and stops it.</p>
+    </div>
+    <div class="box">
+      <label for="name">Next take's name</label>
+      <input type="text" id="name" value="reach">
+      <div style="height:10px"></div>
+      <button class="big" id="record">Record</button>
+    </div>
+    <div class="box">
+      <label>Saving</label>
+      <button id="folder">Choose a folder…</button>
+      <p class="status" id="where" style="margin-top:6px">Takes download to your Downloads folder until you choose one.</p>
+    </div>
+    <div class="box">
+      <label>Takes</label>
+      <ul class="takes" id="takes"></ul>
+      <p class="status" id="none">None yet.</p>
+    </div>
+  </aside>
+</main>
+
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const LIMIT_S = 60;
+const BONES = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [5, 9], [9, 10], [10, 11], [11, 12],
+  [9, 13], [13, 14], [14, 15], [15, 16],
+  [13, 17], [0, 17], [17, 18], [18, 19], [19, 20],
+];
+
+const $ = (id) => document.getElementById(id);
+const video = $("video"), overlay = $("overlay"), badge = $("badge"), count = $("count");
+const ctx = overlay.getContext("2d");
+
+// The live picture is smoothed (a one-euro filter) so you can judge the hand;
+// takes keep what the tracker saw, to be smoothed when they are read.
+class OneEuro {
+  constructor(minCutoff = 1.2, beta = 0.02) { this.min = minCutoff; this.beta = beta; this.x = null; this.dx = 0; }
+  static alpha(cutoff, dt) { const r = 2 * Math.PI * cutoff * dt; return r / (r + 1); }
+  step(x, dt) {
+    if (this.x === null) { this.x = x; return x; }
+    const dx = (x - this.x) / dt;
+    this.dx += OneEuro.alpha(1, dt) * (dx - this.dx);
+    const cutoff = this.min + this.beta * Math.abs(this.dx);
+    this.x += OneEuro.alpha(cutoff, dt) * (x - this.x);
+    return this.x;
+  }
+}
+const filters = Array.from({ length: 63 }, () => new OneEuro());
+
+let landmarker, folder = null, take = null, countdown = null, lastT = null;
+const takes = [];
+
+async function start() {
+  badge.textContent = "Loading the hand tracker…";
+  const fileset = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  landmarker = await HandLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      delegate: "GPU",
+    },
+    runningMode: "VIDEO",
+    numHands: 1,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+  badge.textContent = "Asking for the camera…";
+  video.srcObject = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } },
+    audio: false,
+  });
+  await video.play();
+  overlay.width = video.videoWidth;
+  overlay.height = video.videoHeight;
+  badge.textContent = "No hand";
+  video.requestVideoFrameCallback(frame);
+}
+
+function frame(now, meta) {
+  const t = meta.mediaTime * 1000;
+  const r = landmarker.detectForVideo(video, now);
+  const found = r.landmarks.length > 0;
+  const dt = lastT === null ? 1 / 30 : Math.max(1e-3, (t - lastT) / 1000);
+  lastT = t;
+
+  let world = null, image = null, hand = null;
+  if (found) {
+    image = r.landmarks[0];
+    world = r.worldLandmarks[0].map((p, i) => ({
+      x: filters[3 * i].step(p.x, dt), y: filters[3 * i + 1].step(p.y, dt), z: filters[3 * i + 2].step(p.z, dt),
+    }));
+    // MediaPipe names the hand as if the picture were mirrored, a selfie;
+    // this frame is not, so the real hand is the other one.
+    hand = r.handedness[0][0].categoryName === "Left" ? "Right" : "Left";
+  } else {
+    filters.forEach((f) => (f.x = null));
+  }
+
+  if (take) {
+    const at = Math.round(t - take.t0);
+    take.frames.push(found
+      ? { t: at, world: flat(r.worldLandmarks[0], 1000), image: flat(image, 10000) }
+      : { t: at, lost: true });
+    if (found) take.hands[hand] = (take.hands[hand] || 0) + 1;
+    if (at > LIMIT_S * 1000) stop();
+  }
+
+  draw(image, world);
+  if (take) {
+    badge.className = "badge rec";
+    badge.textContent = `● ${((t - take.t0) / 1000).toFixed(1)} s${found ? "" : "  (hand lost)"}`;
+  } else {
+    badge.className = "badge";
+    badge.textContent = found ? `${hand} hand` : "No hand";
+  }
+  video.requestVideoFrameCallback(frame);
+}
+
+const flat = (pts, k) => pts.flatMap((p) => [Math.round(p.x * k), Math.round(p.y * k), Math.round(p.z * k)]);
+
+function draw(image, world) {
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  for (const id of ["top", "side"]) {
+    const c = $(id).getContext("2d");
+    c.fillStyle = "#0d0e10";
+    c.fillRect(0, 0, 400, 400);
+  }
+  if (!image) return;
+  const W = overlay.width, H = overlay.height;
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = take ? "#ff8a80" : "#9fc3ff";
+  ctx.fillStyle = "#fff";
+  for (const [a, b] of BONES) {
+    ctx.beginPath();
+    ctx.moveTo(image[a].x * W, image[a].y * H);
+    ctx.lineTo(image[b].x * W, image[b].y * H);
+    ctx.stroke();
+  }
+  for (const p of image) {
+    ctx.beginPath();
+    ctx.arc(p.x * W, p.y * H, 5, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  // World landmarks are metres about the hand's centre: x right, y down,
+  // z away from the camera. 1 px = 0.5 mm.
+  const views = { top: (p) => [-p.x, -p.z], side: (p) => [-p.z, p.y] };
+  for (const [id, f] of Object.entries(views)) {
+    const c = $(id).getContext("2d");
+    c.strokeStyle = "#2c2f35";
+    c.lineWidth = 1;
+    c.beginPath(); c.moveTo(200, 0); c.lineTo(200, 400); c.moveTo(0, 200); c.lineTo(400, 200); c.stroke();
+    c.strokeStyle = "#9fc3ff";
+    c.lineWidth = 3;
+    const at = (p) => { const [u, v] = f(p); return [200 + u * 2000, 200 + v * 2000]; };
+    for (const [a, b] of BONES) {
+      c.beginPath();
+      c.moveTo(...at(world[a]));
+      c.lineTo(...at(world[b]));
+      c.stroke();
+    }
+  }
+}
+
+function record() {
+  if (take) return stop();
+  if (countdown) { clearInterval(countdown); countdown = null; count.textContent = ""; return paint(); }
+  let n = 3;
+  count.textContent = n;
+  countdown = setInterval(() => {
+    n -= 1;
+    if (n > 0) { count.textContent = n; return; }
+    clearInterval(countdown);
+    countdown = null;
+    count.textContent = "";
+    take = { t0: lastT ?? 0, frames: [], hands: {}, name: $("name").value.trim() || "take" };
+    paint();
+  }, 1000);
+  paint();
+}
+
+async function stop() {
+  const done = take;
+  take = null;
+  paint();
+  const seen = done.frames.filter((f) => !f.lost).length;
+  if (seen < 5) return;
+  const hand = Object.entries(done.hands).sort((a, b) => b[1] - a[1])[0][0];
+  const n = takes.filter((t) => t.base === done.name).length + 1;
+  const name = `${done.name}-${String(n).padStart(2, "0")}`;
+  const clip = {
+    format: "screeny-hand-clip",
+    version: 1,
+    source: "MediaPipe hand landmarker (tasks-vision 0.10.14, float16 model 1), webcam",
+    recorded: new Date().toISOString(),
+    hand,
+    joints: "mediapipe-21: wrist; thumb cmc mcp ip tip; then index, middle, ring, pinky as mcp pip dip tip",
+    world: "millimetres about the hand's centre: x right, y down, z away from the camera, as the camera sees it (not mirrored)",
+    image: "1/10000 of the frame's width and height from its top left, z on the same scale as x (smaller is nearer)",
+    frame: [video.videoWidth, video.videoHeight],
+    frames: done.frames,
+  };
+  const text = JSON.stringify(clip);
+  const entry = { base: done.name, name, text, seconds: done.frames.at(-1).t / 1000, seen, all: done.frames.length, saved: null };
+  takes.unshift(entry);
+  await save(entry);
+  list();
+}
+
+async function save(entry) {
+  const file = `${entry.name}.json`;
+  if (folder) {
+    try {
+      const h = await folder.getFileHandle(file, { create: true });
+      const w = await h.createWritable();
+      await w.write(entry.text);
+      await w.close();
+      entry.saved = `${folder.name}/${file}`;
+      return;
+    } catch (e) {
+      $("where").textContent = `Could not write to the folder (${e.message}); downloading instead.`;
+    }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([entry.text], { type: "application/json" }));
+  a.download = file;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  entry.saved = `Downloads/${file}`;
+}
+
+function list() {
+  const ul = $("takes");
+  ul.innerHTML = "";
+  $("none").hidden = takes.length > 0;
+  for (const t of takes) {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = t.name;
+    span.title = t.saved || "";
+    const small = document.createElement("small");
+    const lost = Math.round(100 * (1 - t.seen / t.all));
+    small.textContent = `${t.seconds.toFixed(1)} s${lost ? `, ${lost}% lost` : ""}`;
+    const again = document.createElement("button");
+    again.textContent = "Save";
+    again.title = "Save this take again";
+    again.onclick = () => save(t);
+    li.append(span, small, again);
+    ul.append(li);
+  }
+}
+
+function paint() {
+  const b = $("record");
+  b.textContent = take ? "Stop" : countdown ? "Cancel" : "Record";
+  b.className = take ? "big rec" : "big";
+}
+
+$("record").onclick = record;
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && document.activeElement !== $("name")) { e.preventDefault(); record(); }
+});
+$("folder").onclick = async () => {
+  if (!window.showDirectoryPicker) {
+    $("where").textContent = "This browser cannot write to a folder; takes download instead (Chrome can).";
+    return;
+  }
+  try {
+    folder = await window.showDirectoryPicker({ mode: "readwrite", id: "screeny-hand-clips" });
+    $("where").textContent = `Saving to ${folder.name}/`;
+  } catch {}
+};
+
+start().catch((e) => { badge.textContent = `Could not start: ${e.message}`; });
+</script>
+</body>
+</html>
