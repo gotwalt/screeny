@@ -261,7 +261,7 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// when DHCP moves the address without a reboot (card 251, `src/mdns.rs`), and
 /// the panic breadcrumb keeps the message's first line and an exception's
 /// `PC`/`EXCVADDR`, as `last_panic.what` (card 371, `src/panic.rs`).
-pub const FW_VERSION: &str = "0.12.7-clock";
+pub const FW_VERSION: &str = "0.12.8-clock";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -376,6 +376,20 @@ static SLOTS: fb::Slots = fb::Slots::new();
 
 /// Panel refreshes actually pushed, for the measured refresh rate.
 pub static SWAPS: AtomicU32 = AtomicU32::new(0);
+
+/// **A swap and a flash write never overlap** (2026-11-07). In circular mode a
+/// swap makes the DMA *end* at the next frame boundary, and the HUB75 interrupt
+/// on core 1 restarts it on the new buffer. A flash erase parks core 1 for
+/// 40-80 ms, so a swap landing in one leaves the DMA stopped and the panel dark
+/// until the erase is done: the owner saw it as the panel blinking off during
+/// updates. Core 1 sets [`SWAPPING`] for the length of a swap, and does not
+/// start one while [`FLASH_HOLD`] is set; `store::guarded` sets `FLASH_HOLD`,
+/// then waits out any swap already in flight. Both are `SeqCst`, so of two
+/// cores that each set their own flag and read the other's, at least one sees
+/// the other's.
+pub static SWAPPING: AtomicBool = AtomicBool::new(false);
+/// See [`SWAPPING`].
+pub static FLASH_HOLD: AtomicBool = AtomicBool::new(false);
 /// Last sRGB888 -> DMA conversion, in microseconds.
 pub static RENDER_US: AtomicU32 = AtomicU32::new(0);
 /// Maximum since boot, and maximum within the current serial-telemetry period.
@@ -560,9 +574,19 @@ async fn display_task(
         RENDER_US_MAX_PROTO.fetch_max(us, Ordering::Relaxed);
         phase = phase.wrapping_add(1);
 
+        // See [`SWAPPING`]: no swap may be under way when core 1 is parked.
+        loop {
+            SWAPPING.store(true, Ordering::SeqCst);
+            if !FLASH_HOLD.load(Ordering::SeqCst) {
+                break;
+            }
+            SWAPPING.store(false, Ordering::SeqCst);
+            Timer::after(Duration::from_millis(1)).await;
+        }
         let mut xfer = hub75.swap(fb).expect("swap already in flight");
         xfer.wait_for_done().await;
         fb = xfer.wait().expect("hub75 DMA transfer failed");
+        SWAPPING.store(false, Ordering::SeqCst);
         SWAPS.fetch_add(1, Ordering::Relaxed);
     }
 }

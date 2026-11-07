@@ -206,12 +206,23 @@ pub fn note_dirty(bits: u8) {
 /// to protect and masking core 0 for the ~200 us of a 4 KB read would be pure
 /// latency. Wrap erases and programs; leave reads alone.
 pub fn guarded<R>(f: impl FnOnce() -> R) -> R {
-    critical_section::with(|_| {
+    use core::sync::atomic::Ordering::SeqCst;
+    // `crate::SWAPPING`: hold off new swaps, and let one already in flight
+    // finish, which is at most one refresh (about 6.5 ms). Bounded, so that a
+    // display that has stopped cannot stop the flash with it.
+    crate::FLASH_HOLD.store(true, SeqCst);
+    let waited = embassy_time::Instant::now();
+    while crate::SWAPPING.load(SeqCst) && waited.elapsed() < embassy_time::Duration::from_millis(20) {
+        core::hint::spin_loop();
+    }
+    let r = critical_section::with(|_| {
         crate::trace::mark(crate::trace::FLASH, 1);
         let r = f();
         crate::trace::mark(crate::trace::FLASH, 0);
         r
-    })
+    });
+    crate::FLASH_HOLD.store(false, SeqCst);
+    r
 }
 
 // ---------------------------------------------------------------------------

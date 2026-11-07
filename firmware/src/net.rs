@@ -249,6 +249,10 @@ pub async fn frames_task(
     let mut button_was: Option<crate::button::Panel> = None;
     let mut screen_brightness_was = crate::SCREEN_BRIGHTNESS_NONE;
     let mut face: Option<alloc::boxed::Box<crate::clock::Face>> = None;
+    // The updating screen last put up, so it is drawn when it changes and not
+    // on every pass: each publish is a swap on core 1, and swaps during an
+    // upload are what made the panel blink (see `crate::SWAPPING`).
+    let mut ota_drawn: Option<crate::ota::Panel> = None;
 
     loop {
         let mut keep_len = 0usize;
@@ -437,6 +441,9 @@ pub async fn frames_task(
         // An update ending has to redraw once even if nothing else is due:
         // until it does, the panel is still showing the progress bar of an
         // upload that finished.
+        if ota.is_none() {
+            ota_drawn = None;
+        }
         let ota_edge = ota.is_some() != ota_was;
         ota_was = ota.is_some();
         // The clock moves hands, not a status sweep: every pass of this loop
@@ -467,7 +474,12 @@ pub async fn frames_task(
                 // took the claim - so core 1 sleeps between refreshes and the
                 // 50 ms stalls around each sector erase cost nothing.
                 portal_at_ms = now_ms;
-                crate::provision::render_updating(what, &mut producer.back().px);
+                if ota_drawn == Some(what) {
+                    drew = false;
+                } else {
+                    ota_drawn = Some(what);
+                    crate::provision::render_updating(what, &mut producer.back().px);
+                }
             } else if let Some(what) = button {
                 // Card 230, drawn by `crates/provision` like every other
                 // screen that is not a streamed frame - so the simulator shows
