@@ -407,3 +407,37 @@ pub fn seq_of(packet: &[u8]) -> u32 {
 pub fn preview_of(packet: &[u8]) -> Vec<u8> {
     packet[screeny_studio::page::HEADER..].to_vec()
 }
+
+/// A band of loopback ports that hands each frame/control pair out **once per
+/// test run**.
+///
+/// Every test in a file used to scan its band from the bottom for the first
+/// free pair. The tests run in parallel, so a test that stopped a simulator to
+/// stand for a panel rebooting, and started another on the same port a moment
+/// later, could find that a test starting in between had taken its port:
+/// `fleet::the_brightness_policy_survives_the_panel_rebooting` failed about one
+/// run in two that way (2026-11-07). A pair that is never handed out twice
+/// stays the test's own however long it is left unbound.
+pub struct Band {
+    next: std::sync::atomic::AtomicU16,
+    end: u16,
+}
+
+impl Band {
+    /// Pairs `first, first + 1`, `first + 2, first + 3`, ... below `end`.
+    pub const fn new(first: u16, end: u16) -> Self {
+        Band { next: std::sync::atomic::AtomicU16::new(first), end }
+    }
+
+    /// The next pair `start` manages to bind, and its frame port. A pair
+    /// something outside this run holds is skipped, and never offered again.
+    pub fn take<T>(&self, mut start: impl FnMut(u16) -> Option<T>) -> (T, u16) {
+        loop {
+            let port = self.next.fetch_add(2, std::sync::atomic::Ordering::SeqCst);
+            assert!(port + 1 < self.end, "the port band ending at {} is used up: widen it", self.end);
+            if let Some(t) = start(port) {
+                return (t, port);
+            }
+        }
+    }
+}

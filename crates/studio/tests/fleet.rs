@@ -13,15 +13,14 @@
 
 use crate::common;
 
-use common::{get, post, studio_in, until, until_json, Temp, Ws, PATIENCE};
+use common::{get, post, studio_in, until, until_json, Band, Temp, Ws, PATIENCE};
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use screeny_sim::{Config as SimConfig, SimDevice};
 
 /// The port band these tests use. Well above 49374/49375.
-const FIRST_PORT: u16 = 50_800;
-const LAST_PORT: u16 = 50_900;
+static BAND: Band = Band::new(50_800, 50_900);
 
 /// A simulator on **consecutive** loopback ports, mDNS off.
 ///
@@ -29,12 +28,7 @@ const LAST_PORT: u16 = 50_900;
 /// port taken to be frame + 1 - true of the spec's defaults, never true of an
 /// ephemeral pair. Card 101 hit this first; this is the same workaround.
 fn start_sim(id: &str) -> (SimDevice, u16) {
-    for port in FIRST_PORT..LAST_PORT {
-        if let Some(dev) = sim_on(port, id) {
-            return (dev, port);
-        }
-    }
-    panic!("no free consecutive port pair in {FIRST_PORT}..{LAST_PORT}");
+    BAND.take(|port| sim_on(port, id))
 }
 
 /// The same simulator again, on a port that is already known - which is how a

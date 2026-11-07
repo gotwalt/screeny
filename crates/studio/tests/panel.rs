@@ -13,7 +13,7 @@
 
 use crate::common;
 
-use common::{get, pause, post, preview_of, seq_of, studio, studio_and_state, until, until_json, Ws};
+use common::{get, pause, post, preview_of, seq_of, studio, studio_and_state, until, until_json, Band, Ws};
 use std::sync::mpsc::{channel, Receiver, Sender as Tx};
 use std::time::Duration;
 
@@ -36,18 +36,20 @@ fn start_sim() -> (SimDevice, u16, Receiver<Shown>) {
     let (tx, rx): (Tx<Shown>, Receiver<Shown>) = channel();
     // Well above 49374/49375, so a stray packet cannot reach the bench device
     // even in principle.
-    for port in 50_700u16..50_780 {
+    let (dev, port) = BAND.take(|port| {
         let cfg = Config { frame_port: port, control_port: port + 1, ..Config::for_test() };
         let tx = tx.clone();
         let sink = Box::new(move |f: &screeny_proto::Rgb888Frame, m: &screeny_sim::FrameMeta| {
             let _ = tx.send(Shown { decoded: f.to_vec(), codec: m.codec, bytes: m.bytes });
         });
-        if let Ok(dev) = SimDevice::start_with(cfg, Some(sink)) {
-            return (dev, port, rx);
-        }
-    }
-    panic!("no free consecutive port pair in 50700..50780");
+        SimDevice::start_with(cfg, Some(sink)).ok()
+    });
+    (dev, port, rx)
 }
+
+/// This file's port band; see [`Band`]. A test here stops a simulator and
+/// starts another on the same pair, so the pair must stay this test's.
+static BAND: Band = Band::new(50_700, 50_780);
 
 /// A simulator on a **known** pair of ports, so a test can stop one and put
 /// another in its place - which is what "the panel went away and came back"

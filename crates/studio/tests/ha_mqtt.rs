@@ -16,7 +16,7 @@
 
 use crate::common;
 
-use common::{post, test_config};
+use common::{post, test_config, Band};
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use screeny_sim::{Config as SimConfig, SimDevice};
 use screeny_studio::ha::MqttConfig;
@@ -243,11 +243,12 @@ async fn home_assistant_sees_and_drives_the_studio() {
 
 /// A simulator on consecutive loopback ports (a typed `IP:PORT` takes the
 /// control port to be frame + 1), in a band of its own.
+/// This file's port band; see [`Band`].
+static BAND: Band = Band::new(51_200, 51_300);
+
 fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16) {
-    for port in (51_200u16..51_300).step_by(2) {
-        if port == avoid {
-            continue;
-        }
+    let _ = avoid; // Never handed the same pair twice, so there is nothing to avoid.
+    BAND.take(|port| {
         let cfg = SimConfig {
             frame_port: port,
             control_port: port + 1,
@@ -255,11 +256,8 @@ fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16) {
             instance: format!("sim-{id}"),
             ..SimConfig::for_test()
         };
-        if let Ok(dev) = SimDevice::start_with(cfg, None) {
-            return (dev, port);
-        }
-    }
-    panic!("no free consecutive port pair in 51200..51300");
+        SimDevice::start_with(cfg, None).ok()
+    })
 }
 
 /// What a tapped simulator was sent: every frame datagram's payload.
@@ -268,10 +266,8 @@ type Wire = Arc<Mutex<Vec<Vec<u8>>>>;
 /// A simulator as [`start_sim`], recording every frame payload it is sent.
 fn start_tapped_sim(id: &str, avoid: u16) -> (SimDevice, u16, Wire) {
     let wire = Wire::default();
-    for port in (51_200u16..51_300).step_by(2) {
-        if port == avoid {
-            continue;
-        }
+    let _ = avoid; // Never handed the same pair twice, so there is nothing to avoid.
+    let (dev, port) = BAND.take(|port| {
         let cfg = SimConfig {
             frame_port: port,
             control_port: port + 1,
@@ -291,11 +287,9 @@ fn start_tapped_sim(id: &str, avoid: u16) -> (SimDevice, u16, Wire) {
             }
         });
         let sink = Box::new(|_: &screeny_proto::Rgb888Frame, _: &screeny_sim::FrameMeta| {});
-        if let Ok(dev) = SimDevice::start_tapped(cfg, Some(sink), Some(tap)) {
-            return (dev, port, wire);
-        }
-    }
-    panic!("no free consecutive port pair in 51200..51300");
+        SimDevice::start_tapped(cfg, Some(sink), Some(tap)).ok()
+    });
+    (dev, port, wire)
 }
 
 /// Of the payloads `b` was sent from `mark` on, the share `a` was sent too.

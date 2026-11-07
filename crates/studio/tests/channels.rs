@@ -15,7 +15,7 @@
 
 use crate::common;
 
-use common::{get, post, studio_and_state, until_json, Ws, PATIENCE};
+use common::{get, post, studio_and_state, until_json, Band, Ws, PATIENCE};
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -25,8 +25,7 @@ use screeny_sim::{Config as SimConfig, SimDevice};
 
 /// The port band these tests use. Well above 49374/49375, and apart from the
 /// bands the other test files use.
-const FIRST_PORT: u16 = 51_000;
-const LAST_PORT: u16 = 51_100;
+static BAND: Band = Band::new(51_000, 51_100);
 
 /// What one simulated panel was sent - every `FRAME` datagram's sequence
 /// number, codec and pixel payload, exactly as it arrived - and what it put
@@ -59,10 +58,8 @@ impl Seen {
 /// 1), recording every datagram on its frame port and every frame it shows.
 fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16, Seen) {
     let seen = Seen::default();
-    for port in (FIRST_PORT..LAST_PORT).step_by(2) {
-        if port == avoid {
-            continue;
-        }
+    let _ = avoid; // Never handed the same pair twice, so there is nothing to avoid.
+    let ((dev, seen), port) = BAND.take(|port| {
         let cfg = SimConfig {
             frame_port: port,
             control_port: port + 1,
@@ -89,11 +86,9 @@ fn start_sim(id: &str, avoid: u16) -> (SimDevice, u16, Seen) {
                 }
             }
         });
-        if let Ok(dev) = SimDevice::start_tapped(cfg, Some(sink), Some(tap)) {
-            return (dev, port, seen);
-        }
-    }
-    panic!("no free consecutive port pair in {FIRST_PORT}..{LAST_PORT}");
+        SimDevice::start_tapped(cfg, Some(sink), Some(tap)).ok().map(|dev| (dev, seen.clone()))
+    });
+    (dev, port, seen)
 }
 
 async fn ok(at: SocketAddr, path: &str, body: &str) -> serde_json::Value {
