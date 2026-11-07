@@ -748,3 +748,16 @@ fn a_clock_config_of_an_older_shape_keeps_its_look() {
     longer.extend([0, 0]);
     assert_eq!(screeny_settings::ClockConfig::from_bytes(&longer).unwrap().hue, 12);
 }
+
+/// Through real flash, not just `from_bytes`: a form longer than this build's
+/// has to get out of the store before it can be read. The first cut of this
+/// failed there with `StoreError::Internal`.
+#[test]
+fn a_longer_clock_config_in_flash_loads_cleanly_and_keeps_its_look() {
+    let mut saved = screeny_settings::ClockConfig { hue: 12, ..Default::default() }.to_bytes().to_vec();
+    saved.extend([0, 0]);
+    let mut st = store(poke_bytes(blank_flash(), key::CLOCK, &saved));
+    let (settings, report) = load(&mut st);
+    assert_eq!(report.error, None, "{report:?}");
+    assert_eq!(settings.clock.hue, 12);
+}

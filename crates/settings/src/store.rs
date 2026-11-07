@@ -401,7 +401,7 @@ impl<F: NorFlash> Store<F> {
             },
         }
 
-        match self.fetch_bytes::<{ ClockConfig::BYTES }>(scratch, key::CLOCK).await {
+        match self.fetch_bytes::<{ ClockConfig::BYTES_MAX }>(scratch, key::CLOCK).await {
             Err(e) => report.note(Fields::CLOCK, Some(e)),
             Ok(None) => report.note(Fields::CLOCK, None),
             Ok(Some(raw)) => match ClockConfig::from_bytes(&raw) {
@@ -539,7 +539,7 @@ impl<F: NorFlash> Store<F> {
         check_scratch(scratch)?;
         self.prepare(scratch).await?;
         let want = clock.to_bytes();
-        let cur = self.fetch_bytes::<{ ClockConfig::BYTES }>(scratch, key::CLOCK).await?;
+        let cur = self.fetch_bytes::<{ ClockConfig::BYTES_MAX }>(scratch, key::CLOCK).await?;
         if cur.as_deref() == Some(&want[..]) {
             return Ok(Write::Skipped);
         }

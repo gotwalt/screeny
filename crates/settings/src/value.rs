@@ -370,6 +370,10 @@ impl ClockConfig {
     /// The look and motion every stored form starts with. A form of any other
     /// length keeps those, and the rest of it comes from [`ClockConfig::DEFAULT`].
     const BYTES_COMMON: usize = 23;
+    /// The longest form that loads. Bigger than [`ClockConfig::BYTES`] on purpose:
+    /// a store written by a build with other settings must still reach
+    /// [`ClockConfig::from_bytes`], not fail on the way out of flash.
+    pub const BYTES_MAX: usize = 64;
 
     /// The same settings, each within the range the Studio's patch allows.
     #[must_use]
@@ -427,7 +431,7 @@ impl ClockConfig {
     /// Read the stored form back; `None` when it is not this shape.
     #[must_use]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if !(Self::BYTES_COMMON..=64).contains(&b.len()) {
+        if !(Self::BYTES_COMMON..=Self::BYTES_MAX).contains(&b.len()) {
             return None;
         }
         let d = Self::DEFAULT;
