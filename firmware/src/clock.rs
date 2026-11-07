@@ -123,6 +123,8 @@ pub fn play_again() {
 /// The settings as the Studio patch's knobs.
 fn knobs_of(c: &ClockConfig) -> Knobs {
     Knobs {
+        fade: c.fade as f32 / 10.0,
+        calm: c.calm,
         pace: c.pace as f32,
         offset: c.offset as f32,
         speed: c.speed as f32,
@@ -150,6 +152,8 @@ fn look_of(c: &ClockConfig) -> Look {
 // The picture
 // ---------------------------------------------------------------------------
 
+/// A step worth a line in the log: long enough to be seen if anything moved.
+const SLOW_STEP_US: u32 = 50_000;
 /// How often the frame costs go to the log.
 const REPORT_US: u64 = 300_000_000;
 
@@ -212,11 +216,16 @@ impl Face {
         let began = Instant::now();
         self.engine.step(Tick { t, dt, now }, &self.knobs);
         let stepped = Instant::now();
-        let idle = self.engine.idle(self.knobs.hours24);
-        self.raster.draw(&mut frame.px, self.engine.angles(), &idle, self.knobs.rest, self.engine.settled());
+        let (settled, dims) = (self.engine.settled(), self.engine.dims());
+        self.raster.draw(&mut frame.px, self.engine.angles(), dims, self.knobs.rest, settled);
         let drawn = Instant::now();
 
-        self.worst_step_us = self.worst_step_us.max((stepped - began).as_micros() as u32);
+        let step_us = (stepped - began).as_micros() as u32;
+        // At most about once a minute: a dance is composed once a minute.
+        if step_us > SLOW_STEP_US {
+            info!("clock: slow step {} us at {:.2} settled", step_us, settled);
+        }
+        self.worst_step_us = self.worst_step_us.max(step_us);
         self.worst_draw_us = self.worst_draw_us.max((drawn - stepped).as_micros() as u32);
         if now_us.wrapping_sub(self.reported_us) >= REPORT_US {
             info!(

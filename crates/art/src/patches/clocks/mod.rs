@@ -49,6 +49,8 @@ pub const DEF: PatchDef = PatchDef {
 const PARAMS: &[ParamSpec] = &[
     param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
     param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 5.0),
+    param("fade", "Seconds the resting dials take to dim", 0.2, 5.0, 0.1, 1.5),
+    toggle("calm", "Reduce motion", false),
     choice("dance", "Choreography", DANCE_CHOICES, 0.0),
     choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
     choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
@@ -156,6 +158,8 @@ impl Patch for Clocks {
             hours24,
             offset: ctx.get("offset"),
             rest,
+            fade: ctx.get("fade"),
+            calm: ctx.get("calm") >= 0.5,
         };
         self.engine.step(Tick { t: ctx.t, dt: ctx.dt, now: ctx.now }, &knobs);
         let tint = |hue: &str, chroma: &str| draw::Tint {
@@ -170,7 +174,7 @@ impl Patch for Clocks {
             ring: ctx.get("dials"),
             dark: (ctx.get("dark") as usize).min(DARK_CHOICES.len() - 1),
         };
-        picture(self.engine.angles(), &self.engine.idle(hours24), rest, self.engine.settled(), look)
+        picture_dims(self.engine.angles(), self.engine.dims(), rest, self.engine.settled(), look)
     }
 }
 
@@ -190,24 +194,26 @@ struct Look {
 
 /// Draw the grid. `idle` marks the dials that are not part of a digit; they are
 /// drawn back towards `rest` as the picture settles onto the time.
+#[cfg(test)]
 fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled: f32, look: Look) -> Frame {
-    let scale = rest.scale(settled);
+    picture_dims(angles, &idle.map(|i| if i { settled } else { 0.0 }), rest, settled, look)
+}
+
+/// [`picture`], with each dial's own distance towards its rest.
+fn picture_dims(angles: &[Hands; CLOCKS], dims: &[f32; CLOCKS], rest: Rest, settled: f32, look: Look) -> Frame {
     // Card 188: only once a resting dial has actually landed - not while it
     // is still fading towards rest - does its ink become the hand-picked,
     // aligned shade. The fade itself is moving content (brief 2.1.1: "leave
     // everything else to the dither"), so it stays the cheap continuous ramp
     // the whole way; only the held, dark end of it needs steadying.
-    let shade = (settled >= 1.0 && rest.ink < 1.0).then(|| dark_shade(look.dark, rest.ink)).flatten();
-    let scales: Vec<draw::RestScale> =
-        idle.iter()
-            .map(|at_rest| {
-                if *at_rest {
-                    draw::RestScale { ink: scale[0], reach: scale[1], shade }
-                } else {
-                    draw::RestScale::FULL
-                }
-            })
-            .collect();
+    let shade = (rest.ink < 1.0).then(|| dark_shade(look.dark, rest.ink)).flatten();
+    let scales: Vec<draw::RestScale> = dims
+        .iter()
+        .map(|dim| {
+            let [ink, reach] = rest.scale(*dim);
+            draw::RestScale { ink, reach, shade: if *dim >= 1.0 { shade } else { None } }
+        })
+        .collect();
     draw::Dials {
         angles,
         cols: COLS,
@@ -258,7 +264,8 @@ mod device_picture {
 
     fn device(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], settled: f32) -> Vec<u8> {
         let mut out = vec![0u8; FRAME_BYTES];
-        Raster::new(DeviceLook::default()).draw(&mut out, angles, idle, RESTS[DEFAULT_REST], settled);
+        let dims = idle.map(|i| if i { settled } else { 0.0 });
+        Raster::new(DeviceLook::default()).draw(&mut out, angles, &dims, RESTS[DEFAULT_REST], settled);
         out
     }
 

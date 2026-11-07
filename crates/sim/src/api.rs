@@ -225,6 +225,8 @@ impl ApiState {
                     pace: 60,
                     offset: 0,
                     dark: 0,
+                    fade: 15,
+                    calm: false,
                 },
                 time: None,
                 synced_ago_s: None,

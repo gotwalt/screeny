@@ -466,10 +466,10 @@ mod tests {
     }
 
     #[test]
-    fn the_biggest_request_is_the_settings_body() {
-        // Card 361's `colour_order` took the worst-case settings body (a name
-        // of 32 control characters, all escaped) past the Wi-Fi form's 384.
-        assert_eq!(MAX_REQUEST_LEN, SettingsRequest::MAX_JSON_LEN);
+    fn the_biggest_request_is_the_clock_body() {
+        // Thirteen sliders and their neighbours took it past the worst-case
+        // settings body (a name of 32 control characters, all escaped).
+        assert_eq!(MAX_REQUEST_LEN, ClockRequest::MAX_JSON_LEN);
     }
 
     #[test]

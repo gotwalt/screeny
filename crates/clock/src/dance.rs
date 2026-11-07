@@ -901,6 +901,21 @@ pub fn compose(
     best.map(|(_, c)| c).unwrap_or_else(|| named((rng.u64() % DANCES as u64) as usize, rng))
 }
 
+/// The dance for "reduce motion": every hand takes the short way to where it
+/// is going and no further, so a hand with nothing to do does nothing. All that
+/// varies is the order they set off in, and that gently.
+pub fn calm(rng: &mut Rng) -> Composition {
+    let reverse = rng.u64() & 1 == 0;
+    let (name, timing) = match rng.u64() % 4 {
+        0 => ("together", Timing::Together),
+        1 => ("columns", Timing::Columns { gap: 0.2, reverse }),
+        2 => ("rows", Timing::Rows { gap: 0.4, reverse }),
+        _ => ("diagonal", Timing::Diagonal { gap: 0.15 }),
+    };
+    let phase = Phase { to: Formation::Digits, with: None, timing, turn: Turn::Shortest, extra: 0, rest: 0.0 };
+    Composition { name: format!("calm {name}"), phases: vec![phase], tags: vec![format!("calm:{name}")] }
+}
+
 /// A dance from the repertoire, as a composition.
 pub fn named(which: usize, rng: &mut Rng) -> Composition {
     let (name, phases) = dance(which, rng);

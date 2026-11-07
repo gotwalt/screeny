@@ -746,3 +746,10 @@ fn a_clock_config_saved_before_pace_offset_and_dark_keeps_its_look() {
     assert_eq!(back.hue, 12);
     assert_eq!((back.pace, back.offset, back.dark), (60, 0, 0));
 }
+
+#[test]
+fn a_clock_config_saved_before_the_fade_and_reduce_motion_keeps_its_look() {
+    let saved = screeny_settings::ClockConfig { hue: 12, dark: 2, ..Default::default() }.to_bytes();
+    let back = screeny_settings::ClockConfig::from_bytes(&saved[..28]).unwrap();
+    assert_eq!((back.hue, back.dark, back.fade, back.calm), (12, 2, 15, false));
+}

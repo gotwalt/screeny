@@ -333,6 +333,10 @@ pub struct ClockConfig {
     pub offset: u16,
     /// A resting dial's dark ramp.
     pub dark: u8,
+    /// Tenths of a second the resting dials take to dim.
+    pub fade: u16,
+    /// Reduce motion.
+    pub calm: bool,
 }
 
 impl Default for ClockConfig {
@@ -360,12 +364,15 @@ impl ClockConfig {
             pace: 60,
             offset: 0,
             dark: 0,
+            fade: 15,
+            calm: false,
     };
 
-    /// The stored size.
-    pub const BYTES: usize = 28;
-    /// The stored size before `pace`, `offset` and `dark`, which still loads.
-    const BYTES_V1: usize = 23;
+    /// The stored size. Older, shorter forms still load: what they do not
+    /// have comes from [`ClockConfig::DEFAULT`].
+    pub const BYTES: usize = 31;
+    /// The shortest form that was ever stored.
+    const BYTES_MIN: usize = 23;
 
     /// The same settings, each within the range the Studio's patch allows.
     #[must_use]
@@ -387,6 +394,8 @@ impl ClockConfig {
             pace: self.pace.clamp(5, 60),
             offset: self.offset.min(1439),
             dark: self.dark,
+            fade: self.fade.clamp(2, 50),
+            calm: self.calm,
         }
     }
 
@@ -415,17 +424,19 @@ impl ClockConfig {
         out[23..25].copy_from_slice(&self.pace.to_le_bytes());
         out[25..27].copy_from_slice(&self.offset.to_le_bytes());
         out[27] = self.dark;
+        out[28..30].copy_from_slice(&self.fade.to_le_bytes());
+        out[30] = u8::from(self.calm);
         out
     }
 
     /// Read the stored form back; `None` when it is not this shape.
     #[must_use]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() != Self::BYTES && b.len() != Self::BYTES_V1 {
+        if !(Self::BYTES_MIN..=Self::BYTES).contains(&b.len()) {
             return None;
         }
         let d = Self::DEFAULT;
-        let newer = b.len() == Self::BYTES;
+        let word = |i: usize, or: u16| b.get(i..i + 2).map_or(or, |w| u16::from_le_bytes([w[0], w[1]]));
         let w = |i: usize| u16::from_le_bytes([b[i * 2], b[i * 2 + 1]]);
         Some(
             Self {
@@ -442,9 +453,11 @@ impl ClockConfig {
                 dance: b[20],
                 rest: b[21],
                 hours24: b[22] != 0,
-                pace: if newer { u16::from_le_bytes([b[23], b[24]]) } else { d.pace },
-                offset: if newer { u16::from_le_bytes([b[25], b[26]]) } else { d.offset },
-                dark: if newer { b[27] } else { d.dark },
+                pace: word(23, d.pace),
+                offset: word(25, d.offset),
+                dark: b.get(27).copied().unwrap_or(d.dark),
+                fade: word(28, d.fade),
+                calm: b.get(30).is_some_and(|v| *v != 0),
             }
             .sanitised(),
         )

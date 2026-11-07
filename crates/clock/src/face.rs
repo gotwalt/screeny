@@ -88,9 +88,15 @@ impl Rest {
 
     /// `[ink, length]` for `draw::Dials`, `settled` of the way from a dancing
     /// dial (full) to a resting one.
+    ///
+    /// Eased, and the ink moves in lightness rather than in light. Light going
+    /// down in even steps looks like nothing much and then a sudden drop, since
+    /// the eye goes as the cube root; even steps of lightness look even.
     pub fn scale(&self, settled: f32) -> [f32; 2] {
-        let to = |x: f32| 1.0 + (x - 1.0) * settled.clamp(0.0, 1.0);
-        [to(self.ink), to(self.reach)]
+        let t = settled.clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        let lightness = 1.0 + (self.ink.powf(1.0 / 3.0) - 1.0) * t;
+        [lightness * lightness * lightness, 1.0 + (self.reach - 1.0) * t]
     }
 }
 

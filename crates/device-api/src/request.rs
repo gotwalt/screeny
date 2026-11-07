@@ -249,6 +249,10 @@ pub struct ClockLook {
     pub offset: u16,
     /// A resting dial's dark ramp.
     pub dark: u8,
+    /// Tenths of a second the resting dials take to dim.
+    pub fade: u16,
+    /// Reduce motion.
+    pub calm: bool,
 }
 
 impl ClockLook {
@@ -269,7 +273,9 @@ impl ClockLook {
         + field("hours24", 5)
         + field("pace", MAX_U16_LEN)
         + field("offset", MAX_U16_LEN)
-        + field("dark", MAX_U8_LEN);
+        + field("dark", MAX_U8_LEN)
+        + field("fade", MAX_U16_LEN)
+        + field("calm", 5);
 }
 
 const MAX_U16_LEN: usize = 5;

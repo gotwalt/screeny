@@ -1174,7 +1174,7 @@ streamed to flash as it arrives and only its head has to fit.
 | POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}` | 384 |
 | POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | `SettingsReply` | 373 |
 | GET | `/api/v1/clock` | - | `ClockReply` | - |
-| POST | `/api/v1/clock` | `{look?, dance_now?}` | `ClockReply` | 332 |
+| POST | `/api/v1/clock` | `{look?, dance_now?, play_again?}` | `ClockReply` | 416 |
 | POST | `/api/v1/firmware[?activate=0]` | a raw `application/octet-stream` image, streamed | `FirmwareReply` | the slot |
 | POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` | 188 |
 | POST | `/api/v1/identify` | `{"duration_ms":N}` | `{"result":"identifying"}` | 152 |

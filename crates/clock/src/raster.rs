@@ -123,13 +123,12 @@ impl Raster {
         self.inks = look.tints.map(Tint::ink);
     }
 
-    /// Draw the grid into `out`, which is cleared first. `idle` marks the dials
-    /// that are not part of a digit, drawn back towards `rest` as the picture
-    /// `settled` onto the time.
-    pub fn draw(&self, out: &mut [u8], angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled: f32) {
+    /// Draw the grid into `out`, which is cleared first. `dims` says how far
+    /// each dial has receded towards `rest`; `settled` is how far the picture as
+    /// a whole has settled onto the time, which is what blunts the hands.
+    pub fn draw(&self, out: &mut [u8], angles: &[Hands; CLOCKS], dims: &[f32; CLOCKS], rest: Rest, settled: f32) {
         out[..FRAME_BYTES].fill(0);
         let settled = settled.clamp(0.0, 1.0);
-        let scale = rest.scale(settled);
         let half = self.look.half;
         // A digit is hands meeting end to end, and a stroke that pinched at
         // every joint would not read as one, so the taper goes as the picture
@@ -139,17 +138,17 @@ impl Raster {
         let reach_full = CELL * 0.5 - half + half * (1.0 - tip);
         // Only once a resting dial has truly landed: a fade is moving content,
         // and stays on the ordinary ramp the whole way.
-        let shade = (settled >= 1.0 && rest.ink < 1.0)
+        let shade = (rest.ink < 1.0)
             .then(|| dark_levels(self.look.dark, rest.ink))
             .flatten()
             .map(|levels| levels.map(|l| srgb_to_linear(LEVEL_CODES[(l as usize).min(DARK_ALIGN_LEVEL - 1)])));
         for row in 0..ROWS {
             for col in 0..COLS {
                 let i = row * COLS + col;
-                let (ink, reach) = if idle[i] { (scale[0], scale[1]) } else { (1.0, 1.0) };
+                let [ink, reach] = rest.scale(dims[i]);
                 let len = reach_full * reach;
                 let hands = [hand(angles[i][0], len, half, tip), hand(angles[i][1], len, half, tip)];
-                let shade = if idle[i] { shade } else { None };
+                let shade = if dims[i] >= 1.0 { shade } else { None };
                 self.dial(out, col * CELL as usize, top + row * CELL as usize, &hands, ink, shade);
             }
         }
@@ -308,7 +307,8 @@ mod tests {
 
     fn frame(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], settled: f32) -> Vec<u8> {
         let mut out = vec![0xaa; FRAME_BYTES];
-        Raster::new(Look::default()).draw(&mut out, angles, idle, RESTS[DEFAULT_REST], settled);
+        let dims = idle.map(|i| if i { settled } else { 0.0 });
+        Raster::new(Look::default()).draw(&mut out, angles, &dims, RESTS[DEFAULT_REST], settled);
         out
     }
 

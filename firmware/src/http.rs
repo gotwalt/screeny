@@ -946,6 +946,8 @@ fn clock_reply() -> ClockReply {
             pace: c.pace,
             offset: c.offset,
             dark: c.dark,
+            fade: c.fade,
+            calm: c.calm,
         },
         time: crate::clock::wall_hms().and_then(|(h, m, s)| {
             let mut t = text::TimeText::new();
@@ -976,6 +978,8 @@ fn post_clock(req: ClockRequest) -> Reply {
             pace: l.pace,
             offset: l.offset,
             dark: l.dark,
+            fade: l.fade,
+            calm: l.calm,
         });
     }
     if req.dance_now == Some(true) {
