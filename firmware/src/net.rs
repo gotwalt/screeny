@@ -256,12 +256,15 @@ pub async fn frames_task(
         out.clear();
 
         // --- wait for work, without holding the lock --------------------
+        crate::trace::mark(crate::trace::FRAMES, 1);
         let first = match select(socket.recv_from(&mut rx[..]), Timer::after(TICK)).await {
             Either::First(r) => Some(r),
             Either::Second(()) => None,
         };
 
+        crate::trace::mark(crate::trace::FRAMES, 2);
         let mut guard = CORE.lock().await;
+        crate::trace::mark(crate::trace::FRAMES, 3);
         let core = guard.as_mut().expect("core built before tasks spawn");
 
         // --- step 1: drain the socket, newest wins ----------------------
@@ -293,6 +296,7 @@ pub async fn frames_task(
         }
 
         // --- steps 2 and 3: decode the survivor, then swap --------------
+        crate::trace::mark(crate::trace::FRAMES, 4);
         let survivor = have_keep.then(|| &keep[..keep_len]);
         let published = core.flush_frames(now_us(), survivor, &mut producer.back().px, &mut out);
 
@@ -373,6 +377,7 @@ pub async fn frames_task(
         }
 
         // --- compose whatever is not a streamed frame -------------------
+        crate::trace::mark(crate::trace::FRAMES, 5);
         let net = net_state(stack, &mut had_address);
         let now_ms = now / 1_000;
         let animating = matches!(intent, Intent::Identify | Intent::Fade { .. });
@@ -448,6 +453,7 @@ pub async fn frames_task(
             || core.redraw() != redraw_seen
             || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= anim_ms);
 
+        crate::trace::mark(crate::trace::FRAMES, 6);
         if due {
             redraw_seen = core.redraw();
             anim_at_ms = now_ms;
@@ -508,6 +514,7 @@ pub async fn frames_task(
                     }
                 }
             }
+            crate::trace::mark(crate::trace::FRAMES, 7);
             if drew {
                 producer.publish();
             }
@@ -515,6 +522,7 @@ pub async fn frames_task(
 
         let info_changed = core.take_info_changed();
         drop(guard);
+        crate::trace::mark(crate::trace::FRAMES, 8);
 
         if info_changed {
             INFO_CHANGED.signal(());

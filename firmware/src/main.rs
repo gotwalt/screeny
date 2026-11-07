@@ -82,6 +82,7 @@ mod provision;
 mod spike_ota;
 mod stack_probe;
 mod store;
+mod trace;
 mod tidbyt;
 #[cfg(feature = "board-art-panel")]
 mod art_panel;
@@ -260,7 +261,7 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// when DHCP moves the address without a reboot (card 251, `src/mdns.rs`), and
 /// the panic breadcrumb keeps the message's first line and an exception's
 /// `PC`/`EXCVADDR`, as `last_panic.what` (card 371, `src/panic.rs`).
-pub const FW_VERSION: &str = "0.12.4-clock";
+pub const FW_VERSION: &str = "0.12.6-clock";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
@@ -749,6 +750,7 @@ async fn telemetry_task() {
         // five seconds, from a task that does nothing else load-bearing, so
         // "the watchdog was fed" means exactly "core 0's executor ran
         // something" and nothing more. `ota::LIVENESS_WDT_S` is four of these.
+        trace::mark(trace::TELEMETRY, 1);
         ota::feed();
         tick += 1;
         if tick == STACK_TICK
@@ -920,6 +922,7 @@ async fn main(spawner: Spawner) {
         alloc::boxed::Box::new(settings)
     };
     clock::init(&settings);
+    trace::report_previous();
     // Card 222: `fw_slot` and `fw_state` for `GET /api/v1/status`, read once
     // here rather than per request - it needs the `STORE` lock, and nothing can
     // change the answer until card 241's confirm/revert lands. Card 243: it

@@ -637,8 +637,10 @@ fn wifi_state() -> WifiState {
 /// The `CORE` lock is held for the three reads that need it and dropped before
 /// anything is serialised, let alone written to a socket.
 async fn status() -> StatusReply {
+    crate::trace::mark(crate::trace::REQUEST, 1);
     let (name, idle_mode, state) = {
         let mut guard = CORE.lock().await;
+        crate::trace::mark(crate::trace::REQUEST, 2);
         let core = guard.as_mut().expect("core exists");
         let t = core.telemetry(now_us());
         (
@@ -647,7 +649,9 @@ async fn status() -> StatusReply {
             StreamState::from_u8(t.state).unwrap_or(StreamState::Idle),
         )
     };
+    crate::trace::mark(crate::trace::REQUEST, 3);
     let heap = esp_alloc::HEAP.stats();
+    crate::trace::mark(crate::trace::REQUEST, 4);
     StatusReply {
         api: screeny_device_api::API_VERSION,
         id: text::text(ctx().id).unwrap_or_default(),
@@ -927,7 +931,9 @@ async fn post_settings(req: SettingsRequest) -> Reply {
 
 /// The clock as the API tells it.
 fn clock_reply() -> ClockReply {
+    crate::trace::mark(crate::trace::REQUEST, 5);
     let (c, _) = crate::clock::snapshot();
+    crate::trace::mark(crate::trace::REQUEST, 6);
     ClockReply {
         look: ClockLook {
             hue: c.hue,
@@ -1257,11 +1263,19 @@ async fn post_firmware<R: picoserve::io::Read>(
         // `picoserve::io::Read` is `embedded_io_async::Read`; the trait has to
         // be in scope for the one call this module makes to it.
         use embedded_io_async::Read as _;
+        crate::trace::mark(crate::trace::UPLOAD, 1);
         let read = embassy_time::with_timeout(UPLOAD_STALL, reader.read(up.spare())).await;
+        crate::trace::mark(crate::trace::UPLOAD, 2);
         let n = match read {
-            Ok(Ok(0)) => break,
+            Ok(Ok(0)) => {
+                crate::trace::note(format_args!("body ended at {}", up.written()));
+                info!("ota: the body ended after {} bytes of {:?}", up.written(), declared);
+                break;
+            }
             Ok(Ok(n)) => n,
-            Ok(Err(_)) => {
+            Ok(Err(e)) => {
+                crate::trace::note(format_args!("read failed at {}: {:?}", up.written(), e));
+                warn!("ota: reading the body failed after {} bytes: {:?}", up.written(), e);
                 // The body stopped early - the socket died, or the 180 s
                 // outer bound fired. The scanner will call it a truncated
                 // image, which is what it is.
@@ -1270,19 +1284,23 @@ async fn post_firmware<R: picoserve::io::Read>(
                 return firmware_failed(written, FirmwareError::BadSha256);
             }
             Err(embassy_time::TimeoutError) => {
+                crate::trace::note(format_args!("quiet for 5 s at {}", up.written()));
                 warn!("ota: the uploader went quiet for {} s", UPLOAD_STALL.as_secs());
                 let written = up.written();
                 up.failed(FirmwareError::BadSha256).await;
                 return firmware_failed(written, FirmwareError::BadSha256);
             }
         };
+        crate::trace::mark(crate::trace::UPLOAD, 3);
         if let Err(e) = up.took(n).await {
             let written = up.written();
             up.failed(e).await;
             return firmware_failed(written, e);
         }
+        crate::trace::mark(crate::trace::UPLOAD, 4);
     }
 
+    crate::trace::mark(crate::trace::UPLOAD, 5);
     let written = up.written();
     match up.finish().await {
         Ok(a) => {
@@ -1307,7 +1325,11 @@ async fn post_firmware<R: picoserve::io::Read>(
                 Reply::ok(ApiBody::Firmware(FirmwareReply::ok(a.written)))
             }
         }
-        Err(e) => firmware_failed(written, e),
+        Err(e) => {
+            crate::trace::note(format_args!("finish refused at {}: {:?}", written, e));
+            warn!("ota: the image was refused at the end, after {} bytes: {:?}", written, e);
+            firmware_failed(written, e)
+        }
     }
 }
 
@@ -1536,6 +1558,9 @@ impl core::fmt::Display for Page {
             write!(f, "\"{name}\",")?;
         }
         f.write_str("];</script>")?;
+        f.write_str("<!-- trace ")?;
+        crate::trace::write_notes(f)?;
+        f.write_str(" -->")?;
         f.write_str(after)
     }
 }
@@ -2156,9 +2181,10 @@ async fn serve_on(
         // The result is the connection's, not the server's: a client that
         // vanishes mid-request is an ordinary event on a LAN and the next
         // `accept` is the whole response to it.
-        let _ = Server::new(app, config, http_buf)
-            .serve(BoundedSocket(socket))
-            .await;
+        if let Err(e) = Server::new(app, config, http_buf).serve(BoundedSocket(socket)).await {
+            crate::trace::note(format_args!("worker {} ended: {:?}", id, e));
+            warn!("http: worker {} connection ended: {:?}", id, e);
+        }
     }
 }
 
@@ -2425,6 +2451,8 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
                 crate::provision::wait_ap_pub(true),
             )
             .await;
+            crate::trace::note(format_args!("worker {} left the lan", id));
+            warn!("http: worker {} left the lan for the setup network", id);
         }
     }
 }
