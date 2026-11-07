@@ -8,7 +8,8 @@
 //! instead of favouring whatever the dice like. Names are remembered exactly,
 //! so the same shape cannot come round again too soon.
 
-use std::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, VecDeque};
+use alloc::string::{String, ToString};
 
 /// Wear fades by this factor per performance: a memory of about thirty.
 const FADE: f32 = 0.967;

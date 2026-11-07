@@ -15,9 +15,13 @@
 //! Positions are measured in units of 8 LEDs, whatever the grid, so a mood has
 //! the same wavelengths on the panel for 8 clocks as for 32.
 
-use super::dance::{shortest, Motor};
-use super::Hands;
+use crate::dance::{shortest, Motor};
+use crate::face::Hands;
+#[allow(unused_imports)]
+use crate::math::F32Ext;
 use crate::rng::Rng;
+use alloc::vec::Vec;
+use alloc::vec;
 
 /// A travelling sine. `k` is radians per 8 LEDs, `w` radians per second.
 #[derive(Clone, Copy, Debug, Default)]
@@ -230,9 +234,9 @@ impl Ambient {
             goal: mood,
             phases: Phases {
                 heading: rng.range(0.0, 360.0),
-                ripples: [rng.range(0.0, std::f32::consts::TAU), rng.range(0.0, std::f32::consts::TAU)],
-                rings: rng.range(0.0, std::f32::consts::TAU),
-                open: rng.range(0.0, std::f32::consts::TAU),
+                ripples: [rng.range(0.0, core::f32::consts::TAU), rng.range(0.0, core::f32::consts::TAU)],
+                rings: rng.range(0.0, core::f32::consts::TAU),
+                open: rng.range(0.0, core::f32::consts::TAU),
                 wander: rng.range(0.0, 100.0),
             },
             vigor: 0.0,
@@ -386,7 +390,7 @@ impl Ambient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::patches::clocks::{pose, Rest, DEFAULT_REST};
+    use crate::face::{pose, Rest, DEFAULT_REST};
 
     /// From the digits, through every mood and a change of mood, and back to
     /// rest: speed stays bounded, acceleration never exceeds the motor's, and

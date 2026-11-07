@@ -102,38 +102,8 @@ pub fn linear_to_srgb8(v: f32) -> u8 {
 /// perceived brightness across hues, which RGB "value" is very much not on
 /// this panel.
 pub fn oklch(l: f32, c: f32, h_deg: f32) -> Rgb {
-    let h = h_deg.to_radians();
-    let (sin, cos) = h.sin_cos();
-    let in_gamut = |c: f32| {
-        let rgb = oklab_to_linear(l, c * cos, c * sin);
-        let ok = |v: f32| (-0.0005..=1.0005).contains(&v);
-        (ok(rgb.r) && ok(rgb.g) && ok(rgb.b)).then_some(rgb)
-    };
-    if let Some(rgb) = in_gamut(c) {
-        return rgb.clamp01();
-    }
-    let (mut lo, mut hi) = (0.0_f32, c);
-    for _ in 0..16 {
-        let mid = 0.5 * (lo + hi);
-        if in_gamut(mid).is_some() {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    oklab_to_linear(l, lo * cos, lo * sin).clamp01()
-}
-
-fn oklab_to_linear(l: f32, a: f32, b: f32) -> Rgb {
-    let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
-    let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
-    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
-    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
-    Rgb::new(
-        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_93 * s3,
-        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_4 * s3,
-        -0.004_196_086_3 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
-    )
+    let [r, g, b] = screeny_clock::raster::oklch(l, c, h_deg);
+    Rgb::new(r, g, b)
 }
 
 /// Linear sRGB -> OKLab `[L, a, b]`. Distances here track how different two

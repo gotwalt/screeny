@@ -1,0 +1,15 @@
+[package]
+name = "screeny-clock"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The twenty-four clocks: choreography, a rasteriser, SNTP and time zones, shared by the Studio and the firmware"
+
+[features]
+# Use the platform's float maths. The Studio's picture is pinned by its own
+# tests, so on the host nothing here may round differently from `std`; the
+# firmware builds without this and goes through `libm`.
+std = []
+
+[dependencies]
+libm = "0.2"

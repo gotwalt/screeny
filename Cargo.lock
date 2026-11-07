@@ -2113,6 +2113,7 @@ dependencies = [
  "pollster",
  "rapier3d",
  "screeny",
+ "screeny-clock",
  "screeny-encode",
  "screeny-panel",
  "screeny-proto",
@@ -2120,6 +2121,13 @@ dependencies = [
  "serde",
  "serde_json",
  "wgpu",
+]
+
+[[package]]
+name = "screeny-clock"
+version = "0.1.0"
+dependencies = [
+ "libm",
 ]
 
 [[package]]

@@ -7,8 +7,12 @@
 //! like the same machine. Phases may overlap: a hand's moves simply add, so it
 //! cruises through a formation instead of stopping on it.
 
-use super::{Hands, CLOCKS, COLS, ROWS};
+use crate::face::{Hands, CLOCKS, COLS, ROWS};
+#[allow(unused_imports)]
+use crate::math::F32Ext;
 use crate::rng::Rng;
+use alloc::vec::Vec;
+use alloc::{format, string::String, string::ToString, vec};
 
 /// A stepper-like move: accelerate at `acc`, cruise at `speed`, decelerate.
 /// No springs, no overshoot: a hand with further to go just takes longer.
@@ -383,7 +387,7 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
         base: if flip { 90.0 } else { 270.0 },
         amp: rng.range(15.0, 30.0),
         k: (rng.range(0.4, 0.8), rng.range(0.3, 0.9) * rng.sign()),
-        phase: rng.range(0.0, std::f32::consts::TAU),
+        phase: rng.range(0.0, core::f32::consts::TAU),
         bow: rng.range(-25.0, 25.0),
     };
 
@@ -703,7 +707,7 @@ fn sketch(rng: &mut Rng) -> Composition {
         base: pick(rng, &[0.0, 90.0, 180.0, 270.0]),
         amp: rng.range(15.0, 40.0),
         k: (rng.range(0.35, 0.8), rng.range(0.3, 0.9) * rng.sign()),
-        phase: rng.range(0.0, std::f32::consts::TAU),
+        phase: rng.range(0.0, core::f32::consts::TAU),
         bow: rng.range(-30.0, 30.0),
     };
     let gather = motif(rng, focus, wave);
@@ -906,14 +910,14 @@ pub fn named(which: usize, rng: &mut Rng) -> Composition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::patches::clocks::{Rest, DEFAULT_REST};
+    use crate::face::{Rest, DEFAULT_REST};
 
     const MOTOR: Motor = Motor { speed: 100.0, acc: 160.0 };
 
     /// The digits pose under the treatment the patch ships with. Every
     /// treatment is exercised by `clocks::tests::every_rest_treatment_dances`.
     fn pose(hh: u32, mm: u32) -> [Hands; CLOCKS] {
-        crate::patches::clocks::pose(hh, mm, Rest::of(DEFAULT_REST as f32))
+        crate::face::pose(hh, mm, Rest::of(DEFAULT_REST as f32))
     }
 
     #[test]
@@ -973,7 +977,7 @@ mod tests {
         let mut variety = crate::variety::Variety::default();
         let mut rng = Rng::new(2026);
         let mut names: Vec<String> = Vec::new();
-        let mut uses = std::collections::BTreeMap::<String, usize>::new();
+        let mut uses = alloc::collections::BTreeMap::<String, usize>::new();
         for minute in 0..1440_u32 {
             let (from, to) = (pose(minute / 60, minute % 60), pose((minute + 1) / 60 % 24, (minute + 1) % 60));
             let c = compose(&mut rng, &from, &to, MOTOR, &variety);
