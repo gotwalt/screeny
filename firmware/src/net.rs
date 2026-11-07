@@ -219,7 +219,23 @@ pub async fn frames_task(
 
     // The last frame a sender put on the panel. Only the cross-fade into the
     // idle screen reads it, but it has to be captured while it is current.
-    let last: &'static mut Frame = mk_static!(Frame, Frame::new());
+    //
+    // On the heap, because `.bss` comes out of core 0's stack and the heap's
+    // 64 KB reclaimed region does not, so these 6 KB are stack. Allocated zeroed
+    // rather than `Box::new`, which would build the frame on that stack first.
+    let last: &'static mut Frame = {
+        let layout = core::alloc::Layout::new::<Frame>();
+        // SAFETY: `Frame` is a byte array, so all zeroes is a valid one, and the
+        // null check is `handle_alloc_error`'s. Never freed: it lives as long
+        // as this task, which is for ever.
+        unsafe {
+            let p = alloc::alloc::alloc_zeroed(layout).cast::<Frame>();
+            if p.is_null() {
+                alloc::alloc::handle_alloc_error(layout);
+            }
+            &mut *p
+        }
+    };
 
     let mut out = Outbox::new();
     let mut had_address = false;
