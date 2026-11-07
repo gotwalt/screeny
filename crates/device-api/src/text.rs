@@ -60,6 +60,8 @@ pub type IdText = String<MAX_ID_LEN>;
 pub type FwText = String<MAX_FW_LEN>;
 /// The friendly name; empty means `screeny-<id>`.
 pub type NameText = String<MAX_NAME_LEN>;
+/// `HH:MM:SS` on the panel's own clock.
+pub type TimeText = String<8>;
 /// An SSID, as text. See [`ssid_text`] for what happens to one that is not
 /// UTF-8.
 pub type SsidText = String<MAX_SSID_LEN>;

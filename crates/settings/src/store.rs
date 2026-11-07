@@ -13,7 +13,7 @@ use sequential_storage::Error as SsError;
 
 pub use sequential_storage::map::MapConfigError;
 
-use crate::value::{ColourOrder, Name, Psk, SettingError, Settings, Ssid, Wifi};
+use crate::value::{ClockConfig, ColourOrder, Name, Psk, SettingError, Settings, Ssid, Wifi};
 
 /// The schema version this build writes and understands.
 ///
@@ -43,6 +43,8 @@ pub mod key {
     /// Colour-line wiring, a `u8`; interpret with `ColourOrder::from_u8`.
     /// Added by card 361 without a schema bump: an absent key is `Rotated`.
     pub const COLOUR_ORDER: u8 = 6;
+    /// The on-device clock's look, [`crate::ClockConfig::to_bytes`].
+    pub const CLOCK: u8 = 7;
 }
 
 /// The longest item this schema can produce: one key byte plus the longest
@@ -201,8 +203,10 @@ impl Fields {
     pub const IDLE_MODE: Self = Self(1 << 3);
     /// The colour order.
     pub const COLOUR_ORDER: Self = Self(1 << 4);
+    /// [`Settings::clock`](crate::Settings::clock).
+    pub const CLOCK: Self = Self(1 << 5);
     /// All five.
-    pub const ALL: Self = Self(0b1_1111);
+    pub const ALL: Self = Self(0b11_1111);
 
     /// True when `other`'s bits are all set here.
     #[must_use]
@@ -397,6 +401,16 @@ impl<F: NorFlash> Store<F> {
             },
         }
 
+        match self.fetch_bytes::<{ ClockConfig::BYTES }>(scratch, key::CLOCK).await {
+            Err(e) => report.note(Fields::CLOCK, Some(e)),
+            Ok(None) => report.note(Fields::CLOCK, None),
+            Ok(Some(raw)) => match ClockConfig::from_bytes(&raw) {
+                // A shape a later firmware wrote and this one does not know.
+                None => report.note(Fields::CLOCK, None),
+                Some(clock) => out.clock = clock,
+            },
+        }
+
         (out, report)
     }
 
@@ -515,6 +529,22 @@ impl<F: NorFlash> Store<F> {
     /// [`StoreError`].
     pub async fn save_colour_order(&mut self, scratch: &mut [u8], order: ColourOrder) -> Result<Write, StoreError> {
         self.save_u8(scratch, key::COLOUR_ORDER, order.as_u8()).await
+    }
+
+    /// Store the clock's look.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn save_clock(&mut self, scratch: &mut [u8], clock: &ClockConfig) -> Result<Write, StoreError> {
+        check_scratch(scratch)?;
+        self.prepare(scratch).await?;
+        let want = clock.to_bytes();
+        let cur = self.fetch_bytes::<{ ClockConfig::BYTES }>(scratch, key::CLOCK).await?;
+        if cur.as_deref() == Some(&want[..]) {
+            return Ok(Write::Skipped);
+        }
+        self.store_bytes(scratch, key::CLOCK, &want).await?;
+        Ok(Write::Committed)
     }
 
     /// Factory reset: erase the whole region.

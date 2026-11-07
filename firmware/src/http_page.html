@@ -42,6 +42,7 @@ progress{width:100%}
 <label><span>Brightness <output id="bv"></output> (the panel limits the top end to stay safe)</span><input id="bright" type="range" min="0" max="255"></label>
 <label><span>When nothing is streaming</span>
 <select id="idle">
+<option value="clock">the clock</option>
 <option value="status">status screen</option>
 <option value="hold_forever">hold the last frame</option>
 <option value="dim">dim the last frame</option>
@@ -57,6 +58,17 @@ progress{width:100%}
 <div class="row"><button type="submit">Apply</button>
 <button type="button" id="ident">Identify</button>
 <button type="button" id="boot" class="warn">Reboot</button></div>
+</form>
+
+<h2>Clock</h2>
+<p class="sub" id="cnow">The twenty-four clocks, running on the panel itself, on San Francisco time. A stream from the Studio still takes over, and the clock comes back when it ends.</p>
+<form id="clk">
+<div id="csl"></div>
+<label><span>Choreography</span><select id="cdance"></select></label>
+<label><span>Resting dials</span><select id="crest"></select></label>
+<label class="ck"><input id="c24" type="checkbox"> 24-hour</label>
+<div class="row"><button type="button" id="cgo">Dance now</button>
+<button type="button" id="cdef">Gold and Blue</button></div>
 </form>
 
 <h2>Wi-Fi</h2>
@@ -79,6 +91,7 @@ progress{width:100%}
 </form>
 <noscript><p class="sub">Uploading a file needs JavaScript.</p></noscript>
 
+<!--CLOCK-->
 <script>
 const $=s=>document.querySelector(s),msg=t=>{$("#msg").textContent=t};
 let touched=false;
@@ -155,6 +168,29 @@ $("#up").addEventListener("submit",e=>{
  x.send(f);
 });
 poll();setInterval(poll,4000);
+
+/* The clock. Sliders apply as they move: the panel takes the look on its next
+   frame and flash takes it once they stop, so nothing here needs an Apply. */
+const CS=[["hue","Hour hand hue",0,360],["chroma","Hour hand colour",0,200],["hue2","Minute hand hue",0,360],["chroma2","Minute hand colour",0,200],
+["light","Hand lightness",60,95],["weight","Hand weight",100,240],["tip","Hand tip while dancing",20,100],["dials","Dial rings",0,100],
+["speed","Hand speed, degrees a second",30,360],["still","Seconds the time is held",3,60]];
+const GB={hue:74,chroma:65,hue2:240,chroma2:65,light:67,weight:155,tip:20,dials:0,speed:100,still:5,dance:0,rest:3,hours24:true};
+const opt=(s,a)=>{s.innerHTML="";a.forEach((t,i)=>s.add(new Option(t,i)))};
+opt($("#cdance"),["vary",...DANCES,"composed"]);opt($("#crest"),RESTS);
+$("#csl").innerHTML=CS.map(c=>`<label><span>${c[1]} <output id="o-${c[0]}"></output></span><input id="c-${c[0]}" type="range" min="${c[2]}" max="${c[3]}"></label>`).join("");
+const look=()=>{const l={};CS.forEach(c=>l[c[0]]=+$("#c-"+c[0]).value);l.dance=+$("#cdance").value;l.rest=+$("#crest").value;l.hours24=$("#c24").checked;return l};
+const paint=()=>CS.forEach(c=>{$("#o-"+c[0]).textContent=$("#c-"+c[0]).value});
+const show=j=>{CS.forEach(c=>{$("#c-"+c[0]).value=j.look[c[0]]});$("#cdance").value=j.look.dance;$("#crest").value=j.look.rest;$("#c24").checked=j.look.hours24;paint()};
+const now=j=>{$("#cnow").textContent=j.time?"The panel says "+j.time+".":"Waiting for a time server."};
+const post=b=>fetch("/api/v1/clock",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json());
+let ct;
+const send2=()=>{clearTimeout(ct);ct=setTimeout(()=>post({look:look()}).then(j=>j.look&&now(j)).catch(()=>{}),120)};
+$("#clk").addEventListener("input",()=>{paint();send2()});
+$("#clk").addEventListener("submit",e=>e.preventDefault());
+$("#cgo").addEventListener("click",()=>post({dance_now:true}));
+$("#cdef").addEventListener("click",()=>{show({look:GB});post({look:GB})});
+fetch("/api/v1/clock").then(r=>r.json()).then(j=>{show(j);now(j)}).catch(()=>{});
+setInterval(()=>fetch("/api/v1/clock").then(r=>r.json()).then(now).catch(()=>{}),5000);
 </script>
 </body>
 </html>

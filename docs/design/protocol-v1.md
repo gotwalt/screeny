@@ -888,6 +888,7 @@ Idle modes, settable with `SET_IDLE` and persisted:
 | 1 | `HOLD_FOREVER` | stay in `HOLD`; never fade |
 | 2 | `DIM` | fade the last frame to 10% brightness and hold it |
 | 3 | `BLACK` | fade to black |
+| 4 | `CLOCK` | the device runs its own clock from network time; `STATUS`'s screen until a time server has answered |
 
 The default is `STATUS` and not `BLACK` on purpose: a black panel is
 indistinguishable from a broken one, and the status screen answers "what is this
@@ -1172,6 +1173,8 @@ streamed to flash as it arrives and only its head has to fit.
 | GET | `/api/v1/wifi` | - | `WifiReply` | - |
 | POST | `/api/v1/wifi` | urlencoded `ssid=&psk=` | `{"result":"trying"}` | 384 |
 | POST | `/api/v1/settings` | `{name?, brightness?, idle_mode?}` | `SettingsReply` | 373 |
+| GET | `/api/v1/clock` | - | `ClockReply` | - |
+| POST | `/api/v1/clock` | `{look?, dance_now?}` | `ClockReply` | 332 |
 | POST | `/api/v1/firmware[?activate=0]` | a raw `application/octet-stream` image, streamed | `FirmwareReply` | the slot |
 | POST | `/api/v1/reboot` | `{"confirm":"RBOO"}` | `{"result":"rebooting"}` | 188 |
 | POST | `/api/v1/identify` | `{"duration_ms":N}` | `{"result":"identifying"}` | 152 |

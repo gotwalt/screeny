@@ -209,7 +209,10 @@ fn idle_screen(s: &Scene<'_>, c: &mut Canvas) {
             let dim = (s.brightness as u32 / 10) as u8;
             panel::apply(&s.model, dim, s.decoded, &mut c.px);
         }
-        IdleMode::Status => status_screen(s, c),
+        // The clock needs a sense of time the simulator's scenes do not have;
+        // it answers the clock's API and shows what a panel shows until a time
+        // server has answered.
+        IdleMode::Status | IdleMode::Clock => status_screen(s, c),
     }
 }
 

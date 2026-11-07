@@ -84,11 +84,12 @@ use picoserve::response::{Connection, IntoResponse, Json, Response, ResponseWrit
 use picoserve::routing::{PathRouterService, Router, ServicePathRouter};
 use picoserve::{ResponseSent, Server};
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, PanicRecord, PanicReply, SettingsReply, StatusReply,
+    AcceptedReply, ClockReply, FirmwareReply, PanicRecord, PanicReply, SettingsReply, StatusReply,
     TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{
-    IdentifyRequest, Mutating, RebootRequest, SettingsRequest, MIN_UNESCAPE_BUFFER,
+    ClockLook, ClockRequest, IdentifyRequest, Mutating, RebootRequest, SettingsRequest,
+    MIN_UNESCAPE_BUFFER,
 };
 use screeny_device_api::{
     form, route, text, ErrorCode, ErrorReply, FirmwareError, FwSlot, FwState, IdleMode,
@@ -180,6 +181,8 @@ const PAGE: &str = include_str!("http_page.html");
 /// status as of page load; the script replaces the same table every few
 /// seconds when it is enabled.
 const PAGE_SPLIT: &str = "<!--STATUS-->";
+/// Where the clock's data goes in [`PAGE`].
+const PAGE_CLOCK: &str = "<!--CLOCK-->";
 
 const _: () = assert!(PAGE.len() < 16384, "the status page has got out of hand");
 
@@ -423,6 +426,7 @@ enum ApiBody {
     Telemetry(TelemetryReply),
     Wifi(WifiReply),
     Settings(SettingsReply),
+    Clock(ClockReply),
     /// The three routes that answer `{"result":...}`.
     Accepted(AcceptedReply),
     /// `POST /api/v1/firmware` (card 240). **Eight bytes**, and that is the
@@ -448,6 +452,7 @@ impl serde::Serialize for ApiBody {
             ApiBody::Telemetry(v) => v.serialize(s),
             ApiBody::Wifi(v) => v.serialize(s),
             ApiBody::Settings(v) => v.serialize(s),
+            ApiBody::Clock(v) => v.serialize(s),
             ApiBody::Accepted(v) => v.serialize(s),
             ApiBody::Firmware(v) => v.serialize(s),
             ApiBody::Error(v) => v.serialize(s),
@@ -920,6 +925,59 @@ async fn post_settings(req: SettingsRequest) -> Reply {
     }))
 }
 
+/// The clock as the API tells it.
+fn clock_reply() -> ClockReply {
+    let (c, _) = crate::clock::snapshot();
+    ClockReply {
+        look: ClockLook {
+            hue: c.hue,
+            chroma: c.chroma,
+            hue2: c.hue2,
+            chroma2: c.chroma2,
+            light: c.light,
+            weight: c.weight,
+            tip: c.tip,
+            dials: c.dials,
+            speed: c.speed,
+            still: c.still,
+            dance: c.dance,
+            rest: c.rest,
+            hours24: c.hours24,
+        },
+        time: crate::clock::wall_hms().and_then(|(h, m, s)| {
+            let mut t = text::TimeText::new();
+            write!(t, "{h:02}:{m:02}:{s:02}").ok().map(|()| t)
+        }),
+        synced_ago_s: crate::clock::synced_ago_s(),
+    }
+}
+
+/// `POST /api/v1/clock`: the look reaches the panel on its next frame and flash
+/// once the page has gone quiet, so a slider may send this as fast as it likes.
+fn post_clock(req: ClockRequest) -> Reply {
+    if let Some(l) = req.look {
+        crate::clock::set_look(screeny_settings::ClockConfig {
+            hue: l.hue,
+            chroma: l.chroma,
+            hue2: l.hue2,
+            chroma2: l.chroma2,
+            light: l.light,
+            weight: l.weight,
+            tip: l.tip,
+            dials: l.dials,
+            speed: l.speed,
+            still: l.still,
+            dance: l.dance,
+            rest: l.rest,
+            hours24: l.hours24,
+        });
+    }
+    if req.dance_now == Some(true) {
+        crate::clock::dance_now();
+    }
+    Reply::ok(ApiBody::Clock(clock_reply()))
+}
+
 /// The API's colour order as the store's. Two enums, one per crate, for the
 /// reason `IdleMode` has two: `screeny-device-api` does not depend on
 /// `screeny-settings`, and the firmware is the one place both are in scope.
@@ -1363,6 +1421,7 @@ const fn idle_human(m: IdleMode) -> &'static str {
         IdleMode::HoldForever => "hold the last frame",
         IdleMode::Dim => "dim the last frame",
         IdleMode::Black => "black",
+        IdleMode::Clock => "the clock",
     }
 }
 
@@ -1449,7 +1508,20 @@ impl core::fmt::Display for Page {
                 ),
             )?,
         }
-        f.write_str(self.tail)
+        // The page's second marker: what only the firmware knows about the
+        // clock, so the page and the engine cannot list different dances.
+        let (before, after) = self.tail.split_once(PAGE_CLOCK).unwrap_or((self.tail, ""));
+        f.write_str(before)?;
+        f.write_str("<script>const DANCES=[")?;
+        for name in screeny_clock::dance::NAMES {
+            write!(f, "\"{name}\",")?;
+        }
+        f.write_str("],RESTS=[")?;
+        for rest in screeny_clock::face::RESTS {
+            write!(f, "\"{}\",", rest.name)?;
+        }
+        f.write_str("];</script>")?;
+        f.write_str(after)
     }
 }
 
@@ -1918,6 +1990,11 @@ async fn route_request<R: picoserve::io::Read>(
         },
         (route::Method::Post, route::SETTINGS) => match json_body(body.body()).await {
             Ok(req) => post_settings(req).await,
+            Err(e) => Reply::error(e),
+        },
+        (route::Method::Get, route::CLOCK) => Reply::ok(ApiBody::Clock(clock_reply())),
+        (route::Method::Post, route::CLOCK) => match json_body(body.body()).await {
+            Ok(req) => post_clock(req),
             Err(e) => Reply::error(e),
         },
         (route::Method::Post, route::IDENTIFY) => match json_body(body.body()).await {

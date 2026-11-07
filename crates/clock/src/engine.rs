@@ -303,7 +303,11 @@ impl Engine {
         let now_minute = (clock / 60.0).floor() as i64;
         let next = match self.minute {
             None => now_minute,
-            Some(shown) if shown < now_minute => now_minute,
+            // Behind, or ahead by more than the minute in hand: the wall clock
+            // has moved under the hands. The clocks going back at the end of
+            // summer time is the common case, and a new time zone the other;
+            // without the second test the hands would stop for the hour.
+            Some(shown) if shown < now_minute || shown > now_minute + 1 => now_minute,
             Some(shown) => shown + 1,
         };
         let to = Self::target(next, hours24, rest);
@@ -358,5 +362,62 @@ impl Engine {
         let (_, total) = dance::plan(&composition.phases, &self.angles, to, motor);
         self.timed = Some(Timed { minute, choice, from: self.angles, motor: key, total });
         total
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(e: &mut Engine, knobs: &Knobs, t: &mut f64, offset: f64, seconds: f64) {
+        let end = *t + seconds;
+        while *t < end {
+            *t += 0.05;
+            e.step(Tick { t: *t, dt: 0.05, now: *t + offset }, knobs);
+        }
+    }
+
+    fn shown(e: &Engine) -> i64 {
+        e.minute.expect("the hands show a time")
+    }
+
+    #[test]
+    fn the_hands_land_on_each_minute_as_it_turns() {
+        let (mut e, knobs, mut t) = (Engine::new(1), Knobs::default(), 0.0);
+        let start = 10.0 * 3600.0;
+        // Three seconds into a minute: landed, held, and not yet off again.
+        run(&mut e, &knobs, &mut t, start, 303.0);
+        assert_eq!(shown(&e), ((start + t) / 60.0).floor() as i64);
+        assert_eq!(*e.angles(), Engine::target(shown(&e), true, knobs.rest));
+    }
+
+    #[test]
+    fn the_clocks_going_back_do_not_stop_the_hands() {
+        let (mut e, knobs, mut t) = (Engine::new(2), Knobs::default(), 0.0);
+        let summer = 2.0 * 3600.0;
+        run(&mut e, &knobs, &mut t, summer, 183.0);
+        let before = shown(&e);
+        run(&mut e, &knobs, &mut t, summer - 3600.0, 180.0);
+        assert_eq!(shown(&e), before + 3 - 60, "the hands are still on the old hour");
+        assert_eq!(*e.angles(), Engine::target(shown(&e), true, knobs.rest));
+    }
+
+    #[test]
+    fn the_clocks_going_forward_arrive_straight_away() {
+        let (mut e, knobs, mut t) = (Engine::new(3), Knobs::default(), 0.0);
+        run(&mut e, &knobs, &mut t, 3600.0, 120.0);
+        let before = shown(&e);
+        run(&mut e, &knobs, &mut t, 7200.0, 120.0);
+        assert_eq!(shown(&e), before + 2 + 60);
+    }
+
+    #[test]
+    fn a_dance_asked_for_starts_at_once() {
+        let (mut e, knobs, mut t) = (Engine::new(4), Knobs::default(), 0.0);
+        run(&mut e, &knobs, &mut t, 0.0, 123.0);
+        e.ask(Request::Another);
+        run(&mut e, &knobs, &mut t, 0.0, 0.2);
+        assert!(matches!(e.doing(), Doing::Dancing { .. }), "{:?}", e.doing());
+        assert!(e.settled() < 1.0);
     }
 }

@@ -17,6 +17,7 @@ use crate::enums::{
     Accepted, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
     StreamState, UpdateOutcome, WifiState,
 };
+use crate::text::TimeText;
 use crate::text::{
     ipv4_text, ssid_text, FwText, IdText, IpText, NameText, PanicFileText, PanicWhatText, SsidText, MAX_FW_LEN,
     MAX_ID_LEN, MAX_IP_LEN, MAX_NAME_LEN, MAX_PANIC_FILE_LEN, MAX_PANIC_WHAT_LEN, MAX_SSID_LEN,
@@ -566,6 +567,26 @@ impl SettingsReply {
         + field("brightness", MAX_U8_LEN)
         + field("idle_mode", IdleMode::MAX_JSON_LEN)
         + field("colour_order", ColourOrder::MAX_JSON_LEN);
+}
+
+/// `GET` and `POST /api/v1/clock`: the on-device clock, whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockReply {
+    /// The look now in effect.
+    pub look: crate::request::ClockLook,
+    /// The time on the wall by this panel, or `null` until it has heard from a
+    /// time server.
+    pub time: Option<TimeText>,
+    /// Seconds since a time server last answered, or `null` if none has.
+    pub synced_ago_s: Option<u32>,
+}
+
+impl ClockReply {
+    /// An upper bound on the serialised length.
+    pub const MAX_JSON_LEN: usize = 1
+        + field("look", crate::request::ClockLook::MAX_JSON_LEN)
+        + field("time", 10)
+        + field("synced_ago_s", 10);
 }
 
 // ---------------------------------------------------------------------------

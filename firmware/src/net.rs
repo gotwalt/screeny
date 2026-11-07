@@ -26,6 +26,7 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use log::{info, warn};
+use screeny_proto::control::IdleMode;
 
 use crate::display::Frame;
 use crate::fb::Producer;
@@ -231,6 +232,7 @@ pub async fn frames_task(
     let mut ota_was = false;
     let mut button_was: Option<crate::button::Panel> = None;
     let mut screen_brightness_was = crate::SCREEN_BRIGHTNESS_NONE;
+    let mut face: Option<alloc::boxed::Box<crate::clock::Face>> = None;
 
     loop {
         let mut keep_len = 0usize;
@@ -416,12 +418,19 @@ pub async fn frames_task(
         // upload that finished.
         let ota_edge = ota.is_some() != ota_was;
         ota_was = ota.is_some();
+        // The clock moves hands, not a status sweep: every pass of this loop
+        // (`TICK`, 50 a second with nothing arriving) rather than ten a second.
+        let anim_ms = if core.idle_mode() == IdleMode::Clock && crate::clock::synced() {
+            0
+        } else {
+            ANIM_MS
+        };
         let due = animating
             || portal_due
             || ota_edge
             || button_edge
             || core.redraw() != redraw_seen
-            || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= ANIM_MS);
+            || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= anim_ms);
 
         if due {
             redraw_seen = core.redraw();
@@ -466,9 +475,11 @@ pub async fn frames_task(
                     Intent::Identify => {
                         screens::identify(producer.back(), core.name(), net, now_ms)
                     }
-                    Intent::Idle => core.draw_idle(producer.back(), last, hostname, net, phase),
+                    Intent::Idle => {
+                        core.draw_idle(producer.back(), last, hostname, net, phase, &mut face, now)
+                    }
                     Intent::Fade { t } => {
-                        core.draw_idle(producer.back(), last, hostname, net, phase);
+                        core.draw_idle(producer.back(), last, hostname, net, phase, &mut face, now);
                         // In place, so the fade needs no third buffer:
                         // back = lerp(last, target, t).
                         let dst = producer.back();

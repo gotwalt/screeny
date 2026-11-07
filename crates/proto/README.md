@@ -61,7 +61,7 @@ control::op::{PING, GET_INFO, TELEMETRY, SET_BRIGHTNESS, IDENTIFY, SET_IDLE,
 control::{state, wifi_state, busy_reason}  // the undefined-until-now bytes
 enum ErrorCode { BadLength, UnknownOp, Version, Busy, BadArg,
                  Storage, Wifi, NotPermitted, RateLimited }
-enum IdleMode { Status, HoldForever, Dim, Black }
+enum IdleMode { Status, HoldForever, Dim, Black, Clock }
 
 enum Request<'a> { Ping, GetInfo, Telemetry, SetBrightness(u8),
                    Identify { duration_ms }, SetIdle(IdleMode), ResetStats,

@@ -279,7 +279,7 @@ fn request_decode_reports_the_error_code_to_reply_with() {
     assert_eq!(Request::decode(op::PING, &[0]), Err(ErrorCode::BadLength));
     assert_eq!(Request::decode(op::SET_BRIGHTNESS, &[]), Err(ErrorCode::BadLength));
     assert_eq!(Request::decode(op::SET_BRIGHTNESS, &[1, 2]), Err(ErrorCode::BadLength));
-    assert_eq!(Request::decode(op::SET_IDLE, &[4]), Err(ErrorCode::BadArg));
+    assert_eq!(Request::decode(op::SET_IDLE, &[5]), Err(ErrorCode::BadArg));
     // SET_NAME longer than 32 bytes
     let mut long = vec![33u8];
     long.extend([b'x'; 33]);

@@ -6,9 +6,9 @@
 //! server covers it and the README can be checked against it.
 
 use crate::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
+    AcceptedReply, ClockReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
 };
-use crate::request::{IdentifyRequest, RebootRequest, SettingsRequest};
+use crate::request::{ClockRequest, IdentifyRequest, RebootRequest, SettingsRequest};
 
 /// The version in every path, and the `api` field of [`StatusReply`].
 ///
@@ -48,6 +48,8 @@ pub const SCAN_MIN_INTERVAL_MS: u32 = 10_000;
 pub const WIFI: &str = "/api/v1/wifi";
 /// `POST /api/v1/settings`: [`SettingsRequest`] in, [`SettingsReply`] out.
 pub const SETTINGS: &str = "/api/v1/settings";
+/// `GET` -> [`ClockReply`]; `POST`: [`ClockRequest`] in, [`ClockReply`] out.
+pub const CLOCK: &str = "/api/v1/clock";
 /// `POST /api/v1/firmware`: a raw `application/octet-stream` body,
 /// [`FirmwareReply`] out.
 pub const FIRMWARE: &str = "/api/v1/firmware";
@@ -160,6 +162,22 @@ pub const ROUTES: &[Route] = &[
         body: Body::Json,
         max_request_len: SettingsRequest::MAX_JSON_LEN,
         max_reply_len: SettingsReply::MAX_JSON_LEN,
+        mutating: true,
+    },
+    Route {
+        path: CLOCK,
+        method: Method::Get,
+        body: Body::None,
+        max_request_len: 0,
+        max_reply_len: ClockReply::MAX_JSON_LEN,
+        mutating: false,
+    },
+    Route {
+        path: CLOCK,
+        method: Method::Post,
+        body: Body::Json,
+        max_request_len: ClockRequest::MAX_JSON_LEN,
+        max_reply_len: ClockReply::MAX_JSON_LEN,
         mutating: true,
     },
     Route {

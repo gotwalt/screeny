@@ -47,6 +47,7 @@ extern crate alloc;
 mod apsta_probe;
 /// Card 230: GPIO15, the gesture ladder and the three screens that go with it.
 mod button;
+mod clock;
 mod display;
 mod fb;
 /// Card 245's bench build: erase, write and read back inactive-slot sectors at
@@ -589,6 +590,9 @@ async fn display_task(
 /// and the failure mode of getting this wrong is not a degraded server: it is
 /// `SocketSet::add` panicking on the first poll of a task, which is a boot
 /// loop. 408 bytes is the right price for the slot that is not needed.
+///
+/// `clock::sntp_task`'s UDP socket borrows that spare for the moment of an
+/// exchange, once an hour.
 const NET_SOCKETS: usize = 8;
 
 // Card 223: the attempt count (spec 8.3's three), the retry interval and the
@@ -902,7 +906,20 @@ async fn main(spawner: Spawner) {
     // first announcement rather than rename itself a second later.
     //
     // This is a read, and core 1 is not running yet, so nothing is parked.
-    let (settings, _report) = store::init(peripherals.FLASH).await;
+    //
+    // Boxed, and the report gone with this block: everything below holds these
+    // across an `await`, so their bytes would sit in this task's static future,
+    // and `.bss` is core 0's stack.
+    let settings = {
+        #[cfg_attr(not(feature = "clock-by-default"), allow(unused_variables, unused_mut))]
+        let (mut settings, report) = store::init(peripherals.FLASH).await;
+        #[cfg(feature = "clock-by-default")]
+        if report.fallback.contains(screeny_settings::Fields::IDLE_MODE) {
+            settings.idle_mode = screeny_settings::IdleMode::Clock;
+        }
+        alloc::boxed::Box::new(settings)
+    };
+    clock::init(&settings);
     // Card 222: `fw_slot` and `fw_state` for `GET /api/v1/status`, read once
     // here rather than per request - it needs the `STORE` lock, and nothing can
     // change the answer until card 241's confirm/revert lands. Card 243: it
@@ -1301,6 +1318,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(store::selftest::selftest_task(settings.clone()).unwrap());
     spawner.spawn(net::frames_task(stack, producer, host).unwrap());
     spawner.spawn(net::control_task(stack).unwrap());
+    spawner.spawn(clock::sntp_task(stack).unwrap());
     spawner.spawn(mdns::mdns_task(stack, host, id).unwrap());
     // Card 362: Improv Serial on UART0's receive side, for ESP Web Tools.
     spawner.spawn(

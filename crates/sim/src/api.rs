@@ -50,9 +50,11 @@ use std::time::Instant;
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::form::parse_wifi_form;
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
+    AcceptedReply, ClockReply, FirmwareReply, NetworksReply, SettingsReply, StatusReply, TelemetryReply,
 };
-use screeny_device_api::request::{IdentifyRequest, Mutating, RebootRequest, SettingsRequest};
+use screeny_device_api::request::{
+    ClockLook, ClockRequest, IdentifyRequest, Mutating, RebootRequest, SettingsRequest,
+};
 use screeny_device_api::{route, FirmwareError, StreamState};
 use screeny_proto::control::{self as proto, Reply, Request};
 
@@ -191,13 +193,40 @@ pub fn host_is_ours(host: Option<&str>, instance: &str) -> bool {
 pub struct ApiState {
     boot: Instant,
     scan: Mutex<route::RateLimit>,
+    clock: Mutex<ClockReply>,
 }
 
 impl ApiState {
+    fn clock(&self) -> std::sync::MutexGuard<'_, ClockReply> {
+        self.clock.lock().unwrap()
+    }
+
     /// A fresh one. Nothing has scanned yet, so the first request always does.
     #[must_use]
     pub fn new() -> Self {
-        ApiState { boot: Instant::now(), scan: Mutex::new(route::RateLimit::new(route::SCAN_MIN_INTERVAL_MS)) }
+        ApiState {
+            boot: Instant::now(),
+            scan: Mutex::new(route::RateLimit::new(route::SCAN_MIN_INTERVAL_MS)),
+            clock: Mutex::new(ClockReply {
+                look: ClockLook {
+                    hue: 74,
+                    chroma: 65,
+                    hue2: 240,
+                    chroma2: 65,
+                    light: 67,
+                    weight: 155,
+                    tip: 20,
+                    dials: 0,
+                    speed: 100,
+                    still: 5,
+                    dance: 0,
+                    rest: 3,
+                    hours24: true,
+                },
+                time: None,
+                synced_ago_s: None,
+            }),
+        }
     }
 
     /// Milliseconds since this state was built, as the `u32` the limiter takes.
@@ -321,6 +350,8 @@ fn dispatch(shared: &Shared, state: &ApiState, head: &Head, body: Body<'_>) -> R
         (route::Method::Post, route::FIRMWARE) => post_firmware(shared, head, body),
         (route::Method::Post, route::REBOOT) => post_reboot(shared, head, body),
         (route::Method::Post, route::IDENTIFY) => post_identify(shared, head, body),
+        (route::Method::Get, route::CLOCK) => ok_json(&*state.clock()),
+        (route::Method::Post, route::CLOCK) => post_clock(state, body),
         // Unreachable: the table walk above proved the pair is in `ROUTES`.
         _ => bare(ErrorCode::NotFound),
     }
@@ -523,6 +554,31 @@ fn post_wifi(shared: &Shared, _head: &Head, body: Body<'_>) -> Response {
             error_response(ErrorCode::Unavailable, &format!("no trial join from {}", phase.name()))
         }
     }
+}
+
+/// The look is kept and read back; nothing is drawn with them.
+/// A simulator has no time server, so `time` stays `null`, as a panel's does
+/// until one has answered.
+fn post_clock(state: &ApiState, body: Body<'_>) -> Response {
+    let body = match buffered(body) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if let Err(r) = within_bound(route::CLOCK, route::Method::Post, body.len()) {
+        return r;
+    }
+    let req: ClockRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => return error_response(ErrorCode::BadJson, "not a clock request"),
+    };
+    if let Err(code) = req.check_auth() {
+        return bare(code);
+    }
+    let mut clock = state.clock();
+    if let Some(look) = req.look {
+        clock.look = look;
+    }
+    ok_json(&*clock)
 }
 
 fn post_settings(shared: &Shared, head: &Head, body: Body<'_>) -> Response {

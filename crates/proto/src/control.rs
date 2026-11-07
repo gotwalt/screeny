@@ -124,6 +124,9 @@ pub enum IdleMode {
     Dim = 2,
     /// Fade to black.
     Black = 3,
+    /// Run the clock on the device itself, from network time. Falls back to the
+    /// status screen until the time is known.
+    Clock = 4,
 }
 
 impl IdleMode {
@@ -140,6 +143,7 @@ impl IdleMode {
             1 => IdleMode::HoldForever,
             2 => IdleMode::Dim,
             3 => IdleMode::Black,
+            4 => IdleMode::Clock,
             _ => return None,
         })
     }

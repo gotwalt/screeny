@@ -119,6 +119,7 @@ fn every_key_round_trips() {
     block_on(st.save_brightness(buf, 137)).unwrap();
     block_on(st.save_idle_mode(buf, IdleMode::Dim)).unwrap();
     block_on(st.save_colour_order(buf, ColourOrder::Published)).unwrap();
+    block_on(st.save_clock(buf, &screeny_settings::ClockConfig::default())).unwrap();
 
     let (settings, report) = load(&mut st);
     assert!(report.is_clean(), "{report:?}");
@@ -369,33 +370,33 @@ fn a_save_of_the_stored_value_writes_nothing() {
     let buf = scratch.as_mut_slice();
     let mut st = store(blank_flash());
 
-    assert_eq!(block_on(st.save_brightness(buf, 40)), Ok(Write::Committed));
-    assert_eq!(block_on(st.save_brightness(buf, 40)), Ok(Write::Skipped));
+    assert_eq!(block_on(st.save_brightness(buf, 40)), Ok(screeny_settings::Write::Committed));
+    assert_eq!(block_on(st.save_brightness(buf, 40)), Ok(screeny_settings::Write::Skipped));
 
     let before = st.flash().stats_snapshot();
-    assert_eq!(block_on(st.save_brightness(buf, 40)), Ok(Write::Skipped));
+    assert_eq!(block_on(st.save_brightness(buf, 40)), Ok(screeny_settings::Write::Skipped));
     let d = before.compare_to(st.flash().stats_snapshot());
     assert_eq!((d.writes, d.erases), (0, 0));
 
     let name = Name::new("hall").unwrap();
-    assert_eq!(block_on(st.save_name(buf, &name)), Ok(Write::Committed));
-    assert_eq!(block_on(st.save_name(buf, &name)), Ok(Write::Skipped));
+    assert_eq!(block_on(st.save_name(buf, &name)), Ok(screeny_settings::Write::Committed));
+    assert_eq!(block_on(st.save_name(buf, &name)), Ok(screeny_settings::Write::Skipped));
     // An empty name on a store that has never had one is also a no-op.
     let mut fresh = store(blank_flash());
     let mut aligned = Aligned::<128>::new();
     let b2 = aligned.buf();
     block_on(fresh.save_brightness(b2, 1)).unwrap();
-    assert_eq!(block_on(fresh.save_name(b2, &Name::empty())), Ok(Write::Skipped));
+    assert_eq!(block_on(fresh.save_name(b2, &Name::empty())), Ok(screeny_settings::Write::Skipped));
 
     assert_eq!(
         block_on(st.save_idle_mode(buf, IdleMode::Status)),
-        Ok(Write::Committed),
+        Ok(screeny_settings::Write::Committed),
         "an explicit Status is still recorded, so a later default change cannot move it"
     );
-    assert_eq!(block_on(st.save_idle_mode(buf, IdleMode::Status)), Ok(Write::Skipped));
+    assert_eq!(block_on(st.save_idle_mode(buf, IdleMode::Status)), Ok(screeny_settings::Write::Skipped));
 
-    assert_eq!(block_on(st.save_wifi(buf, &wifi())), Ok(Write::Committed));
-    assert_eq!(block_on(st.save_wifi(buf, &wifi())), Ok(Write::Skipped));
+    assert_eq!(block_on(st.save_wifi(buf, &wifi())), Ok(screeny_settings::Write::Committed));
+    assert_eq!(block_on(st.save_wifi(buf, &wifi())), Ok(screeny_settings::Write::Skipped));
 }
 
 // -- clearing and erasing --------------------------------------------------
@@ -411,8 +412,8 @@ fn clear_wifi_leaves_the_other_settings_alone() {
     block_on(st.save_brightness(buf, 11)).unwrap();
     block_on(st.save_name(buf, &Name::new("shed").unwrap())).unwrap();
 
-    assert_eq!(block_on(st.clear_wifi(buf)), Ok(Write::Committed));
-    assert_eq!(block_on(st.clear_wifi(buf)), Ok(Write::Skipped), "clearing a cleared store writes nothing");
+    assert_eq!(block_on(st.clear_wifi(buf)), Ok(screeny_settings::Write::Committed));
+    assert_eq!(block_on(st.clear_wifi(buf)), Ok(screeny_settings::Write::Skipped), "clearing a cleared store writes nothing");
 
     let (settings, report) = load(&mut st);
     assert_eq!(settings.wifi, None);
@@ -707,4 +708,33 @@ fn a_colour_order_this_build_does_not_know_falls_back_without_an_error() {
     assert_eq!(settings.brightness, 77);
     assert!(report.fallback.contains(Fields::COLOUR_ORDER));
     assert_eq!(report.error, None);
+}
+
+#[test]
+fn the_clock_settings_round_trip_and_a_second_save_is_free() {
+    let mut scratch = Scratch::new();
+    let buf = scratch.as_mut_slice();
+    let mut st = store(blank_flash());
+    let clock = screeny_settings::ClockConfig { hue: 12, speed: 200, hours24: false, ..Default::default() };
+    assert_eq!(block_on(st.save_clock(buf, &clock)), Ok(screeny_settings::Write::Committed));
+    assert_eq!(block_on(st.save_clock(buf, &clock)), Ok(screeny_settings::Write::Skipped));
+    let (settings, _) = load(&mut st);
+    assert_eq!(settings.clock, clock);
+}
+
+#[test]
+fn a_store_from_before_the_clock_loads_the_clocks_defaults() {
+    let mut scratch = Scratch::new();
+    let mut st = store(blank_flash());
+    block_on(st.save_brightness(scratch.as_mut_slice(), 40)).unwrap();
+    let (settings, _) = load(&mut st);
+    assert_eq!(settings.clock, screeny_settings::ClockConfig::default());
+}
+
+#[test]
+fn a_clock_config_out_of_range_is_pulled_back_in() {
+    let wild = screeny_settings::ClockConfig { light: 300, speed: 0, weight: 9999, ..Default::default() };
+    let back = screeny_settings::ClockConfig::from_bytes(&wild.to_bytes()).unwrap();
+    assert_eq!((back.light, back.speed, back.weight), (95, 30, 240));
+    assert_eq!(screeny_settings::ClockConfig::from_bytes(&[0; 3]), None);
 }

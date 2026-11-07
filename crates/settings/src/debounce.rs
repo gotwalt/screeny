@@ -30,11 +30,14 @@ pub enum Field {
     Brightness = 1,
     /// The idle mode.
     IdleMode = 2,
+    /// The on-device clock's look: the settings page's sliders are what this
+    /// protects flash from.
+    Clock = 3,
 }
 
 impl Field {
     /// Every field, in order. Handy for a caller that wants to drain.
-    pub const ALL: [Field; 3] = [Field::Name, Field::Brightness, Field::IdleMode];
+    pub const ALL: [Field; 4] = [Field::Name, Field::Brightness, Field::IdleMode, Field::Clock];
 
     const fn index(self) -> usize {
         self as usize
@@ -54,14 +57,14 @@ impl Field {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Debounce {
     /// `Some(t)` = this field changed at `t` and has not been committed.
-    changed_at: [Option<u64>; 3],
+    changed_at: [Option<u64>; 4],
 }
 
 impl Debounce {
     /// Nothing pending.
     #[must_use]
     pub const fn new() -> Self {
-        Self { changed_at: [None; 3] }
+        Self { changed_at: [None; 4] }
     }
 
     /// Record that `field` changed at `now_ms`. Restarts that field's timer.
