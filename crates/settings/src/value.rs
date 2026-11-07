@@ -327,16 +327,14 @@ pub struct ClockConfig {
     pub rest: u8,
     /// 24-hour digits.
     pub hours24: bool,
-    /// Seconds per displayed minute; 60 is a real clock.
-    pub pace: u16,
-    /// Minutes added to the time.
-    pub offset: u16,
     /// A resting dial's dark ramp.
     pub dark: u8,
     /// Tenths of a second the resting dials take to dim.
     pub fade: u16,
     /// Reduce motion.
     pub calm: bool,
+    /// Under reduce motion, the fastest a hand may turn, degrees per second.
+    pub limit: u16,
 }
 
 impl Default for ClockConfig {
@@ -361,18 +359,17 @@ impl ClockConfig {
             dance: 0,
             rest: 3,
             hours24: true,
-            pace: 60,
-            offset: 0,
             dark: 0,
             fade: 15,
             calm: false,
+            limit: 60,
     };
 
-    /// The stored size. Older, shorter forms still load: what they do not
-    /// have comes from [`ClockConfig::DEFAULT`].
-    pub const BYTES: usize = 31;
-    /// The shortest form that was ever stored.
-    const BYTES_MIN: usize = 23;
+    /// The stored size.
+    pub const BYTES: usize = 29;
+    /// The look and motion every stored form starts with. A form of any other
+    /// length keeps those, and the rest of it comes from [`ClockConfig::DEFAULT`].
+    const BYTES_COMMON: usize = 23;
 
     /// The same settings, each within the range the Studio's patch allows.
     #[must_use]
@@ -391,11 +388,10 @@ impl ClockConfig {
             dance: self.dance,
             rest: self.rest,
             hours24: self.hours24,
-            pace: self.pace.clamp(5, 60),
-            offset: self.offset.min(1439),
             dark: self.dark,
             fade: self.fade.clamp(2, 50),
             calm: self.calm,
+            limit: self.limit.clamp(20, 120),
         }
     }
 
@@ -421,22 +417,21 @@ impl ClockConfig {
         out[20] = self.dance;
         out[21] = self.rest;
         out[22] = u8::from(self.hours24);
-        out[23..25].copy_from_slice(&self.pace.to_le_bytes());
-        out[25..27].copy_from_slice(&self.offset.to_le_bytes());
-        out[27] = self.dark;
-        out[28..30].copy_from_slice(&self.fade.to_le_bytes());
-        out[30] = u8::from(self.calm);
+        out[23] = self.dark;
+        out[24..26].copy_from_slice(&self.fade.to_le_bytes());
+        out[26] = u8::from(self.calm);
+        out[27..29].copy_from_slice(&self.limit.to_le_bytes());
         out
     }
 
     /// Read the stored form back; `None` when it is not this shape.
     #[must_use]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if !(Self::BYTES_MIN..=Self::BYTES).contains(&b.len()) {
+        if !(Self::BYTES_COMMON..=64).contains(&b.len()) {
             return None;
         }
         let d = Self::DEFAULT;
-        let word = |i: usize, or: u16| b.get(i..i + 2).map_or(or, |w| u16::from_le_bytes([w[0], w[1]]));
+        let tail = (b.len() == Self::BYTES).then(|| &b[Self::BYTES_COMMON..]);
         let w = |i: usize| u16::from_le_bytes([b[i * 2], b[i * 2 + 1]]);
         Some(
             Self {
@@ -453,11 +448,10 @@ impl ClockConfig {
                 dance: b[20],
                 rest: b[21],
                 hours24: b[22] != 0,
-                pace: word(23, d.pace),
-                offset: word(25, d.offset),
-                dark: b.get(27).copied().unwrap_or(d.dark),
-                fade: word(28, d.fade),
-                calm: b.get(30).is_some_and(|v| *v != 0),
+                dark: tail.map_or(d.dark, |t| t[0]),
+                fade: tail.map_or(d.fade, |t| u16::from_le_bytes([t[1], t[2]])),
+                calm: tail.is_some_and(|t| t[3] != 0),
+                limit: tail.map_or(d.limit, |t| u16::from_le_bytes([t[4], t[5]])),
             }
             .sanitised(),
         )

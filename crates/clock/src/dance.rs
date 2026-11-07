@@ -346,7 +346,12 @@ pub fn angle_at(from: f32, moves: &[Move], motor: Motor, tau: f32) -> f32 {
     moves.iter().fold(from, |a, m| a + m.travel.signum() * motor.position(m.travel.abs(), tau - m.start))
 }
 
-pub const DANCES: usize = 12;
+pub const DANCES: usize = 17;
+
+/// The dances from here on were made for reduce motion. Every phase rests
+/// before the next and nothing spins, so a hand only ever has one move at a
+/// time and cannot go faster than its motor, whatever the limit.
+pub const GENTLE: usize = 12;
 
 /// What each dance is called, in the order [`dance`] builds them.
 ///
@@ -366,6 +371,11 @@ pub const NAMES: [&str; DANCES] = [
     "swell",
     "scatter",
     "vortex",
+    "tide",
+    "breath",
+    "compass",
+    "unfurl",
+    "curtain",
 ];
 
 /// The repertoire. `which` is 0..DANCES; `rng` varies direction, focus and
@@ -475,7 +485,7 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
             step(Digits, Timing::Ripple { focus, gap: 0.3, inward: true }, Turn::Shortest, 0, 0.0),
         ],
         // A vortex: rings about the middle, spun a full turn from the rim inwards.
-        _ => vec![
+        11 => vec![
             step(Rings { focus: middle, spokes: false }, Timing::Together, Turn::Shortest, 0, 0.2),
             step(
                 Rings { focus: middle, spokes: false },
@@ -486,6 +496,53 @@ pub fn dance(which: usize, rng: &mut Rng) -> (&'static str, Vec<Phase>) {
             ),
             step(Digits, Timing::Ripple { focus: middle, gap: 0.3, inward: false }, way, 0, 0.0),
         ],
+        // Long waves roll across the grid, and roll on.
+        12 => {
+            let across = Timing::Columns { gap: 0.3, reverse: flip };
+            let swell = Wave { amp: 70.0, ..wave };
+            let rolled = Wave { phase: wave.phase + 2.6, ..swell };
+            vec![
+                step(Flow { wave: swell, open: 170.0 }, across, Turn::Shortest, 0, 0.5),
+                step(Flow { wave: rolled, open: 170.0 }, across, Turn::Shortest, 0, 0.5),
+                step(Digits, across, Turn::Shortest, 0, 0.0),
+            ]
+        }
+        // Every dial opens a little, then wide, and lets the breath out.
+        13 => vec![
+            step(Chevron { axis: 0.0, spread: 50.0 }, Timing::Together, Turn::Shortest, 0, 0.8),
+            step(Chevron { axis: 0.0, spread: 150.0 }, Timing::Together, Turn::Shortest, 0, 0.8),
+            step(Digits, Timing::Together, Turn::Shortest, 0, 0.0),
+        ],
+        // Needles swing to a point off one side, then to one off the other.
+        14 => vec![
+            step(Compass { focus: side }, Timing::Ripple { focus: side, gap: 0.3, inward: false }, Turn::Shortest, 0, 0.7),
+            step(
+                Compass { focus: far_side },
+                Timing::Ripple { focus: far_side, gap: 0.3, inward: false },
+                Turn::Shortest,
+                0,
+                0.7,
+            ),
+            step(Digits, Timing::Ripple { focus: middle, gap: 0.25, inward: true }, Turn::Shortest, 0, 0.0),
+        ],
+        // A fan opens across the columns, and turns over.
+        15 => {
+            let across = Timing::Columns { gap: 0.25, reverse: flip };
+            vec![
+                step(Fan { base: 0.0, per_col: 22.5 }, across, Turn::Shortest, 0, 0.6),
+                step(Fan { base: 90.0, per_col: -22.5 }, across, Turn::Shortest, 0, 0.6),
+                step(Digits, across, Turn::Shortest, 0, 0.0),
+            ]
+        }
+        // Hands fall row by row, and lie down the same way.
+        _ => {
+            let falling = Timing::Rows { gap: 0.6, reverse: false };
+            vec![
+                step(Needles(180.0), falling, Turn::Shortest, 0, 0.7),
+                step(Lines(90.0), falling, Turn::Shortest, 0, 0.7),
+                step(Digits, falling, Turn::Shortest, 0, 0.0),
+            ]
+        }
     };
     (NAMES[which], phases)
 }
@@ -867,6 +924,7 @@ pub fn compose(
     digits: &[Hands; CLOCKS],
     motor: Motor,
     variety: &crate::variety::Variety,
+    limit: Option<f32>,
 ) -> Composition {
     // Bounds scale with the motor: a slow motor is allowed a long dance.
     let pace = 100.0 / motor.speed;
@@ -879,6 +937,9 @@ pub fn compose(
         }
         let r = review(&c.phases, from, digits, motor);
         if !(6.0 * pace..=20.0 * pace).contains(&r.total) || r.peak > 2.05 || r.frozen > 1.3 || r.travel < 80.0 {
+            continue;
+        }
+        if limit.is_some_and(|l| r.peak * motor.speed > l * LIMIT_ROOM) {
             continue;
         }
         // Flow alone would always choose the simplest dance, where everything
@@ -898,23 +959,24 @@ pub fn compose(
             break;
         }
     }
-    best.map(|(_, c)| c).unwrap_or_else(|| named((rng.u64() % DANCES as u64) as usize, rng))
+    best.map(|(_, c)| c).unwrap_or_else(|| {
+        let start = (rng.u64() % DANCES as u64) as usize;
+        (0..DANCES)
+            .map(|i| named((start + i) % DANCES, rng))
+            .find(|c| within(&c.phases, from, digits, motor, limit))
+            .unwrap_or_else(|| named(GENTLE, rng))
+    })
 }
 
-/// The dance for "reduce motion": every hand takes the short way to where it
-/// is going and no further, so a hand with nothing to do does nothing. All that
-/// varies is the order they set off in, and that gently.
-pub fn calm(rng: &mut Rng) -> Composition {
-    let reverse = rng.u64() & 1 == 0;
-    let (name, timing) = match rng.u64() % 4 {
-        0 => ("together", Timing::Together),
-        1 => ("columns", Timing::Columns { gap: 0.2, reverse }),
-        2 => ("rows", Timing::Rows { gap: 0.4, reverse }),
-        _ => ("diagonal", Timing::Diagonal { gap: 0.15 }),
-    };
-    let phase = Phase { to: Formation::Digits, with: None, timing, turn: Turn::Shortest, extra: 0, rest: 0.0 };
-    Composition { name: format!("calm {name}"), phases: vec![phase], tags: vec![format!("calm:{name}")] }
+/// Whether a dance keeps every hand under `limit`, degrees per second. `None`
+/// is no limit, and nothing is measured.
+pub fn within(phases: &[Phase], from: &[Hands; CLOCKS], digits: &[Hands; CLOCKS], motor: Motor, limit: Option<f32>) -> bool {
+    limit.is_none_or(|l| review(phases, from, digits, motor).peak * motor.speed <= l * LIMIT_ROOM)
 }
+
+/// What [`within`] allows of the limit: the room is for the sampling, which sees
+/// a tenth of a second at a time.
+const LIMIT_ROOM: f32 = 1.0;
 
 /// A dance from the repertoire, as a composition.
 pub fn named(which: usize, rng: &mut Rng) -> Composition {
@@ -952,6 +1014,23 @@ mod tests {
 
     /// Composed dances are dances: they land on the time, within the critic's
     /// bounds, and there are a great many different ones.
+    /// The promise [`GENTLE`] makes: from any time to any other, however the
+    /// dance happens to fall out, no hand outruns its motor.
+    #[test]
+    fn the_gentle_dances_never_outrun_their_motor() {
+        let slow = Motor { speed: 57.0, acc: 91.2 };
+        for which in GENTLE..DANCES {
+            for (seed, (a, b)) in [(0, 0), (9, 59), (12, 34), (23, 59), (7, 41)].into_iter().enumerate() {
+                let (name, phases) = dance(which, &mut Rng::new(seed as u64 * 31 + 1));
+                let r = review(&phases, &pose(a, b), &pose((a + 1) % 24, (b + 1) % 60), slow);
+                assert!(r.peak <= 1.03, "{name}: x{:.2} of the motor", r.peak);
+                assert!(r.travel >= 170.0, "{name}: hands travel only {:.0} degrees, it hardly moves", r.travel);
+                assert!(r.flow >= 0.28, "{name}: only {:.0}% of the hands are moving", r.flow * 100.0);
+                assert!((6.0..=38.0).contains(&r.total), "{name}: {:.1} s", r.total);
+            }
+        }
+    }
+
     #[test]
     fn composed_dances_land_and_vary() {
         let (from, to) = (pose(23, 59), pose(0, 0));
@@ -959,7 +1038,7 @@ mod tests {
         let (mut fell_back, mut direct_runs) = (0, 0);
         for seed in 0..300 {
             let Composition { name, phases, tags } =
-                compose(&mut Rng::new(seed), &from, &to, MOTOR, &Default::default());
+                compose(&mut Rng::new(seed), &from, &to, MOTOR, &Default::default(), None);
             assert!(!tags.is_empty());
             fell_back += !name.contains(',') as usize;
             direct_runs += name.starts_with("direct") as usize;
@@ -995,7 +1074,7 @@ mod tests {
         let mut uses = alloc::collections::BTreeMap::<String, usize>::new();
         for minute in 0..1440_u32 {
             let (from, to) = (pose(minute / 60, minute % 60), pose((minute + 1) / 60 % 24, (minute + 1) % 60));
-            let c = compose(&mut rng, &from, &to, MOTOR, &variety);
+            let c = compose(&mut rng, &from, &to, MOTOR, &variety, None);
             variety.note(&c.name, &c.tags);
             for t in &c.tags {
                 *uses.entry(t.clone()).or_default() += 1;

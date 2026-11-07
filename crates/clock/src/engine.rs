@@ -32,8 +32,6 @@ pub struct Tick {
 /// Everything about the hands' behaviour that is a matter of taste.
 #[derive(Clone, Copy, Debug)]
 pub struct Knobs {
-    /// Seconds per displayed minute; 60 is a real clock.
-    pub pace: f32,
     /// Seconds the time is held before the hands may drift.
     pub still: f32,
     /// `0` varies, `1..=DANCES` names a dance, one past them always composes.
@@ -41,20 +39,20 @@ pub struct Knobs {
     /// Hand speed, degrees per second.
     pub speed: f32,
     pub hours24: bool,
-    /// Minutes added to the time.
-    pub offset: f32,
     pub rest: Rest,
     /// Seconds the resting dials take to dim, and to come back.
     pub fade: f32,
-    /// Reduce motion: slow, shortest-way moves, no spins, no drifting between
-    /// minutes, and only the dials that change brighten.
+    /// Reduce motion: the same dances and the same drifting, slower, and only
+    /// the ones that stay under [`Knobs::limit`].
     pub calm: bool,
+    /// Under [`Knobs::calm`], the fastest any hand may turn, degrees per second.
+    pub limit: f32,
 }
 
-/// Top speed under [`Knobs::calm`], degrees per second, whatever `speed` says.
-const CALM_SPEED: f32 = 40.0;
-/// `Engine::dance_for`'s choice for [`Knobs::calm`].
-const CALM: usize = usize::MAX;
+/// Under [`Knobs::calm`] the motor runs at this share of the limit, so that what
+/// the slider says is about what the hands do. Room for overlaps was tried, at
+/// 0.8, and no dance used it: the hands just stopped short of the limit.
+const CALM_MOTOR: f32 = 0.95;
 /// If the minute is nearer than this, the next dance is planned at once, even
 /// though the fade has not finished: it could be due before the fade is over.
 const PLAN_NO_LATER: f64 = 25.0;
@@ -66,15 +64,14 @@ impl Default for Knobs {
     /// The owner's "Gold and Blue" behaviour (2026-10-28).
     fn default() -> Self {
         Knobs {
-            pace: 60.0,
             still: 5.0,
             dance: 0,
             speed: 100.0,
             hours24: true,
-            offset: 0.0,
             rest: RESTS[DEFAULT_REST],
             fade: 1.5,
             calm: false,
+            limit: 60.0,
         }
     }
 }
@@ -119,9 +116,6 @@ struct Timed {
 
 pub struct Engine {
     seed: u64,
-    /// The time of day on the first frame; a sped-up clock (pace < 60) runs on
-    /// from here.
-    born: Option<f64>,
     angles: [Hands; CLOCKS],
     /// The minute the hands currently show, or are moving towards.
     minute: Option<i64>,
@@ -131,8 +125,6 @@ pub struct Engine {
     /// are left alone on the panel once it lands.
     settled: f32,
     /// How far each dial has receded towards its rest: 0 full, 1 at rest.
-    /// Per dial because under [`Knobs::calm`] the digits' neighbours stay down
-    /// while only the dials joining or leaving a digit move.
     dims: [f32; CLOCKS],
     plan: Option<Plan>,
     /// Engine time at which the hands last landed on a time.
@@ -140,7 +132,7 @@ pub struct Engine {
     /// Ambient motion between holding the time and the next dance.
     ambient: Option<ambient::Ambient>,
     /// The dance chosen for a minute, kept so it is composed only once.
-    chosen: Option<(i64, usize, dance::Composition)>,
+    chosen: Option<(i64, usize, Option<u32>, dance::Composition)>,
     timed: Option<Timed>,
     /// The dance being performed, or the last one that was.
     performed: Option<dance::Composition>,
@@ -156,7 +148,6 @@ impl Engine {
     pub fn new(seed: u64) -> Self {
         Engine {
             seed,
-            born: None,
             angles: [[REST; 2]; CLOCKS],
             minute: None,
             settled: 0.0,
@@ -222,36 +213,61 @@ impl Engine {
     /// The dance for the move to `minute`. Asked for by number it comes from
     /// the repertoire (or, at 13, is always composed). Left to vary, most are
     /// composed afresh and the rest drawn from the repertoire.
-    fn dance_for(&mut self, minute: i64, choice: usize, to: &[Hands; CLOCKS], motor: Motor) {
-        if let Some((m, c, _)) = &self.chosen {
-            if (*m, *c) == (minute, choice) {
+    fn dance_for(&mut self, minute: i64, choice: usize, to: &[Hands; CLOCKS], motor: Motor, limit: Option<f32>) {
+        let key = limit.map(f32::to_bits);
+        if let Some((m, c, l, _)) = &self.chosen {
+            if (*m, *c, *l) == (minute, choice, key) {
                 return;
             }
         }
         let mut rng =
             Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9) ^ self.asked.wrapping_mul(0x85eb_ca6b));
         let composed = match choice {
-            CALM => false,
             0 => rng.u64() % 10 < 6,
             n => n > dance::DANCES,
         };
-        let composition = if choice == CALM {
-            dance::calm(&mut rng)
-        } else if composed {
-            dance::compose(&mut rng, &self.angles, to, motor, &self.variety)
+        let drawn = if composed {
+            None
         } else if choice == 0 {
             // From the repertoire, whichever has gone longest unperformed.
+            // Under reduce motion, of the ones made for it.
+            let first = if limit.is_some() { dance::GENTLE } else { 0 };
             let names: Vec<String> =
-                (0..dance::DANCES).map(|i| dance::named(i, &mut Rng::new(0)).tags[0].clone()).collect();
+                (first..dance::DANCES).map(|i| dance::named(i, &mut Rng::new(0)).tags[0].clone()).collect();
             let freshest = self.variety.freshest(&names, || rng.f32()).and_then(|n| names.iter().position(|m| m == n));
-            dance::named(freshest.unwrap_or(0), &mut rng)
+            Some(dance::named(first + freshest.unwrap_or(0), &mut rng))
         } else {
-            dance::named(choice - 1, &mut rng)
+            Some(dance::named(choice - 1, &mut rng))
         };
-        self.chosen = Some((minute, choice, composition));
+        // Reduce motion is a filter and nothing else: a dance from the
+        // repertoire that breaks the limit gives way to one composed to keep it.
+        let drawn = drawn.filter(|d| dance::within(&d.phases, &self.angles, to, motor, limit));
+        let composition = match drawn {
+            Some(d) => d,
+            None => dance::compose(&mut rng, &self.angles, to, motor, &self.variety, limit),
+        };
+        self.chosen = Some((minute, choice, key, composition));
     }
 
-    fn perform(&mut self, t: f64, composition: dance::Composition, to: [Hands; CLOCKS], minute: i64, motor: Motor) {
+    fn perform(
+        &mut self,
+        t: f64,
+        composition: dance::Composition,
+        to: [Hands; CLOCKS],
+        minute: i64,
+        motor: Motor,
+        limit: Option<f32>,
+    ) {
+        // A dance is judged where the hands were when it was chosen, and they
+        // may have drifted since, which moves its overlaps. The limit is a
+        // limit: judged again here, and a dance that now breaks it gives way to
+        // one that cannot.
+        let composition = if dance::within(&composition.phases, &self.angles, &to, motor, limit) {
+            composition
+        } else {
+            let mut rng = Rng::new(self.seed ^ minute as u64);
+            dance::named(dance::GENTLE + (minute as usize) % (dance::DANCES - dance::GENTLE), &mut rng)
+        };
         let (moves, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
         for hands in &mut self.angles {
             *hands = hands.map(|a| a.rem_euclid(360.0));
@@ -269,15 +285,10 @@ impl Engine {
     /// every dance.
     fn settle(&mut self, dt: f32, knobs: &Knobs) {
         let holding = self.minute.is_some() && self.plan.is_none() && self.ambient.is_none();
-        let moving_calmly = knobs.calm && self.plan.is_some();
         let by = (dt.min(FADE_STEP) / knobs.fade.max(0.05)).max(0.0);
-        let up = holding || moving_calmly;
-        self.settled = if up { (self.settled + by).min(1.0) } else { (self.settled - by).max(0.0) };
+        self.settled = if holding { (self.settled + by).min(1.0) } else { (self.settled - by).max(0.0) };
 
-        // Which time decides who rests: under a calm move the one being moved
-        // to, so a dial brightens only if it is about to be part of a digit.
-        let shown = if moving_calmly { self.plan.as_ref().map(|p| p.minute) } else { self.minute.filter(|_| holding) };
-        let rests = shown.map_or([false; CLOCKS], |m| {
+        let rests = self.minute.filter(|_| holding).map_or([false; CLOCKS], |m| {
             let (h, mm) = Self::digits(m, knobs.hours24);
             resting(h, mm)
         });
@@ -287,18 +298,10 @@ impl Engine {
     }
 
     fn advance(&mut self, tick: Tick, knobs: &Knobs) {
-        let pace = knobs.pace;
-        // Display seconds per engine second. At pace 60 the wall clock is used
-        // directly, so the time is right however long the patch has run.
-        let rate = 60.0 / pace as f64;
-        let born = *self.born.get_or_insert(tick.now - tick.t);
-        let clock = if pace >= 59.5 { tick.now } else { born + tick.t * rate } + knobs.offset as f64 * 60.0;
-        let motor = if knobs.calm {
-            let speed = knobs.speed.min(CALM_SPEED);
-            Motor { speed, acc: speed * 0.8 }
-        } else {
-            Motor { speed: knobs.speed, acc: knobs.speed * 1.6 }
-        };
+        let clock = tick.now;
+        let limit = knobs.calm.then_some(knobs.limit);
+        let speed = limit.map_or(knobs.speed, |l| knobs.speed.min(l * CALM_MOTOR));
+        let motor = Motor { speed, acc: speed * 1.6 };
         let (hours24, rest) = (knobs.hours24, knobs.rest);
 
         if let Some(p) = self.plan.take() {
@@ -328,12 +331,11 @@ impl Engine {
                 _ => {
                     self.asked += 1;
                     self.chosen = None;
-                    let choice = if knobs.calm { CALM } else { dance::DANCES + 1 };
-                    self.dance_for(shown, choice, &to, motor);
-                    self.chosen.take().expect("dance_for leaves its choice").2
+                    self.dance_for(shown, dance::DANCES + 1, &to, motor, limit);
+                    self.chosen.take().expect("dance_for leaves its choice").3
                 }
             };
-            self.perform(tick.t, composition, to, shown, motor);
+            self.perform(tick.t, composition, to, shown, motor, limit);
             return;
         }
 
@@ -353,20 +355,20 @@ impl Engine {
         // to finish, when nothing on the panel is moving; started as the hands
         // land, it stalled the first half second of every fade.
         let holding = self.minute.is_some() && self.ambient.is_none();
-        if holding && self.settled < 1.0 && (next as f64 * 60.0 - clock) / rate > PLAN_NO_LATER {
+        if holding && self.settled < 1.0 && next as f64 * 60.0 - clock > PLAN_NO_LATER {
             self.doing = Doing::Holding { next: 0.0 };
             return;
         }
         let to = Self::target(next, hours24, rest);
-        let choice = if knobs.calm { CALM } else { knobs.dance };
-        self.dance_for(next, choice, &to, motor);
+        let choice = knobs.dance;
+        self.dance_for(next, choice, &to, motor, limit);
         let total = self.total(next, choice, &to, motor);
         // Engine seconds until the dance has to begin.
-        let slack = (next as f64 * 60.0 - clock) / rate - total as f64;
+        let slack = next as f64 * 60.0 - clock - total as f64;
         let ready = self.ambient.as_ref().is_none_or(|a| a.at_rest());
         if self.minute.is_none() || (slack <= 0.0 && ready) {
-            let composition = self.chosen.take().expect("dance_for leaves its choice").2;
-            self.perform(tick.t, composition, to, next, motor);
+            let composition = self.chosen.take().expect("dance_for leaves its choice").3;
+            self.perform(tick.t, composition, to, next, motor, limit);
             return;
         }
         let next_in = slack.max(0.0) as f32;
@@ -379,10 +381,10 @@ impl Engine {
         // drift. The ambient field is asked to settle with room to spare, so
         // the hands are at rest when the dance has to leave.
         const SETTLE: f64 = 4.0;
-        let held = knobs.still as f64 * pace as f64 / 60.0;
+        let held = knobs.still as f64;
         match &mut self.ambient {
             Some(ambient) => ambient.step(&mut self.angles, motor, tick.dt as f32, slack < SETTLE),
-            None if !knobs.calm && tick.t - self.landed >= held && slack > SETTLE + 6.0 => {
+            None if tick.t - self.landed >= held && slack > SETTLE + 6.0 => {
                 let mut rng = Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b));
                 let moods: Vec<String> = (0..ambient::MOODS).map(|m| format!("mood:{m}")).collect();
                 let mood = self
@@ -405,7 +407,7 @@ impl Engine {
                 return t.total;
             }
         }
-        let (_, composition) = (0, &self.chosen.as_ref().expect("dance_for leaves its choice").2);
+        let composition = &self.chosen.as_ref().expect("dance_for leaves its choice").3;
         let (_, total) = dance::plan(&composition.phases, &self.angles, to, motor);
         self.timed = Some(Timed { minute, choice, from: self.angles, motor: key, total });
         total
@@ -487,32 +489,36 @@ mod tests {
         assert!(e.settled <= FADE_STEP / knobs.fade + 1e-4, "{}", e.settled);
     }
 
+    /// Reduce motion is the whole show, slower: an hour of it must stay under
+    /// the limit on every frame, and still dance, drift and tell the time.
     #[test]
-    fn reduce_motion_is_slow_short_and_leaves_resting_dials_down() {
+    fn reduce_motion_is_the_same_show_under_a_speed_limit() {
         let knobs = Knobs { calm: true, ..Knobs::default() };
         let (mut e, mut t) = (Engine::new(7), 0.0);
         run(&mut e, &knobs, &mut t, 0.0, 70.0);
         let mut before = *e.angles();
-        let mut dipped = 0;
-        for _ in 0..3600 {
-            run(&mut e, &knobs, &mut t, 0.0, 0.05);
-            assert!(e.ambient.is_none(), "drifting under reduce motion");
+        let (dt, mut fastest) = (0.05_f32, 0.0_f32);
+        let (mut dancing, mut drifting) = (0, 0);
+        let mut names = alloc::collections::BTreeSet::new();
+        for _ in 0..(3600.0 / dt) as usize {
+            run(&mut e, &knobs, &mut t, 0.0, dt as f64 - 0.01);
             for i in 0..CLOCKS {
                 for h in 0..2 {
-                    let d = dance::shortest(before[i][h], e.angles()[i][h]).abs();
-                    assert!(d <= CALM_SPEED * 0.05 * 1.05, "{d} degrees in a frame");
+                    // The short way round: angles are wrapped between dances.
+                    fastest = fastest.max(dance::shortest(before[i][h], e.angles()[i][h]).abs() / dt);
                 }
             }
             before = *e.angles();
-            assert_eq!(e.settled(), 1.0, "the hands left their numerals' shape");
-            // A dial at rest either side of a minute never comes up.
-            let (a, b) = (e.minute.unwrap(), e.minute.unwrap() + 1);
-            let (ra, rb) = (Engine::digits(a, true), Engine::digits(b, true));
-            let (ra, rb) = (resting(ra.0, ra.1), resting(rb.0, rb.1));
-            dipped += (0..CLOCKS).filter(|i| ra[*i] && rb[*i] && e.dims()[*i] < 0.5).count();
+            dancing += usize::from(matches!(e.doing(), Doing::Dancing { .. }));
+            drifting += usize::from(matches!(e.doing(), Doing::Drifting { .. }));
+            if let Some(p) = e.performed() {
+                names.insert(p.name.clone());
+            }
         }
-        assert_eq!(e.minute.map(|m| m * 60 + 60 > t as i64), Some(true), "the hands stopped telling the time");
-        assert_eq!(dipped, 0, "a dial that stays at rest came back up");
+        assert!(fastest <= knobs.limit, "a hand turned at {fastest:.1} deg/s");
+        assert!(fastest >= knobs.limit * 0.6, "nothing came near the limit: {fastest:.1} deg/s");
+        assert!(dancing > 3000 && drifting > 3000, "it stopped moving: {dancing} dancing, {drifting} drifting");
+        assert!(names.len() >= 30, "only {} different dances in an hour", names.len());
     }
 
     #[test]

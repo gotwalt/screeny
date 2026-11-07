@@ -243,16 +243,14 @@ pub struct ClockLook {
     pub rest: u8,
     /// 24-hour digits.
     pub hours24: bool,
-    /// Seconds per displayed minute; 60 is a real clock.
-    pub pace: u16,
-    /// Minutes added to the time.
-    pub offset: u16,
     /// A resting dial's dark ramp.
     pub dark: u8,
     /// Tenths of a second the resting dials take to dim.
     pub fade: u16,
     /// Reduce motion.
     pub calm: bool,
+    /// Under reduce motion, the fastest a hand may turn, degrees per second.
+    pub limit: u16,
 }
 
 impl ClockLook {
@@ -271,11 +269,10 @@ impl ClockLook {
         + field("dance", MAX_U8_LEN)
         + field("rest", MAX_U8_LEN)
         + field("hours24", 5)
-        + field("pace", MAX_U16_LEN)
-        + field("offset", MAX_U16_LEN)
         + field("dark", MAX_U8_LEN)
         + field("fade", MAX_U16_LEN)
-        + field("calm", 5);
+        + field("calm", 5)
+        + field("limit", MAX_U16_LEN);
 }
 
 const MAX_U16_LEN: usize = 5;

@@ -943,11 +943,10 @@ fn clock_reply() -> ClockReply {
             dance: c.dance,
             rest: c.rest,
             hours24: c.hours24,
-            pace: c.pace,
-            offset: c.offset,
             dark: c.dark,
             fade: c.fade,
             calm: c.calm,
+            limit: c.limit,
         },
         time: crate::clock::wall_hms().and_then(|(h, m, s)| {
             let mut t = text::TimeText::new();
@@ -975,11 +974,10 @@ fn post_clock(req: ClockRequest) -> Reply {
             dance: l.dance,
             rest: l.rest,
             hours24: l.hours24,
-            pace: l.pace,
-            offset: l.offset,
             dark: l.dark,
             fade: l.fade,
             calm: l.calm,
+            limit: l.limit,
         });
     }
     if req.dance_now == Some(true) {

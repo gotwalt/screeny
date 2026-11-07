@@ -740,16 +740,11 @@ fn a_clock_config_out_of_range_is_pulled_back_in() {
 }
 
 #[test]
-fn a_clock_config_saved_before_pace_offset_and_dark_keeps_its_look() {
-    let saved = screeny_settings::ClockConfig { hue: 12, ..Default::default() }.to_bytes();
+fn a_clock_config_of_an_older_shape_keeps_its_look() {
+    let saved = screeny_settings::ClockConfig { hue: 12, calm: true, ..Default::default() }.to_bytes();
     let back = screeny_settings::ClockConfig::from_bytes(&saved[..23]).unwrap();
-    assert_eq!(back.hue, 12);
-    assert_eq!((back.pace, back.offset, back.dark), (60, 0, 0));
-}
-
-#[test]
-fn a_clock_config_saved_before_the_fade_and_reduce_motion_keeps_its_look() {
-    let saved = screeny_settings::ClockConfig { hue: 12, dark: 2, ..Default::default() }.to_bytes();
-    let back = screeny_settings::ClockConfig::from_bytes(&saved[..28]).unwrap();
-    assert_eq!((back.hue, back.dark, back.fade, back.calm), (12, 2, 15, false));
+    assert_eq!((back.hue, back.fade, back.calm, back.limit), (12, 15, false, 60));
+    let mut longer = saved.to_vec();
+    longer.extend([0, 0]);
+    assert_eq!(screeny_settings::ClockConfig::from_bytes(&longer).unwrap().hue, 12);
 }

@@ -47,16 +47,15 @@ pub const DEF: PatchDef = PatchDef {
 // lived on the panel when the studio ran on Home Assistant: a brass hour hand
 // and a slate minute hand, muted, quick to settle, thin hands, faint rests.
 const PARAMS: &[ParamSpec] = &[
-    param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
     param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 5.0),
     param("fade", "Seconds the resting dials take to dim", 0.2, 5.0, 0.1, 1.5),
     toggle("calm", "Reduce motion", false),
+    param("limit", "Reduce motion: top hand speed (deg/s)", 20.0, 120.0, 1.0, 60.0),
     choice("dance", "Choreography", DANCE_CHOICES, 0.0),
     choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
     choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     toggle("hours24", "24-hour", true),
-    param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 1.55),
     param("tip", "Hand tip while dancing (1 = blunt)", 0.2, 1.0, 0.05, 0.2),
     param("dials", "Dial rings", 0.0, 1.0, 0.01, 0.0),
@@ -151,15 +150,14 @@ impl Patch for Clocks {
         self.treatment = rest.name;
         let hours24 = ctx.get("hours24") >= 0.5;
         let knobs = Knobs {
-            pace: ctx.get("pace"),
             still: ctx.get("still"),
             dance: ctx.get("dance") as usize,
             speed: ctx.get("speed"),
             hours24,
-            offset: ctx.get("offset"),
             rest,
             fade: ctx.get("fade"),
             calm: ctx.get("calm") >= 0.5,
+            limit: ctx.get("limit"),
         };
         self.engine.step(Tick { t: ctx.t, dt: ctx.dt, now: ctx.now }, &knobs);
         let tint = |hue: &str, chroma: &str| draw::Tint {
