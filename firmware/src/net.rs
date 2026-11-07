@@ -26,6 +26,7 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use log::{info, warn};
+use screeny_proto::control::IdleMode;
 
 use crate::display::Frame;
 use crate::fb::Producer;
@@ -218,7 +219,23 @@ pub async fn frames_task(
 
     // The last frame a sender put on the panel. Only the cross-fade into the
     // idle screen reads it, but it has to be captured while it is current.
-    let last: &'static mut Frame = mk_static!(Frame, Frame::new());
+    //
+    // On the heap, because `.bss` comes out of core 0's stack and the heap's
+    // 64 KB reclaimed region does not, so these 6 KB are stack. Allocated zeroed
+    // rather than `Box::new`, which would build the frame on that stack first.
+    let last: &'static mut Frame = {
+        let layout = core::alloc::Layout::new::<Frame>();
+        // SAFETY: `Frame` is a byte array, so all zeroes is a valid one, and the
+        // null check is `handle_alloc_error`'s. Never freed: it lives as long
+        // as this task, which is for ever.
+        unsafe {
+            let p = alloc::alloc::alloc_zeroed(layout).cast::<Frame>();
+            if p.is_null() {
+                alloc::alloc::handle_alloc_error(layout);
+            }
+            &mut *p
+        }
+    };
 
     let mut out = Outbox::new();
     let mut had_address = false;
@@ -231,6 +248,11 @@ pub async fn frames_task(
     let mut ota_was = false;
     let mut button_was: Option<crate::button::Panel> = None;
     let mut screen_brightness_was = crate::SCREEN_BRIGHTNESS_NONE;
+    let mut face: Option<alloc::boxed::Box<crate::clock::Face>> = None;
+    // The updating screen last put up, so it is drawn when it changes and not
+    // on every pass: each publish is a swap on core 1, and swaps during an
+    // upload are what made the panel blink (see `crate::SWAPPING`).
+    let mut ota_drawn: Option<crate::ota::Panel> = None;
 
     loop {
         let mut keep_len = 0usize;
@@ -238,12 +260,15 @@ pub async fn frames_task(
         out.clear();
 
         // --- wait for work, without holding the lock --------------------
+        crate::trace::mark(crate::trace::FRAMES, 1);
         let first = match select(socket.recv_from(&mut rx[..]), Timer::after(TICK)).await {
             Either::First(r) => Some(r),
             Either::Second(()) => None,
         };
 
+        crate::trace::mark(crate::trace::FRAMES, 2);
         let mut guard = CORE.lock().await;
+        crate::trace::mark(crate::trace::FRAMES, 3);
         let core = guard.as_mut().expect("core built before tasks spawn");
 
         // --- step 1: drain the socket, newest wins ----------------------
@@ -275,6 +300,7 @@ pub async fn frames_task(
         }
 
         // --- steps 2 and 3: decode the survivor, then swap --------------
+        crate::trace::mark(crate::trace::FRAMES, 4);
         let survivor = have_keep.then(|| &keep[..keep_len]);
         let published = core.flush_frames(now_us(), survivor, &mut producer.back().px, &mut out);
 
@@ -355,6 +381,7 @@ pub async fn frames_task(
         }
 
         // --- compose whatever is not a streamed frame -------------------
+        crate::trace::mark(crate::trace::FRAMES, 5);
         let net = net_state(stack, &mut had_address);
         let now_ms = now / 1_000;
         let animating = matches!(intent, Intent::Identify | Intent::Fade { .. });
@@ -414,15 +441,26 @@ pub async fn frames_task(
         // An update ending has to redraw once even if nothing else is due:
         // until it does, the panel is still showing the progress bar of an
         // upload that finished.
+        if ota.is_none() {
+            ota_drawn = None;
+        }
         let ota_edge = ota.is_some() != ota_was;
         ota_was = ota.is_some();
+        // The clock moves hands, not a status sweep: every pass of this loop
+        // (`TICK`, 50 a second with nothing arriving) rather than ten a second.
+        let anim_ms = if core.idle_mode() == IdleMode::Clock && crate::clock::synced() {
+            0
+        } else {
+            ANIM_MS
+        };
         let due = animating
             || portal_due
             || ota_edge
             || button_edge
             || core.redraw() != redraw_seen
-            || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= ANIM_MS);
+            || (intent == Intent::Idle && now_ms.wrapping_sub(anim_at_ms) >= anim_ms);
 
+        crate::trace::mark(crate::trace::FRAMES, 6);
         if due {
             redraw_seen = core.redraw();
             anim_at_ms = now_ms;
@@ -436,7 +474,12 @@ pub async fn frames_task(
                 // took the claim - so core 1 sleeps between refreshes and the
                 // 50 ms stalls around each sector erase cost nothing.
                 portal_at_ms = now_ms;
-                crate::provision::render_updating(what, &mut producer.back().px);
+                if ota_drawn == Some(what) {
+                    drew = false;
+                } else {
+                    ota_drawn = Some(what);
+                    crate::provision::render_updating(what, &mut producer.back().px);
+                }
             } else if let Some(what) = button {
                 // Card 230, drawn by `crates/provision` like every other
                 // screen that is not a streamed frame - so the simulator shows
@@ -466,9 +509,11 @@ pub async fn frames_task(
                     Intent::Identify => {
                         screens::identify(producer.back(), core.name(), net, now_ms)
                     }
-                    Intent::Idle => core.draw_idle(producer.back(), last, hostname, net, phase),
+                    Intent::Idle => {
+                        core.draw_idle(producer.back(), last, hostname, net, phase, &mut face, now)
+                    }
                     Intent::Fade { t } => {
-                        core.draw_idle(producer.back(), last, hostname, net, phase);
+                        core.draw_idle(producer.back(), last, hostname, net, phase, &mut face, now);
                         // In place, so the fade needs no third buffer:
                         // back = lerp(last, target, t).
                         let dst = producer.back();
@@ -481,6 +526,7 @@ pub async fn frames_task(
                     }
                 }
             }
+            crate::trace::mark(crate::trace::FRAMES, 7);
             if drew {
                 producer.publish();
             }
@@ -488,6 +534,7 @@ pub async fn frames_task(
 
         let info_changed = core.take_info_changed();
         drop(guard);
+        crate::trace::mark(crate::trace::FRAMES, 8);
 
         if info_changed {
             INFO_CHANGED.signal(());

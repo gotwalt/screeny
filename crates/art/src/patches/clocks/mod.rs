@@ -13,16 +13,21 @@
 //! simply takes longer. Each choreography is a plan of such moves, timed to land
 //! on the new time exactly as the minute turns.
 
-pub(crate) mod ambient;
-pub(crate) mod dance;
+pub(crate) use screeny_clock::{ambient, dance};
 pub(crate) mod dials;
 pub(crate) mod draw;
 
 use crate::color::Rgb;
 use crate::frame::Frame;
 use crate::patch::{choice, param, toggle, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
-use crate::rng::Rng;
-use dance::Motor;
+pub(crate) use screeny_clock::face::{
+    dark_levels, Hands, Rest, CELL, CLOCKS, COLS, DARK_CHOICES, DEFAULT_DARK, DEFAULT_REST, RESTS, ROWS,
+};
+#[cfg(test)]
+pub(crate) use screeny_clock::face::DARK_RAMPS;
+#[cfg(test)]
+pub(crate) use screeny_clock::face::{pose, resting};
+use screeny_clock::engine::{Doing, Engine, Knobs, Request, Tick};
 
 pub const DEF: PatchDef = PatchDef {
     id: "clocks-numerals",
@@ -42,14 +47,15 @@ pub const DEF: PatchDef = PatchDef {
 // lived on the panel when the studio ran on Home Assistant: a brass hour hand
 // and a slate minute hand, muted, quick to settle, thin hands, faint rests.
 const PARAMS: &[ParamSpec] = &[
-    param("pace", "Seconds per minute (60 = real clock)", 5.0, 60.0, 1.0, 60.0),
     param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 5.0),
+    param("fade", "Seconds the resting dials take to dim", 0.2, 5.0, 0.1, 1.5),
+    toggle("calm", "Reduce motion", false),
+    param("limit", "Reduce motion: top hand speed (deg/s)", 20.0, 120.0, 1.0, 60.0),
     choice("dance", "Choreography", DANCE_CHOICES, 0.0),
     choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
     choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
     param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
     toggle("hours24", "24-hour", true),
-    param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 1.55),
     param("tip", "Hand tip while dancing (1 = blunt)", 0.2, 1.0, 0.05, 0.2),
     param("dials", "Dial rings", 0.0, 1.0, 0.01, 0.0),
@@ -59,69 +65,6 @@ const PARAMS: &[ParamSpec] = &[
     param("chroma2", "Minute hand colour", 0.0, 0.2, 0.005, 0.065),
     param("light", "Hand lightness (lower = more saturated)", 0.6, 0.95, 0.01, 0.67),
 ];
-
-pub(crate) const COLS: usize = 8;
-pub(crate) const ROWS: usize = 3;
-pub(crate) const CLOCKS: usize = COLS * ROWS;
-/// LEDs per clock; the grid is 64 x 24, centred in 64 x 32.
-const CELL: f32 = 8.0;
-
-/// Both hands at 7:30: how the original's clocks rest, and how this patch
-/// rested until card 160. Also where every hand starts before the first dance.
-const REST: f32 = 225.0;
-/// Degrees clockwise from 12 o'clock.
-pub(crate) type Hands = [f32; 2];
-
-/// How the dials that are not part of a digit are posed and drawn.
-///
-/// They must stay clock hands - visible, in an unobtrusive rest position (the
-/// owner, 2026-09-19) - without reading as a glyph. Three of them stacked in a
-/// column is the hard case: that is what the digit `1` leaves beside its bar,
-/// and at 8 LEDs a repeated short stroke there is punctuation. `1` is also the
-/// commonest digit on a clock face, so the wrong rest pose is on the panel more
-/// often than not.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) struct Rest {
-    /// What it is called, for the studio's "now playing".
-    pub name: &'static str,
-    /// Hour and minute hand, degrees clockwise from 12 o'clock.
-    hands: Hands,
-    /// Odd rows mirror the pose about the vertical, so the three resting dials
-    /// beside a `1` never repeat one mark down a column.
-    zigzag: bool,
-    /// Ink, and hand length as a fraction of a digit hand's, while the time is
-    /// being held. Full (`1.0`) during the dances: the rest pose only has to be
-    /// unobtrusive when there is a time to read.
-    ink: f32,
-    reach: f32,
-}
-
-const fn rest(name: &'static str, hands: Hands, zigzag: bool, ink: f32, reach: f32) -> Rest {
-    Rest { name, hands, zigzag, ink, reach }
-}
-
-/// The minute hand's rest angle in the treatments that draw a diagonal: 1:30,
-/// opposite the hour hand's 7:30. The dial reads about 1:37 and its two hands
-/// make one stroke corner to corner across the cell.
-///
-/// A diagonal is the one direction the digits do not use - every digit stroke
-/// is up, down, left or right - so a resting dial cannot be mistaken for part
-/// of one, and it survives being looked at from across the room: three blurred
-/// dots in a column are a colon, three blurred slashes are a texture.
-const HATCH: f32 = 45.0;
-
-/// The treatments, switchable live (the `rest` parameter) so they can be
-/// judged on the panel rather than in a preview. `0` is what the patch did
-/// before card 160; `DEFAULT_REST` is the default: card 160 recommended
-/// `"hatched, quiet"`, and the owner chose `"hatched, faint"` on the panel.
-pub(crate) const RESTS: &[Rest] = &[
-    rest("as it was", [REST, REST], false, 1.0, 1.0),
-    rest("quiet", [REST, REST], false, 0.20, 1.0),
-    rest("hatched, quiet", [REST, HATCH], false, 0.20, 1.0),
-    rest("hatched, faint", [REST, HATCH], false, 0.10, 0.9),
-    rest("zigzag, quiet", [REST, REST], true, 0.20, 1.0),
-];
-pub(crate) const DEFAULT_REST: usize = 3;
 
 /// Card 163: the `rest` parameter's stops, in the treatments' own words.
 /// Taken from `RESTS` itself, so the page and the patch cannot disagree about
@@ -148,41 +91,6 @@ const fn dance_choices() -> [&'static str; dance::DANCES + 2] {
     out
 }
 
-/// A resting dial's held, dark ink (card 188, brief 2.1.1). Index 0, **the
-/// default**, is `"as it was"`: the old continuous `tint.scale(ink)`,
-/// untouched - the review after this card's first cut found the default
-/// picture had moved (the warm, graded rest shade the author had already
-/// tuned became a much dimmer, nearly flat one), which the card's own rule
-/// forbids. Every other entry is a short, hand-picked list of level triples,
-/// chosen **nearest the levels the old continuous colour actually measures
-/// at** (see the Log for the numbers) rather than computed or guessed - the
-/// same look, steadied, not a different one. `screeny_art::panel::level_triple`
-/// (card 188 deliverable 2) is the snap that turns a triple into the exact
-/// colour the panel shows.
-pub(crate) const DARK_CHOICES: &[&str] = &["as it was", "aligned warm", "aligned neutral", "aligned dim"];
-pub(crate) const DEFAULT_DARK: usize = 0;
-
-/// One ramp per [`DARK_CHOICES`] entry *after* `"as it was"` - `DARK_RAMPS[0]`
-/// is `DARK_CHOICES[1]`, and so on. Each is darkest-first (ink ~0.10,
-/// `"hatched, faint"`, then ink ~0.20, the other three treatments), so
-/// [`dark_shade`] can pick further in as a treatment's `ink` asks for more
-/// light.
-pub(crate) const DARK_RAMPS: &[&[[u32; 3]]] = &[
-    // "aligned warm": the nearest aligned triple to what the old continuous
-    // ink actually measured (card 188 log, 2026-09-21 - "measured, after the
-    // author's review"): ink 0.10 -> levels (6, 5, 3); ink 0.20 -> (12, 10, 7).
-    // Keeps the hour hand's own warm hue as far as per-channel alignment
-    // allows - the graded look the author had tuned, steadied rather than
-    // replaced.
-    &[[6, 5, 3], [12, 10, 7]],
-    // "aligned neutral": the same two rungs with the channels equalised
-    // (their rounded average) - no hue, same overall brightness.
-    &[[5, 5, 5], [10, 10, 10]],
-    // "aligned dim": this card's first cut, kept as a fourth, deliberately
-    // much darker choice now that it is not the default.
-    &[[1, 1, 1], [2, 2, 2], [3, 3, 3]],
-];
-
 /// The `dark` parameter's pick. `variant == 0` (`"as it was"`, the default)
 /// is `None` - the caller keeps the old continuous `tint.scale(ink)` - and
 /// every other variant indexes [`DARK_RAMPS`], further in as `ink` calls for
@@ -190,335 +98,40 @@ pub(crate) const DARK_RAMPS: &[&[[u32; 3]]] = &[
 /// mostly picks the ramp's darkest step, but stays proportional if a future
 /// treatment asks for more.
 fn dark_shade(variant: usize, ink: f32) -> Option<Rgb> {
-    if variant == 0 {
-        return None;
-    }
-    let ramp = DARK_RAMPS[(variant - 1).min(DARK_RAMPS.len() - 1)];
-    let idx = ((ink * ramp.len() as f32).ceil() as usize).clamp(1, ramp.len()) - 1;
-    Some(crate::panel::level_triple(ramp[idx]))
+    dark_levels(variant, ink).map(crate::panel::level_triple)
 }
 
-impl Rest {
-    /// The treatment a `rest` parameter value asks for.
-    pub(crate) fn of(v: f32) -> Rest {
-        RESTS[(v.max(0.0) as usize).min(RESTS.len() - 1)]
-    }
-
-    /// The pose for a resting dial in `row`.
-    fn hands(&self, row: usize) -> Hands {
-        match self.zigzag && row % 2 == 1 {
-            true => self.hands.map(|a| (360.0 - a).rem_euclid(360.0)),
-            false => self.hands,
-        }
-    }
-
-    /// `[ink, length]` for `draw::Dials`, `settled` of the way from a dancing
-    /// dial (full) to a resting one.
-    fn scale(&self, settled: f32) -> [f32; 2] {
-        let to = |x: f32| 1.0 + (x - 1.0) * settled.clamp(0.0, 1.0);
-        [to(self.ink), to(self.reach)]
-    }
-}
-
-/// Each digit is 2 clocks wide and 3 tall, read in rows. U R D L are hand
-/// directions and N is the rest pose. Where a junction would need three hands,
-/// something has to give. 0, 2, 5, 6 and 9 were checked against footage of
-/// the original (its 9 keeps the vertical and lets the bar fall short); the
-/// rest follow manu.ninja's table, drawn from the studio's promotional films,
-/// including the "cyclops" 8: a closed box over a cup.
-const DIGITS: [[&str; 6]; 10] = [
-    ["RD", "LD", "UD", "UD", "UR", "UL"],
-    ["NN", "DD", "NN", "UD", "NN", "UU"],
-    ["RR", "LD", "RD", "LU", "UR", "LL"],
-    ["RR", "LD", "RR", "LU", "RR", "LU"],
-    ["DD", "DD", "UR", "UD", "NN", "UU"],
-    ["RD", "LL", "UR", "LD", "RR", "LU"],
-    ["RD", "LL", "UD", "LD", "UR", "UL"],
-    ["RR", "LD", "NN", "UD", "NN", "UU"],
-    ["RD", "LD", "UR", "UL", "UR", "UL"],
-    ["RD", "LD", "UR", "UD", "RR", "LU"],
-];
-
-fn direction(c: u8) -> f32 {
-    match c {
-        b'U' => 0.0,
-        b'R' => 90.0,
-        b'D' => 180.0,
-        b'L' => 270.0,
-        _ => REST,
-    }
-}
-
-/// Hand angles for all 24 clocks showing `hh:mm`. Four digits, leading zeros,
-/// no separator: `09:05` is `0905`. That is the original's format and the
-/// owner's decision (card 160); a colon is not this patch's to add.
-pub(crate) fn pose(hh: u32, mm: u32, rest: Rest) -> [Hands; CLOCKS] {
-    let mut out = [[REST; 2]; CLOCKS];
-    for (d, digit) in [hh / 10, hh % 10, mm / 10, mm % 10].into_iter().enumerate() {
-        for (k, cell) in DIGITS[digit as usize % 10].iter().enumerate() {
-            let (row, col) = (k / 2, d * 2 + k % 2);
-            let (b, at_rest) = (cell.as_bytes(), rest.hands(row));
-            out[row * COLS + col] = [0, 1].map(|h| match b[h] {
-                b'N' => at_rest[h],
-                c => direction(c),
-            });
-        }
-    }
-    out
-}
-
-/// Which of the 24 dials are not part of a digit at `hh:mm`, and so are drawn
-/// as being at rest.
-pub(crate) fn resting(hh: u32, mm: u32) -> [bool; CLOCKS] {
-    let mut out = [false; CLOCKS];
-    for (d, digit) in [hh / 10, hh % 10, mm / 10, mm % 10].into_iter().enumerate() {
-        for (k, cell) in DIGITS[digit as usize % 10].iter().enumerate() {
-            let (row, col) = (k / 2, d * 2 + k % 2);
-            out[row * COLS + col] = cell.bytes().all(|b| b == b'N');
-        }
-    }
-    out
-}
-
-/// Every hand's moves for one transition.
-struct Plan {
-    began: f64,
-    from: [Hands; CLOCKS],
-    to: [Hands; CLOCKS],
-    moves: dance::Moves,
-    total: f32,
-    minute: i64,
-}
-
-/// Something the person at the studio asked for, to do as soon as possible.
-#[derive(Clone, Copy, PartialEq)]
-enum Request {
-    /// Perform the last dance again.
-    Again,
-    /// Compose a new dance and perform it now.
-    Another,
-}
-
+/// The instrument and its engine are `screeny-clock`, shared with the firmware;
+/// this patch is the Studio's parameters and picture on top of them.
 struct Clocks {
-    seed: u64,
-    /// The time of day on the first frame; a sped-up clock (pace < 60) runs on
-    /// from here.
-    born: Option<f64>,
-    angles: [Hands; CLOCKS],
-    /// The minute the hands currently show, or are moving towards.
-    minute: Option<i64>,
-    /// How far the picture has settled onto the time, 0 while the hands are
-    /// dancing or drifting and 1 while it is being held. Resting dials recede
-    /// by this much, so a dance is at full strength throughout and the digits
-    /// are left alone on the panel once it lands.
-    settled: f32,
-    plan: Option<Plan>,
-    /// Engine time at which the hands last landed on a time.
-    landed: f64,
-    /// Ambient motion between holding the time and the next dance.
-    ambient: Option<ambient::Ambient>,
-    /// The dance chosen for a minute, kept so it is composed only once.
-    chosen: Option<(i64, usize, dance::Composition)>,
-    /// The dance being performed, or the last one that was.
-    performed: Option<dance::Composition>,
-    /// What has been performed, so the composer does not repeat itself.
-    variety: crate::variety::Variety,
-    request: Option<Request>,
-    /// How many dances have been asked for by hand, to vary them.
-    asked: u64,
-    /// What the hands are doing, for the studio.
-    doing: String,
+    engine: Engine,
     /// The rest treatment in force, for the studio: it is a parameter, and
     /// `playing` does not see parameters.
     treatment: &'static str,
 }
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    Box::new(Clocks {
-        seed,
-        born: None,
-        angles: [[REST; 2]; CLOCKS],
-        minute: None,
-        settled: 0.0,
-        plan: None,
-        landed: 0.0,
-        ambient: None,
-        chosen: None,
-        performed: None,
-        variety: Default::default(),
-        request: None,
-        asked: 0,
-        doing: String::new(),
-        treatment: RESTS[DEFAULT_REST].name,
-    })
+    Box::new(Clocks { engine: Engine::new(seed), treatment: RESTS[DEFAULT_REST].name })
 }
 
-impl Clocks {
-    /// The hours and minutes a minute-of-day shows, in the patch's format.
-    fn digits(minute: i64, hours24: bool) -> (u32, u32) {
-        let (h, m) = ((minute.div_euclid(60).rem_euclid(24)) as u32, minute.rem_euclid(60) as u32);
-        (if hours24 { h } else { (h + 11) % 12 + 1 }, m)
-    }
-
-    fn target(minute: i64, hours24: bool, rest: Rest) -> [Hands; CLOCKS] {
-        let (h, m) = Self::digits(minute, hours24);
-        pose(h, m, rest)
-    }
-
-    /// The dance for the move to `minute`. Asked for by number it comes from
-    /// the repertoire (or, at 13, is always composed). Left to vary, most are
-    /// composed afresh and the rest drawn from the repertoire.
-    fn dance_for(&mut self, minute: i64, choice: usize, to: &[Hands; CLOCKS], motor: Motor) -> dance::Composition {
-        if let Some((m, c, composition)) = &self.chosen {
-            if (*m, *c) == (minute, choice) {
-                return composition.clone();
-            }
-        }
-        let mut rng =
-            Rng::new(self.seed ^ (minute as u64).wrapping_mul(0x9e37_79b9) ^ self.asked.wrapping_mul(0x85eb_ca6b));
-        let composed = match choice {
-            0 => rng.u64() % 10 < 6,
-            n => n > dance::DANCES,
-        };
-        let composition = if composed {
-            dance::compose(&mut rng, &self.angles, to, motor, &self.variety)
-        } else if choice == 0 {
-            // From the repertoire, whichever has gone longest unperformed.
-            let names: Vec<String> =
-                (0..dance::DANCES).map(|i| dance::named(i, &mut Rng::new(0)).tags[0].clone()).collect();
-            let freshest = self.variety.freshest(&names, || rng.f32()).and_then(|n| names.iter().position(|m| m == n));
-            dance::named(freshest.unwrap_or(0), &mut rng)
-        } else {
-            dance::named(choice - 1, &mut rng)
-        };
-        self.chosen = Some((minute, choice, composition.clone()));
-        composition
-    }
-
-    fn perform(&mut self, ctx: &Ctx, composition: dance::Composition, to: [Hands; CLOCKS], minute: i64, motor: Motor) {
-        let (moves, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
-        for hands in &mut self.angles {
-            *hands = hands.map(|a| a.rem_euclid(360.0));
-        }
-        self.ambient = None;
-        self.variety.note(&composition.name, &composition.tags);
-        self.performed = Some(composition);
-        self.chosen = None;
-        self.plan = Some(Plan { began: ctx.t, from: self.angles, to, moves, total, minute });
-    }
-
-    /// Ease the picture towards "the time is being held" and back, so that the
-    /// resting dials recede once the hands land and are at full strength for
-    /// every dance. Six tenths of a second: slow enough not to read as a blink,
-    /// quick enough that the digits are clean by the time anyone looks up.
-    fn settle(&mut self, dt: f32) {
-        const SETTLING: f32 = 0.6;
-        let holding = self.minute.is_some() && self.plan.is_none() && self.ambient.is_none();
-        let by = (dt / SETTLING).max(0.0);
-        self.settled = if holding { (self.settled + by).min(1.0) } else { (self.settled - by).max(0.0) };
-    }
-
-    fn step(&mut self, ctx: &Ctx) {
-        let pace = ctx.get("pace");
-        // Display seconds per engine second. At pace 60 the wall clock is used
-        // directly, so the time is right however long the patch has run.
-        let rate = 60.0 / pace as f64;
-        let born = *self.born.get_or_insert(ctx.now - ctx.t);
-        let clock = if pace >= 59.5 { ctx.now } else { born + ctx.t * rate } + ctx.get("offset") as f64 * 60.0;
-        let motor = Motor { speed: ctx.get("speed"), acc: ctx.get("speed") * 1.6 };
-        let hours24 = ctx.get("hours24") >= 0.5;
-        let rest = Rest::of(ctx.get("rest"));
-        self.treatment = rest.name;
-
-        if let Some(p) = self.plan.take() {
-            let tau = (ctx.t - p.began) as f32;
-            for i in 0..CLOCKS {
-                for h in 0..2 {
-                    self.angles[i][h] = dance::angle_at(p.from[i][h], &p.moves[i][h], motor, tau);
-                }
-            }
-            self.doing = format!("dancing, {:.0} s to go", (p.total - tau).max(0.0));
-            if tau >= p.total {
-                self.angles = p.to;
-                self.minute = Some(p.minute);
-                self.landed = ctx.t;
-            } else {
-                self.plan = Some(p);
-            }
-            return;
-        }
-
-        // A dance asked for from the studio is performed at once, to the time
-        // already showing, and the minute's own dance follows when it is due.
-        if let (Some(request), Some(shown)) = (self.request.take(), self.minute) {
-            let to = Self::target(shown, hours24, rest);
-            let composition = match (request, &self.performed) {
-                (Request::Again, Some(last)) => last.clone(),
-                _ => {
-                    self.asked += 1;
-                    self.chosen = None;
-                    self.dance_for(shown, dance::DANCES + 1, &to, motor)
-                }
-            };
-            self.perform(ctx, composition, to, shown, motor);
-            return;
-        }
-
-        // Not dancing. On the first frame go straight to the current time;
-        // after that, set off early enough to land on the next minute as it turns.
-        let now_minute = (clock / 60.0).floor() as i64;
-        let next = match self.minute {
-            None => now_minute,
-            Some(shown) if shown < now_minute => now_minute,
-            Some(shown) => shown + 1,
-        };
-        let to = Self::target(next, hours24, rest);
-        let composition = self.dance_for(next, ctx.get("dance") as usize, &to, motor);
-        let (_, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
-        // Engine seconds until the dance has to begin.
-        let slack = (next as f64 * 60.0 - clock) / rate - total as f64;
-        let ready = self.ambient.as_ref().is_none_or(|a| a.at_rest());
-        if self.minute.is_none() || (slack <= 0.0 && ready) {
-            self.perform(ctx, composition, to, next, motor);
-            return;
-        }
-        self.doing = match &self.ambient {
-            Some(a) => format!("drifting ({}), next dance in {:.0} s", a.name(), slack.max(0.0)),
-            None => format!("holding the time, next dance in {:.0} s", slack.max(0.0)),
-        };
-
-        // Between the time and the next dance: hold still for a while, then
-        // drift. The ambient field is asked to settle with room to spare, so
-        // the hands are at rest when the dance has to leave.
-        const SETTLE: f64 = 4.0;
-        let held = ctx.get("still") as f64 * pace as f64 / 60.0;
-        match &mut self.ambient {
-            Some(ambient) => ambient.step(&mut self.angles, motor, ctx.dt as f32, slack < SETTLE),
-            None if ctx.t - self.landed >= held && slack > SETTLE + 6.0 => {
-                let mut rng = Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b));
-                let moods: Vec<String> = (0..ambient::MOODS).map(|m| format!("mood:{m}")).collect();
-                let mood = self
-                    .variety
-                    .freshest(&moods, || rng.f32())
-                    .and_then(|n| moods.iter().position(|m| m == n))
-                    .unwrap_or(0);
-                self.variety.note("", std::slice::from_ref(&moods[mood]));
-                let ambient = ambient::Ambient::new(&mut rng, mood, COLS, ROWS, CELL);
-                self.ambient = Some(ambient);
-            }
-            None => {}
-        }
+/// The words the studio has shown since before the engine moved out.
+fn doing_words(doing: Doing) -> String {
+    match doing {
+        Doing::Starting => String::new(),
+        Doing::Dancing { to_go } => format!("dancing, {to_go:.0} s to go"),
+        Doing::Drifting { mood, next } => format!("drifting ({mood}), next dance in {next:.0} s"),
+        Doing::Holding { next } => format!("holding the time, next dance in {next:.0} s"),
     }
 }
 
 impl Patch for Clocks {
     fn playing(&self) -> Option<Playing> {
-        let performed = self.performed.as_ref()?;
+        let performed = self.engine.performed()?;
         let actions =
             vec![Action { id: "again", label: "Play it again" }, Action { id: "another", label: "Compose another" }];
         Some(Playing {
             title: performed.name.clone(),
-            detail: self.doing.clone(),
+            detail: doing_words(self.engine.doing()),
             actions,
             notes: vec![format!("resting dials: {}", self.treatment)],
         })
@@ -526,15 +139,27 @@ impl Patch for Clocks {
 
     fn act(&mut self, action: &str) {
         match action {
-            "again" => self.request = Some(Request::Again),
-            "another" => self.request = Some(Request::Another),
+            "again" => self.engine.ask(Request::Again),
+            "another" => self.engine.ask(Request::Another),
             _ => {}
         }
     }
 
     fn render(&mut self, ctx: &Ctx) -> Frame {
-        self.step(ctx);
-        self.settle(ctx.dt as f32);
+        let rest = Rest::of(ctx.get("rest"));
+        self.treatment = rest.name;
+        let hours24 = ctx.get("hours24") >= 0.5;
+        let knobs = Knobs {
+            still: ctx.get("still"),
+            dance: ctx.get("dance") as usize,
+            speed: ctx.get("speed"),
+            hours24,
+            rest,
+            fade: ctx.get("fade"),
+            calm: ctx.get("calm") >= 0.5,
+            limit: ctx.get("limit"),
+        };
+        self.engine.step(Tick { t: ctx.t, dt: ctx.dt, now: ctx.now }, &knobs);
         let tint = |hue: &str, chroma: &str| draw::Tint {
             hue: ctx.get(hue),
             chroma: ctx.get(chroma),
@@ -547,17 +172,7 @@ impl Patch for Clocks {
             ring: ctx.get("dials"),
             dark: (ctx.get("dark") as usize).min(DARK_CHOICES.len() - 1),
         };
-        // Which dials are not part of the time, so are drawn as being at rest.
-        // Only while there is a time to read: during a dance every hand is a
-        // dancer and the grid is at full strength.
-        let idle = match self.minute {
-            Some(m) if self.settled > 0.0 => {
-                let (h, mm) = Self::digits(m, ctx.get("hours24") >= 0.5);
-                resting(h, mm)
-            }
-            _ => [false; CLOCKS],
-        };
-        picture(&self.angles, &idle, Rest::of(ctx.get("rest")), self.settled, look)
+        picture_dims(self.engine.angles(), self.engine.dims(), rest, self.engine.settled(), look)
     }
 }
 
@@ -577,24 +192,26 @@ struct Look {
 
 /// Draw the grid. `idle` marks the dials that are not part of a digit; they are
 /// drawn back towards `rest` as the picture settles onto the time.
+#[cfg(test)]
 fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled: f32, look: Look) -> Frame {
-    let scale = rest.scale(settled);
+    picture_dims(angles, &idle.map(|i| if i { settled } else { 0.0 }), rest, settled, look)
+}
+
+/// [`picture`], with each dial's own distance towards its rest.
+fn picture_dims(angles: &[Hands; CLOCKS], dims: &[f32; CLOCKS], rest: Rest, settled: f32, look: Look) -> Frame {
     // Card 188: only once a resting dial has actually landed - not while it
     // is still fading towards rest - does its ink become the hand-picked,
     // aligned shade. The fade itself is moving content (brief 2.1.1: "leave
     // everything else to the dither"), so it stays the cheap continuous ramp
     // the whole way; only the held, dark end of it needs steadying.
-    let shade = (settled >= 1.0 && rest.ink < 1.0).then(|| dark_shade(look.dark, rest.ink)).flatten();
-    let scales: Vec<draw::RestScale> =
-        idle.iter()
-            .map(|at_rest| {
-                if *at_rest {
-                    draw::RestScale { ink: scale[0], reach: scale[1], shade }
-                } else {
-                    draw::RestScale::FULL
-                }
-            })
-            .collect();
+    let shade = (rest.ink < 1.0).then(|| dark_shade(look.dark, rest.ink)).flatten();
+    let scales: Vec<draw::RestScale> = dims
+        .iter()
+        .map(|dim| {
+            let [ink, reach] = rest.scale(*dim);
+            draw::RestScale { ink, reach, shade: if *dim >= 1.0 { shade } else { None } }
+        })
+        .collect();
     draw::Dials {
         angles,
         cols: COLS,
@@ -616,8 +233,159 @@ fn picture(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], rest: Rest, settled:
     .draw()
 }
 
+/// The firmware's rasteriser draws the same picture as this patch.
+///
+/// The Studio supersamples and palette-maps and the device does neither, so
+/// they are not expected to match to the bit. They are expected to match to
+/// the eye: same strokes in the same places in the same colours.
+#[cfg(test)]
+mod device_picture {
+    use super::*;
+    use screeny_clock::raster::{Look as DeviceLook, Raster, Tint as DeviceTint, FRAME_BYTES};
+
+    fn studio(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], settled: f32) -> Vec<u8> {
+        let tint = |hue, chroma| draw::Tint { hue, chroma, light: 0.67 };
+        let look = Look {
+            half: 0.775,
+            tip: 0.2,
+            tints: [tint(74.0, 0.065), tint(240.0, 0.065)],
+            ring: 0.0,
+            dark: 0,
+        };
+        let rest = RESTS[DEFAULT_REST];
+        let mut out = Vec::new();
+        for c in picture(angles, idle, rest, settled, look).to_linear() {
+            out.extend_from_slice(&c.to_srgb8());
+        }
+        out
+    }
+
+    fn device(angles: &[Hands; CLOCKS], idle: &[bool; CLOCKS], settled: f32) -> Vec<u8> {
+        let mut out = vec![0u8; FRAME_BYTES];
+        let dims = idle.map(|i| if i { settled } else { 0.0 });
+        Raster::new(DeviceLook::default()).draw(&mut out, angles, &dims, RESTS[DEFAULT_REST], settled);
+        out
+    }
+
+    #[test]
+    fn the_defaults_are_the_same_gold_and_blue() {
+        let look = DeviceLook::default();
+        let want = |hue, chroma, h: DeviceTint| assert_eq!((h.hue, h.chroma, h.light), (hue, chroma, 0.67));
+        want(74.0, 0.065, look.tints[0]);
+        want(240.0, 0.065, look.tints[1]);
+        let knob = |id: &str| PARAMS.iter().find(|p| p.id == id).unwrap().default;
+        assert_eq!((knob("hue"), knob("hue2"), knob("light")), (74.0, 240.0, 0.67));
+        assert_eq!((knob("chroma"), knob("chroma2"), knob("tip")), (0.065, 0.065, 0.2));
+        assert_eq!(knob("weight") * 0.5, look.half);
+    }
+
+    #[test]
+    fn a_held_time_and_a_mid_dance_match_the_studio_to_the_eye() {
+        let rest = RESTS[DEFAULT_REST];
+        let mut scattered = [[0.0; 2]; CLOCKS];
+        for (i, h) in scattered.iter_mut().enumerate() {
+            *h = [i as f32 * 37.0 + 11.0, i as f32 * 91.0 + 3.0];
+        }
+        let cases = [
+            (pose(10, 42, rest), resting(10, 42), 1.0),
+            (pose(23, 58, rest), resting(23, 58), 1.0),
+            (scattered, [false; CLOCKS], 0.0),
+        ];
+        for (angles, idle, settled) in cases {
+            let (a, b) = (studio(&angles, &idle, settled), device(&angles, &idle, settled));
+            let lit = a.iter().filter(|v| **v > 8).count() as f32;
+            let diff: u64 = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y) as u64).sum();
+            let per_lit = diff as f32 / lit;
+            assert!(per_lit < 22.0, "{per_lit} per lit channel");
+            let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+            assert!(worst < 110, "one pixel is {worst} out");
+        }
+    }
+
+    /// `screeny-panel` is host-only, so the device carries these as a table.
+    #[test]
+    fn the_devices_level_table_is_the_panels() {
+        assert_eq!(screeny_clock::raster::DARK_ALIGN_LEVEL, crate::panel::DARK_ALIGN_LEVEL as usize);
+        for (level, code) in screeny_clock::raster::LEVEL_CODES.iter().enumerate() {
+            assert_eq!(*code, crate::panel::level_code(level as u32), "level {level}");
+        }
+    }
+
+    /// How many dark pixels leave work for the panel's temporal dither: a
+    /// channel between two levels alternates them, and held dark that shows.
+    fn dark_dithering(frame: &[u8]) -> (usize, usize) {
+        let q = |v: u8| (crate::color::srgb8_to_linear(v) * 1008.0).round() as i32;
+        let dark = frame.chunks(3).filter(|p| {
+            let top = p.iter().map(|v| q(*v)).max().unwrap();
+            top > 0 && top < 16 * 8
+        });
+        let (mut all, mut dithering) = (0, 0);
+        for p in dark {
+            all += 1;
+            dithering += usize::from(p.iter().any(|v| (1..15).contains(&(q(*v) % 16))));
+        }
+        (dithering, all)
+    }
+
+    /// Why the table exists. Without it every dark pixel of a held time was
+    /// dithering, against a quarter in the Studio's frames, and the owner saw
+    /// the difference on the panel (2026-11-07).
+    #[test]
+    fn the_dark_end_is_as_steady_as_the_studios() {
+        let rest = RESTS[DEFAULT_REST];
+        let (angles, idle) = (pose(10, 42, rest), resting(10, 42));
+        let tint = |hue, chroma| draw::Tint { hue, chroma, light: 0.67 };
+        let look = Look { half: 0.775, tip: 0.2, tints: [tint(74.0, 0.065), tint(240.0, 0.065)], ring: 0.0, dark: 0 };
+        let output = crate::pipeline::Output { panel: crate::panel::Panel::AlignedDark, ..Default::default() };
+        let sent = crate::pipeline::Pipeline::new(output).process(picture(&angles, &idle, rest, 1.0, look), 1.0 / 30.0);
+        let (studio, of) = dark_dithering(&sent.wire.rgb);
+        let (ours, our_of) = dark_dithering(&device(&angles, &idle, 1.0));
+        println!("dark pixels dithering: studio {studio} of {of}, device {ours} of {our_of}");
+        assert!(ours as f32 / our_of as f32 <= studio as f32 / of as f32 + 0.1, "{ours}/{our_of} against {studio}/{of}");
+    }
+
+    /// `SCREENY_CLOCK_PREVIEW=<dir> cargo test -p screeny-art device_picture`
+    /// writes side-by-side enlargements to look at.
+    #[test]
+    fn preview() {
+        let Ok(dir) = std::env::var("SCREENY_CLOCK_PREVIEW") else { return };
+        let rest = RESTS[DEFAULT_REST];
+        let (angles, idle) = (pose(10, 42, rest), resting(10, 42));
+        let mut mid = pose(10, 42, rest);
+        for (i, h) in mid.iter_mut().enumerate() {
+            *h = [h[0] + i as f32 * 13.0, h[1] - i as f32 * 21.0];
+        }
+        const S: usize = 10;
+        let (w, h) = (64 * S * 2 + 20, 32 * S * 2 + 20);
+        let mut px = vec![30u8; w * h * 3];
+        let mut blit = |f: &[u8], ox: usize, oy: usize| {
+            for y in 0..32 * S {
+                for x in 0..64 * S {
+                    let (sx, sy) = (x / S, y / S);
+                    let i = (sy * 64 + sx) * 3;
+                    let gap = x % S == 0 || y % S == 0;
+                    for c in 0..3 {
+                        px[((y + oy) * w + x + ox) * 3 + c] = if gap { 0 } else { f[i + c] };
+                    }
+                }
+            }
+        };
+        blit(&studio(&angles, &idle, 1.0), 0, 0);
+        blit(&device(&angles, &idle, 1.0), 64 * S + 20, 0);
+        blit(&studio(&mid, &[false; CLOCKS], 0.0), 0, 32 * S + 20);
+        blit(&device(&mid, &[false; CLOCKS], 0.0), 64 * S + 20, 32 * S + 20);
+        let file = std::fs::File::create(format!("{dir}/clock-studio-vs-device.png")).unwrap();
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.write_header().unwrap().write_image_data(&px).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::rng::Rng;
+    use screeny_clock::face::{direction, DIGITS};
     use super::*;
     use crate::color::Rgb;
     use crate::frame::{GUARANTEED_PALETTE, W};
@@ -707,10 +475,10 @@ mod tests {
             let idle = resting(21, 12);
             assert_eq!(idle.len(), CLOCKS);
             // 12-hour is the same four digits: 13:11 is `0111`, 00:00 is `1200`.
-            assert_eq!(Clocks::digits(13 * 60 + 11, false), (1, 11));
-            assert_eq!(Clocks::digits(0, false), (12, 0));
-            assert_eq!(Clocks::digits(0, true), (0, 0));
-            assert_eq!(read_back(&Clocks::target(13 * 60 + 11, false, rest), rest), [0, 1, 1, 1]);
+            assert_eq!(Engine::digits(13 * 60 + 11, false), (1, 11));
+            assert_eq!(Engine::digits(0, false), (12, 0));
+            assert_eq!(Engine::digits(0, true), (0, 0));
+            assert_eq!(read_back(&Engine::target(13 * 60 + 11, false, rest), rest), [0, 1, 1, 1]);
         }
     }
 

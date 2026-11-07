@@ -476,10 +476,21 @@ impl Core {
         hostname: &str,
         net: crate::screens::Net,
         phase: u32,
+        face: &mut Option<alloc::boxed::Box<crate::clock::Face>>,
+        now_us: u64,
     ) {
         match self.rx.idle_mode() {
             IdleMode::Status | IdleMode::HoldForever => {
                 crate::screens::status(dst, self.rx.name(), hostname, net, phase)
+            }
+            // Until a time server has answered there is no time to show, and
+            // the status screen is the honest thing to put up: it says why.
+            IdleMode::Clock => {
+                if !crate::clock::synced()
+                    || !face.get_or_insert_with(|| crate::clock::Face::new(now_us)).draw(dst, now_us)
+                {
+                    crate::screens::status(dst, self.rx.name(), hostname, net, phase)
+                }
             }
             IdleMode::Dim => {
                 dst.copy_from(last);

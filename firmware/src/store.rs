@@ -127,6 +127,8 @@ pub const DIRTY_NAME: u8 = 1 << 0;
 pub const DIRTY_BRIGHTNESS: u8 = 1 << 1;
 /// The idle mode changed.
 pub const DIRTY_IDLE: u8 = 1 << 2;
+/// The clock's look changed.
+pub const DIRTY_CLOCK: u8 = 1 << 3;
 
 static DIRTY: AtomicU8 = AtomicU8::new(0);
 static WAKE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
@@ -204,7 +206,23 @@ pub fn note_dirty(bits: u8) {
 /// to protect and masking core 0 for the ~200 us of a 4 KB read would be pure
 /// latency. Wrap erases and programs; leave reads alone.
 pub fn guarded<R>(f: impl FnOnce() -> R) -> R {
-    critical_section::with(|_| f())
+    use core::sync::atomic::Ordering::SeqCst;
+    // `crate::SWAPPING`: hold off new swaps, and let one already in flight
+    // finish, which is at most one refresh (about 6.5 ms). Bounded, so that a
+    // display that has stopped cannot stop the flash with it.
+    crate::FLASH_HOLD.store(true, SeqCst);
+    let waited = embassy_time::Instant::now();
+    while crate::SWAPPING.load(SeqCst) && waited.elapsed() < embassy_time::Duration::from_millis(20) {
+        core::hint::spin_loop();
+    }
+    let r = critical_section::with(|_| {
+        crate::trace::mark(crate::trace::FLASH, 1);
+        let r = f();
+        crate::trace::mark(crate::trace::FLASH, 0);
+        r
+    });
+    crate::FLASH_HOLD.store(false, SeqCst);
+    r
 }
 
 // ---------------------------------------------------------------------------
@@ -431,6 +449,14 @@ impl Flash {
     /// [`StoreError`].
     pub async fn save_idle_mode(&mut self, mode: IdleMode) -> Result<Timing, StoreError> {
         timed!(with_store!(self, s, buf, s.save_idle_mode(buf, mode).await))
+    }
+
+    /// Store the clock's look.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn save_clock(&mut self, clock: &screeny_settings::ClockConfig) -> Result<Timing, StoreError> {
+        timed!(with_store!(self, s, buf, s.save_clock(buf, clock).await))
     }
 
     /// Store the colour order. Read once at boot, so it takes effect on the
@@ -923,6 +949,9 @@ pub async fn store_task() {
         if bits & DIRTY_IDLE != 0 {
             deb.note_change(Field::IdleMode, now);
         }
+        if bits & DIRTY_CLOCK != 0 {
+            deb.note_change(Field::Clock, now);
+        }
 
         while let Some(field) = deb.due(Instant::now().as_millis()) {
             commit(field).await;
@@ -954,6 +983,8 @@ async fn commit(field: Field) {
         Field::Name => f.save_name(&name).await,
         Field::Brightness => f.save_brightness(brightness).await,
         Field::IdleMode => f.save_idle_mode(idle).await,
+        // Boxed because `.bss` is core 0's stack and this waits on flash.
+        Field::Clock => f.save_clock(&alloc::boxed::Box::new(crate::clock::snapshot().0)).await,
     };
     match r {
         Ok(t) => {

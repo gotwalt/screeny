@@ -59,6 +59,7 @@ fn exercise(addr: SocketAddr, r: &Route) -> Res {
         (Method::Post, route::FIRMWARE) => http::post_bytes(addr, r.path, &image()),
         (Method::Post, route::REBOOT) => http::post_json(addr, r.path, r#"{"confirm":"RBOO"}"#),
         (Method::Post, route::IDENTIFY) => http::post_json(addr, r.path, r#"{"duration_ms":300}"#),
+        (Method::Post, route::CLOCK) => http::post_json(addr, r.path, r#"{"dance_now":true}"#),
         (m, path) => panic!(
             "card 224: {m:?} {path} is in screeny_device_api::route::ROUTES and \
              this test does not exercise it - serve it in crates/sim/src/api.rs \

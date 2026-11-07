@@ -186,7 +186,7 @@ fn run() -> Result<bool, String> {
         }
         "idle" => {
             let m = arg_num(rest, 0).ok_or("idle needs a mode 0..=3")?;
-            let mode = IdleMode::from_u8(m as u8).ok_or("mode must be 0..=3")?;
+            let mode = IdleMode::from_u8(m as u8).ok_or("mode must be 0..=4")?;
             simple(ctrl_addr, Request::SetIdle(mode))
         }
         "name" => {

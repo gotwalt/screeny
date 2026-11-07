@@ -194,6 +194,7 @@ impl Opts {
                         "hold" => IdleMode::HoldForever,
                         "dim" => IdleMode::Dim,
                         "black" => IdleMode::Black,
+                        "clock" => IdleMode::Clock,
                         other => return Err(format!("--idle: unknown mode {other:?}")),
                     }
                 }

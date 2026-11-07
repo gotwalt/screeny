@@ -352,7 +352,7 @@ fn bad_length_header(cx: &mut Ctx) -> Result<Outcome, String> {
 fn bad_arg(cx: &mut Ctx) -> Result<Outcome, String> {
     let long_name = [&[33u8][..], &[b'x'; 33][..]].concat();
     let cases: &[(u8, &[u8], &str)] = &[
-        (op::SET_IDLE, &[4], "an idle mode v1 does not define"),
+        (op::SET_IDLE, &[5], "an idle mode v1 does not define"),
         (op::SET_IDLE, &[255], "and another"),
         (op::REBOOT, &[0, 0, 0, 0], "REBOOT without the magic"),
         (op::REBOOT, b"RBOX", "REBOOT mistyped"),

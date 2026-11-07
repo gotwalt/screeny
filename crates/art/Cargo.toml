@@ -31,6 +31,8 @@ screeny-encode = { path = "../encode" }
 # code, including the firmware's temporal dither. `panel.rs` is a thin reading
 # of it, not a second copy. No dependencies but `screeny-proto`.
 screeny-panel = { path = "../panel" }
+# The clocks: instrument, choreography and engine, shared with the firmware.
+screeny-clock = { path = "../clock", features = ["std"] }
 screeny = { path = "../screeny", optional = true }
 # So `screeny-art play` can send FINAL on ctrl-c and let the panel go at once
 # instead of holding the last frame for the stream timeout. `Drop` does not run

@@ -26,9 +26,8 @@ pub mod patch;
 pub mod patches;
 pub mod pipeline;
 pub mod preview;
-pub mod rng;
+pub use screeny_clock::{rng, variety};
 pub mod snapshot;
-pub mod variety;
 
 /// **The frame rate. There is one** (card 161).
 ///

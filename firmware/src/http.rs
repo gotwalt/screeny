@@ -84,11 +84,12 @@ use picoserve::response::{Connection, IntoResponse, Json, Response, ResponseWrit
 use picoserve::routing::{PathRouterService, Router, ServicePathRouter};
 use picoserve::{ResponseSent, Server};
 use screeny_device_api::reply::{
-    AcceptedReply, FirmwareReply, PanicRecord, PanicReply, SettingsReply, StatusReply,
+    AcceptedReply, ClockReply, FirmwareReply, PanicRecord, PanicReply, SettingsReply, StatusReply,
     TelemetryReply, WifiReply,
 };
 use screeny_device_api::request::{
-    IdentifyRequest, Mutating, RebootRequest, SettingsRequest, MIN_UNESCAPE_BUFFER,
+    ClockLook, ClockRequest, IdentifyRequest, Mutating, RebootRequest, SettingsRequest,
+    MIN_UNESCAPE_BUFFER,
 };
 use screeny_device_api::{
     form, route, text, ErrorCode, ErrorReply, FirmwareError, FwSlot, FwState, IdleMode,
@@ -180,6 +181,8 @@ const PAGE: &str = include_str!("http_page.html");
 /// status as of page load; the script replaces the same table every few
 /// seconds when it is enabled.
 const PAGE_SPLIT: &str = "<!--STATUS-->";
+/// Where the clock's data goes in [`PAGE`].
+const PAGE_CLOCK: &str = "<!--CLOCK-->";
 
 const _: () = assert!(PAGE.len() < 16384, "the status page has got out of hand");
 
@@ -423,6 +426,7 @@ enum ApiBody {
     Telemetry(TelemetryReply),
     Wifi(WifiReply),
     Settings(SettingsReply),
+    Clock(ClockReply),
     /// The three routes that answer `{"result":...}`.
     Accepted(AcceptedReply),
     /// `POST /api/v1/firmware` (card 240). **Eight bytes**, and that is the
@@ -448,6 +452,7 @@ impl serde::Serialize for ApiBody {
             ApiBody::Telemetry(v) => v.serialize(s),
             ApiBody::Wifi(v) => v.serialize(s),
             ApiBody::Settings(v) => v.serialize(s),
+            ApiBody::Clock(v) => v.serialize(s),
             ApiBody::Accepted(v) => v.serialize(s),
             ApiBody::Firmware(v) => v.serialize(s),
             ApiBody::Error(v) => v.serialize(s),
@@ -632,8 +637,10 @@ fn wifi_state() -> WifiState {
 /// The `CORE` lock is held for the three reads that need it and dropped before
 /// anything is serialised, let alone written to a socket.
 async fn status() -> StatusReply {
+    crate::trace::mark(crate::trace::REQUEST, 1);
     let (name, idle_mode, state) = {
         let mut guard = CORE.lock().await;
+        crate::trace::mark(crate::trace::REQUEST, 2);
         let core = guard.as_mut().expect("core exists");
         let t = core.telemetry(now_us());
         (
@@ -642,7 +649,9 @@ async fn status() -> StatusReply {
             StreamState::from_u8(t.state).unwrap_or(StreamState::Idle),
         )
     };
+    crate::trace::mark(crate::trace::REQUEST, 3);
     let heap = esp_alloc::HEAP.stats();
+    crate::trace::mark(crate::trace::REQUEST, 4);
     StatusReply {
         api: screeny_device_api::API_VERSION,
         id: text::text(ctx().id).unwrap_or_default(),
@@ -920,6 +929,72 @@ async fn post_settings(req: SettingsRequest) -> Reply {
     }))
 }
 
+/// The clock as the API tells it.
+fn clock_reply() -> ClockReply {
+    crate::trace::mark(crate::trace::REQUEST, 5);
+    let (c, _) = crate::clock::snapshot();
+    crate::trace::mark(crate::trace::REQUEST, 6);
+    ClockReply {
+        look: ClockLook {
+            hue: c.hue,
+            chroma: c.chroma,
+            hue2: c.hue2,
+            chroma2: c.chroma2,
+            light: c.light,
+            weight: c.weight,
+            tip: c.tip,
+            dials: c.dials,
+            speed: c.speed,
+            still: c.still,
+            dance: c.dance,
+            rest: c.rest,
+            hours24: c.hours24,
+            dark: c.dark,
+            fade: c.fade,
+            calm: c.calm,
+            limit: c.limit,
+        },
+        time: crate::clock::wall_hms().and_then(|(h, m, s)| {
+            let mut t = text::TimeText::new();
+            write!(t, "{h:02}:{m:02}:{s:02}").ok().map(|()| t)
+        }),
+        synced_ago_s: crate::clock::synced_ago_s(),
+    }
+}
+
+/// `POST /api/v1/clock`: the look reaches the panel on its next frame and flash
+/// once the page has gone quiet, so a slider may send this as fast as it likes.
+fn post_clock(req: ClockRequest) -> Reply {
+    if let Some(l) = req.look {
+        crate::clock::set_look(screeny_settings::ClockConfig {
+            hue: l.hue,
+            chroma: l.chroma,
+            hue2: l.hue2,
+            chroma2: l.chroma2,
+            light: l.light,
+            weight: l.weight,
+            tip: l.tip,
+            dials: l.dials,
+            speed: l.speed,
+            still: l.still,
+            dance: l.dance,
+            rest: l.rest,
+            hours24: l.hours24,
+            dark: l.dark,
+            fade: l.fade,
+            calm: l.calm,
+            limit: l.limit,
+        });
+    }
+    if req.dance_now == Some(true) {
+        crate::clock::dance_now();
+    }
+    if req.play_again == Some(true) {
+        crate::clock::play_again();
+    }
+    Reply::ok(ApiBody::Clock(clock_reply()))
+}
+
 /// The API's colour order as the store's. Two enums, one per crate, for the
 /// reason `IdleMode` has two: `screeny-device-api` does not depend on
 /// `screeny-settings`, and the firmware is the one place both are in scope.
@@ -1188,11 +1263,19 @@ async fn post_firmware<R: picoserve::io::Read>(
         // `picoserve::io::Read` is `embedded_io_async::Read`; the trait has to
         // be in scope for the one call this module makes to it.
         use embedded_io_async::Read as _;
+        crate::trace::mark(crate::trace::UPLOAD, 1);
         let read = embassy_time::with_timeout(UPLOAD_STALL, reader.read(up.spare())).await;
+        crate::trace::mark(crate::trace::UPLOAD, 2);
         let n = match read {
-            Ok(Ok(0)) => break,
+            Ok(Ok(0)) => {
+                crate::trace::note(format_args!("body ended at {}", up.written()));
+                info!("ota: the body ended after {} bytes of {:?}", up.written(), declared);
+                break;
+            }
             Ok(Ok(n)) => n,
-            Ok(Err(_)) => {
+            Ok(Err(e)) => {
+                crate::trace::note(format_args!("read failed at {}: {:?}", up.written(), e));
+                warn!("ota: reading the body failed after {} bytes: {:?}", up.written(), e);
                 // The body stopped early - the socket died, or the 180 s
                 // outer bound fired. The scanner will call it a truncated
                 // image, which is what it is.
@@ -1201,19 +1284,23 @@ async fn post_firmware<R: picoserve::io::Read>(
                 return firmware_failed(written, FirmwareError::BadSha256);
             }
             Err(embassy_time::TimeoutError) => {
+                crate::trace::note(format_args!("quiet for 5 s at {}", up.written()));
                 warn!("ota: the uploader went quiet for {} s", UPLOAD_STALL.as_secs());
                 let written = up.written();
                 up.failed(FirmwareError::BadSha256).await;
                 return firmware_failed(written, FirmwareError::BadSha256);
             }
         };
+        crate::trace::mark(crate::trace::UPLOAD, 3);
         if let Err(e) = up.took(n).await {
             let written = up.written();
             up.failed(e).await;
             return firmware_failed(written, e);
         }
+        crate::trace::mark(crate::trace::UPLOAD, 4);
     }
 
+    crate::trace::mark(crate::trace::UPLOAD, 5);
     let written = up.written();
     match up.finish().await {
         Ok(a) => {
@@ -1238,7 +1325,11 @@ async fn post_firmware<R: picoserve::io::Read>(
                 Reply::ok(ApiBody::Firmware(FirmwareReply::ok(a.written)))
             }
         }
-        Err(e) => firmware_failed(written, e),
+        Err(e) => {
+            crate::trace::note(format_args!("finish refused at {}: {:?}", written, e));
+            warn!("ota: the image was refused at the end, after {} bytes: {:?}", written, e);
+            firmware_failed(written, e)
+        }
     }
 }
 
@@ -1363,6 +1454,7 @@ const fn idle_human(m: IdleMode) -> &'static str {
         IdleMode::HoldForever => "hold the last frame",
         IdleMode::Dim => "dim the last frame",
         IdleMode::Black => "black",
+        IdleMode::Clock => "the clock",
     }
 }
 
@@ -1449,7 +1541,27 @@ impl core::fmt::Display for Page {
                 ),
             )?,
         }
-        f.write_str(self.tail)
+        // The page's second marker: what only the firmware knows about the
+        // clock, so the page and the engine cannot list different dances.
+        let (before, after) = self.tail.split_once(PAGE_CLOCK).unwrap_or((self.tail, ""));
+        f.write_str(before)?;
+        f.write_str("<script>const DANCES=[")?;
+        for name in screeny_clock::dance::NAMES {
+            write!(f, "\"{name}\",")?;
+        }
+        f.write_str("],RESTS=[")?;
+        for rest in screeny_clock::face::RESTS {
+            write!(f, "\"{}\",", rest.name)?;
+        }
+        f.write_str("],DARKS=[")?;
+        for name in screeny_clock::face::DARK_CHOICES {
+            write!(f, "\"{name}\",")?;
+        }
+        f.write_str("];</script>")?;
+        f.write_str("<!-- trace ")?;
+        crate::trace::write_notes(f)?;
+        f.write_str(" -->")?;
+        f.write_str(after)
     }
 }
 
@@ -1920,6 +2032,11 @@ async fn route_request<R: picoserve::io::Read>(
             Ok(req) => post_settings(req).await,
             Err(e) => Reply::error(e),
         },
+        (route::Method::Get, route::CLOCK) => Reply::ok(ApiBody::Clock(clock_reply())),
+        (route::Method::Post, route::CLOCK) => match json_body(body.body()).await {
+            Ok(req) => post_clock(req),
+            Err(e) => Reply::error(e),
+        },
         (route::Method::Post, route::IDENTIFY) => match json_body(body.body()).await {
             Ok(req) => post_identify(req).await,
             Err(e) => Reply::error(e),
@@ -2064,9 +2181,10 @@ async fn serve_on(
         // The result is the connection's, not the server's: a client that
         // vanishes mid-request is an ordinary event on a LAN and the next
         // `accept` is the whole response to it.
-        let _ = Server::new(app, config, http_buf)
-            .serve(BoundedSocket(socket))
-            .await;
+        if let Err(e) = Server::new(app, config, http_buf).serve(BoundedSocket(socket)).await {
+            crate::trace::note(format_args!("worker {} ended: {:?}", id, e));
+            warn!("http: worker {} connection ended: {:?}", id, e);
+        }
     }
 }
 
@@ -2333,6 +2451,8 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
                 crate::provision::wait_ap_pub(true),
             )
             .await;
+            crate::trace::note(format_args!("worker {} left the lan", id));
+            warn!("http: worker {} left the lan for the setup network", id);
         }
     }
 }

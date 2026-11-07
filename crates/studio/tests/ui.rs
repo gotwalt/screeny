@@ -805,14 +805,14 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
         (Some(0.0), Some(4.0), Some(3.0))
     );
 
-    // The fourteen choreographies the label could not even try to name.
-    assert_eq!(param("dance")["choices"].as_array().expect("choices").len(), 14);
+    // The choreographies the label could not even try to name.
+    assert_eq!(param("dance")["choices"].as_array().expect("choices").len(), 19);
     // A switch, not a two-stop slider.
     assert_eq!(param("hours24")["switch"], true);
     // And an ordinary number is untouched.
-    let pace = param("pace");
-    assert_eq!(pace["choices"], serde_json::json!([]));
-    assert_eq!(pace["switch"], false);
+    let still = param("still");
+    assert_eq!(still["choices"], serde_json::json!([]));
+    assert_eq!(still["switch"], false);
 
     // The value is still an `f32` on the wire and in the state: nothing about
     // a choice changes how it is set or stored.

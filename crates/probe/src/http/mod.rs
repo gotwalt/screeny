@@ -394,6 +394,7 @@ pub fn idle_name(m: IdleMode) -> &'static str {
         IdleMode::HoldForever => "hold_forever",
         IdleMode::Dim => "dim",
         IdleMode::Black => "black",
+        IdleMode::Clock => "clock",
     }
 }
 

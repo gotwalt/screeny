@@ -410,7 +410,7 @@ mod tests {
         // dance: "vary", then the repertoire in order, then "composed".
         let d = by_id(&crate::patches::clocks::DEF, "dance");
         assert_eq!(d.choices.len(), dance::DANCES + 2, "vary, every dance, and composed");
-        assert_eq!(d.max, 13.0, "the range card 160 shipped");
+        assert_eq!(d.max, dance::DANCES as f32 + 1.0, "vary, the repertoire, and composed");
         for which in 0..dance::DANCES {
             let (name, _) = dance::dance(which, &mut crate::rng::Rng::new(which as u64));
             assert_eq!(DANCE_CHOICES[which + 1], name, "dance {which}");
@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn no_patches_ids_ranges_or_defaults_moved() {
         let want: &[(&str, &str, f32, f32, f32, f32)] = &[
-            ("clocks-numerals", "dance", 0.0, 13.0, 1.0, 0.0),
+            ("clocks-numerals", "dance", 0.0, 18.0, 1.0, 0.0),
             ("clocks-numerals", "rest", 0.0, 4.0, 1.0, 3.0), // "hatched, faint", Gold and Blue, 2026-10-28
             ("clocks-numerals", "hours24", 0.0, 1.0, 1.0, 1.0),
             ("clocks-dials", "grid", 0.0, 2.0, 1.0, 0.0), // default 6 x 3 -> 4 x 2, 2026-09-25

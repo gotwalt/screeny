@@ -422,6 +422,9 @@ pub struct Upload {
     front_checked: bool,
     /// The dither setting to put back.
     dither_was: bool,
+    /// Whether how it ended has been said. An `Upload` dropped with this still
+    /// false was cancelled, or left by a `?`.
+    answered: bool,
 }
 
 /// Everything an upload can be refused for **before its first byte**, decided
@@ -520,6 +523,7 @@ impl Upload {
         // serial log they were not attached to.
         crate::panic::set_in_upload(true);
 
+        crate::trace::note(format_args!("started"));
         info!(
             "ota: upload started - staging into {:#x} ({} KB slot), content-length {:?}",
             slot.offset(),
@@ -539,6 +543,7 @@ impl Upload {
             mark,
             front_checked: false,
             dither_was,
+            answered: false,
         })
     }
 
@@ -646,6 +651,7 @@ impl Upload {
         // not with `PartitionEntry::sha256`.
         self.verify_flash(image.len, &image.digest).await?;
         ACCEPTED.fetch_add(1, Ordering::Relaxed);
+        self.answered = true;
         let accepted = Accepted {
             written: self.written,
             image_len: image.len,
@@ -749,7 +755,9 @@ impl Upload {
 
     /// Say why an upload ended badly, with the same two lines, so a bench run
     /// has the timing for a refusal as well as for a success.
-    pub async fn failed(self, why: FirmwareError) {
+    pub async fn failed(mut self, why: FirmwareError) {
+        self.answered = true;
+        crate::trace::note(format_args!("refused {:?} at {}", why, self.written));
         warn!("ota: upload refused: {:?}", why);
         self.report("refused").await;
     }
@@ -757,6 +765,10 @@ impl Upload {
 
 impl Drop for Upload {
     fn drop(&mut self) {
+        crate::trace::note(format_args!("drop answered={} at {}", self.answered, self.written));
+        if !self.answered {
+            warn!("ota: upload dropped unanswered at {} of {:?} bytes", self.written, self.expected);
+        }
         crate::panic::set_in_upload(false);
         crate::DITHER_ON.store(self.dither_was, Ordering::Relaxed);
         PERCENT.store(NO_PERCENT, Ordering::Relaxed);

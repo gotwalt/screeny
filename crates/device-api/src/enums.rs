@@ -32,11 +32,13 @@ pub enum IdleMode {
     Dim,
     /// Black.
     Black,
+    /// The device's own clock.
+    Clock,
 }
 
 impl IdleMode {
     /// The longest serialised form, quotes included.
-    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("status", "hold_forever", "dim", "black");
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("status", "hold_forever", "dim", "black", "clock");
 }
 
 impl From<ProtoIdleMode> for IdleMode {
@@ -46,6 +48,7 @@ impl From<ProtoIdleMode> for IdleMode {
             ProtoIdleMode::HoldForever => IdleMode::HoldForever,
             ProtoIdleMode::Dim => IdleMode::Dim,
             ProtoIdleMode::Black => IdleMode::Black,
+            ProtoIdleMode::Clock => IdleMode::Clock,
         }
     }
 }
@@ -57,6 +60,7 @@ impl From<IdleMode> for ProtoIdleMode {
             IdleMode::HoldForever => ProtoIdleMode::HoldForever,
             IdleMode::Dim => ProtoIdleMode::Dim,
             IdleMode::Black => ProtoIdleMode::Black,
+            IdleMode::Clock => ProtoIdleMode::Clock,
         }
     }
 }

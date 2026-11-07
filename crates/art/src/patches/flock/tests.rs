@@ -307,6 +307,68 @@ fn reference() -> (Tuning, usize) {
 // The flight
 // ----------------------------------------------------------------------
 
+/// The strongest any of `series` ever resembles itself, over every lag from
+/// half a minute to five: `(r, lag)`.
+fn self_similarity(series: &[&[f32]]) -> (f32, usize) {
+    let mut worst = (0.0_f32, 0usize);
+    for s in series {
+        for lag in 30..300 {
+            let r = correlation(s, lag).abs();
+            if r > worst.0 {
+                worst = (r, lag);
+            }
+        }
+    }
+    worst
+}
+
+/// How much alike a flight's motion is to itself before anyone would call it a
+/// loop. See [`the_flight_does_not_repeat`] for where the number comes from.
+const LOOP_R: f32 = 0.5;
+
+/// A long flight must not fall into a loop.
+///
+/// **Thirty minutes, on purpose.** This was asked of the ten-minute flights
+/// until 2026-11-07, at r < 0.6, and it could not tell a loop from luck. Drift
+/// is smooth, so at a five-minute lag ten minutes holds only a dozen or so
+/// independent samples, and the figure is the worst of 270 lags on three
+/// series. Over 24 seeds it read a median of 0.53, and 5 seeds were over the
+/// line at lags scattered from 37 to 298 s; an hour of the failing seed read
+/// r = -0.04 at the lag it had failed on. A real loop does not fade with more
+/// flight, and that is the difference this test relies on: at 30 minutes twelve
+/// seeds read at most 0.45, and at 60 minutes six read at most 0.33.
+#[test]
+fn the_flight_does_not_repeat() {
+    let (tune, birds) = reference();
+    for seed in [11, 29, 404] {
+        let run = fly(seed, 1800.0, &tune, birds);
+        let vx = changes(&run.centroid.iter().map(|c| c[0]).collect::<Vec<_>>(), false);
+        let vz = changes(&run.centroid.iter().map(|c| c[2]).collect::<Vec<_>>(), false);
+        let turn = changes(&run.course, true);
+        let (r, lag) = self_similarity(&[&vx, &vz, &turn]);
+        assert!(r < LOOP_R, "seed {seed}: the flight repeats itself, r={r:.2} at {lag} s");
+    }
+}
+
+/// The test above is only worth having if a loop would fail it. A flight that
+/// comes round every three minutes, with a little noise on it, must.
+#[test]
+fn a_flight_that_loops_is_caught() {
+    let mut rng = crate::rng::Rng::new(7);
+    // Smoothed noise, so it looks like drift rather than static.
+    let mut level = 0.0;
+    let one_lap: Vec<f32> = (0..180)
+        .map(|_| {
+            level = 0.9 * level + rng.range(-1.0, 1.0);
+            level
+        })
+        .collect();
+    let looping: Vec<f32> = (0..1800).map(|t| one_lap[t % 180] + 0.3 * rng.range(-1.0, 1.0)).collect();
+    let (r, lag) = self_similarity(&[&looping]);
+    assert!(r >= LOOP_R, "a three-minute loop read only r={r:.2}");
+    assert_eq!(lag % 180, 0, "it found the loop at the wrong lag: {lag} s");
+}
+
 /// The one long run. Ten simulated minutes at the reference tuning (see
 /// [`reference`]), asked everything.
 #[test]
@@ -394,22 +456,6 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
         percentile(&run.tilt, 0.95),
     );
 
-    // Periodicity: the strongest the flock's motion ever resembles itself
-    // again, over every lag from half a minute to five.
-    let vx = changes(&run.centroid.iter().map(|c| c[0]).collect::<Vec<_>>(), false);
-    let vz = changes(&run.centroid.iter().map(|c| c[2]).collect::<Vec<_>>(), false);
-    let turn = changes(&run.course, true);
-    let mut worst = (0.0_f32, 0usize, "");
-    for (name, series) in [("drift x", &vx), ("drift z", &vz), ("turn rate", &turn)] {
-        for lag in 30..300 {
-            let r = correlation(series, lag).abs();
-            if r > worst.0 {
-                worst = (r, lag, name);
-            }
-        }
-    }
-    eprintln!("  loop      strongest self-similarity r={:.2} at {} s ({})", worst.0, worst.1, worst.2);
-
     assert!(in_min >= 15, "the flock left the frame: only {in_min} birds in shot at worst");
     assert!(in_med >= 35, "median {in_med} birds in frame is not a flock");
     assert!(
@@ -425,7 +471,6 @@ fn one_flight(seed: u64, tune: &Tuning, birds: usize) {
     assert!(percentile(&run.yaw, 0.95) <= 22.0, "the view yaws at {:.1} deg/s", percentile(&run.yaw, 0.95));
     assert!(percentile(&run.yaw, 1.0) <= 26.0, "the view swung at {:.1} deg/s", percentile(&run.yaw, 1.0));
     assert!(percentile(&run.roll, 0.95) <= 6.0, "the view rolls at {:.2} deg/s", percentile(&run.roll, 0.95));
-    assert!(worst.0 < 0.6, "the flight repeats itself: r={:.2} at {} s", worst.0, worst.1);
 
     // Card 177's three, in the same order the author said them.
     assert!(

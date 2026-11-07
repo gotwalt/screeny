@@ -51,7 +51,6 @@ const PARAMS: &[ParamSpec] = &[
     param("dwell", "Seconds in a mood", 8.0, 120.0, 1.0, 32.0),
     param("tell", "Tell the time every (s, 0 = never)", 0.0, 600.0, 5.0, 60.0),
     param("hold", "Seconds the time is held", 2.0, 30.0, 1.0, 8.0),
-    param("offset", "Time offset (minutes)", 0.0, 1439.0, 1.0, 0.0),
     param("speed", "Hand speed (deg/s)", 20.0, 240.0, 1.0, 90.0),
     param("weight", "Hand weight (0 = auto)", 0.0, 4.0, 0.05, 0.0),
     param("tip", "Hand tip (1 = blunt)", 0.2, 1.0, 0.05, 0.45),
@@ -206,7 +205,7 @@ impl Flow {
         // Telling the time: for a few seconds around each mark, every dial is
         // drawn to the hour and minute, as an analog clock.
         let every = ctx.get("tell") as f64;
-        let clock = ctx.now + ctx.get("offset") as f64 * 60.0;
+        let clock = ctx.now;
         let since = clock.rem_euclid(every.max(1.0));
         let telling = every > 0.0 && (since < ctx.get("hold") as f64 || since > every - GATHER);
         let pose = telling.then(|| {

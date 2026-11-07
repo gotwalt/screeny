@@ -42,6 +42,7 @@ fn debug_of_the_whole_settings_does_not_contain_the_psk() {
         brightness: 96,
         idle_mode: IdleMode::Dim,
         colour_order: screeny_settings::ColourOrder::Published,
+        ..Settings::default()
     };
     let text = format!("{s:?}");
     assert!(!text.contains("password9"), "{text}");
@@ -173,8 +174,8 @@ fn there_is_no_wifi_field_to_debounce() {
     // Not an assertion so much as a note that survives a refactor: if someone
     // adds `Field::Wifi`, this stops compiling and they have to read
     // `Store::save_wifi`'s doc comment about writing before disconnecting.
-    assert_eq!(Field::ALL.len(), 3);
-    assert_eq!(Field::ALL, [Field::Name, Field::Brightness, Field::IdleMode]);
+    assert_eq!(Field::ALL.len(), 4);
+    assert_eq!(Field::ALL, [Field::Name, Field::Brightness, Field::IdleMode, Field::Clock]);
 }
 
 #[test]

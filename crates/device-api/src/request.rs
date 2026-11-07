@@ -212,6 +212,109 @@ impl Mutating for IdentifyRequest {
     }
 }
 
+/// How the on-device clock looks and moves: the Studio patch's parameters, in
+/// the integers `screeny-settings` keeps them in (see `ClockConfig` there for
+/// the units). Two structs, one per crate, for the reason `IdleMode` has two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockLook {
+    /// Hour hand hue, degrees.
+    pub hue: u16,
+    /// Hour hand chroma, thousandths.
+    pub chroma: u16,
+    /// Minute hand hue, degrees.
+    pub hue2: u16,
+    /// Minute hand chroma, thousandths.
+    pub chroma2: u16,
+    /// Hand lightness, percent.
+    pub light: u16,
+    /// Hand weight, hundredths of an LED.
+    pub weight: u16,
+    /// Hand tip while dancing, percent of the weight.
+    pub tip: u16,
+    /// Dial rings, percent.
+    pub dials: u16,
+    /// Hand speed, degrees per second.
+    pub speed: u16,
+    /// Seconds the time is held before the hands may drift.
+    pub still: u16,
+    /// `0` varies, then each dance by number, then always composed.
+    pub dance: u8,
+    /// Which treatment the resting dials get.
+    pub rest: u8,
+    /// 24-hour digits.
+    pub hours24: bool,
+    /// A resting dial's dark ramp.
+    pub dark: u8,
+    /// Tenths of a second the resting dials take to dim.
+    pub fade: u16,
+    /// Reduce motion.
+    pub calm: bool,
+    /// Under reduce motion, the fastest a hand may turn, degrees per second.
+    pub limit: u16,
+}
+
+impl ClockLook {
+    /// An upper bound on the serialised length.
+    pub const MAX_JSON_LEN: usize = 1
+        + field("hue", MAX_U16_LEN)
+        + field("chroma", MAX_U16_LEN)
+        + field("hue2", MAX_U16_LEN)
+        + field("chroma2", MAX_U16_LEN)
+        + field("light", MAX_U16_LEN)
+        + field("weight", MAX_U16_LEN)
+        + field("tip", MAX_U16_LEN)
+        + field("dials", MAX_U16_LEN)
+        + field("speed", MAX_U16_LEN)
+        + field("still", MAX_U16_LEN)
+        + field("dance", MAX_U8_LEN)
+        + field("rest", MAX_U8_LEN)
+        + field("hours24", 5)
+        + field("dark", MAX_U8_LEN)
+        + field("fade", MAX_U16_LEN)
+        + field("calm", 5)
+        + field("limit", MAX_U16_LEN);
+}
+
+const MAX_U16_LEN: usize = 5;
+
+/// `POST /api/v1/clock`: change any of the clock's settings, at once. The look
+/// reaches the panel on the next frame and flash a few quiet seconds later, so
+/// a slider can send this as often as it likes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ClockRequest {
+    /// The new look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<ClockLook>,
+    /// Compose a new dance and perform it now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dance_now: Option<bool>,
+    /// Perform the last dance again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play_again: Option<bool>,
+    /// Decision 3; parsed and ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<PinText>,
+    /// Decision 3; parsed and ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counter: Option<u32>,
+}
+
+impl ClockRequest {
+    /// An upper bound on the serialised length.
+    pub const MAX_JSON_LEN: usize = 1
+        + field("look", ClockLook::MAX_JSON_LEN)
+        + field("dance_now", 5)
+        + field("play_again", 5)
+        + field("pin", 2 + MAX_PIN_LEN * ESCAPE_MAX)
+        + field("counter", MAX_U32_LEN);
+}
+
+impl Mutating for ClockRequest {
+    fn auth(&self) -> Auth<'_> {
+        Auth { pin: self.pin.as_deref(), counter: self.counter }
+    }
+}
+
 /// `"key":value` plus the comma or brace in front of it; see
 /// [`crate::reply`]'s copy.
 const fn field(key: &str, value_max: usize) -> usize {

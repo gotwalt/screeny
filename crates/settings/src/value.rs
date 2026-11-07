@@ -279,6 +279,8 @@ pub struct Settings {
     /// The panel's colour-line wiring. Read once at boot to pick the pins, so
     /// a change takes effect on the next reboot.
     pub colour_order: ColourOrder,
+    /// How the on-device clock looks and moves.
+    pub clock: ClockConfig,
 }
 
 impl Default for Settings {
@@ -289,6 +291,173 @@ impl Default for Settings {
             brightness: DEFAULT_BRIGHTNESS,
             idle_mode: IdleMode::Status,
             colour_order: ColourOrder::Rotated,
+            clock: ClockConfig::default(),
         }
+    }
+}
+
+/// How the on-device clock looks and moves: the Studio patch's parameters, as
+/// integers so they compare and store exactly. Every field is clamped on the
+/// way in by [`ClockConfig::sanitised`], so a bad write cannot wedge the panel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ClockConfig {
+    /// Hour hand hue, degrees.
+    pub hue: u16,
+    /// Hour hand chroma, thousandths.
+    pub chroma: u16,
+    /// Minute hand hue, degrees.
+    pub hue2: u16,
+    /// Minute hand chroma, thousandths.
+    pub chroma2: u16,
+    /// Hand lightness, percent.
+    pub light: u16,
+    /// Hand weight, hundredths of an LED.
+    pub weight: u16,
+    /// Hand tip while dancing, percent of the weight.
+    pub tip: u16,
+    /// Dial rings, percent.
+    pub dials: u16,
+    /// Hand speed, degrees per second.
+    pub speed: u16,
+    /// Seconds the time is held before the hands may drift.
+    pub still: u16,
+    /// `0` varies, then each dance by number, then always composed.
+    pub dance: u8,
+    /// Which treatment the resting dials get.
+    pub rest: u8,
+    /// 24-hour digits.
+    pub hours24: bool,
+    /// A resting dial's dark ramp.
+    pub dark: u8,
+    /// Tenths of a second the resting dials take to dim.
+    pub fade: u16,
+    /// Reduce motion.
+    pub calm: bool,
+    /// Under reduce motion, the fastest a hand may turn, degrees per second.
+    pub limit: u16,
+}
+
+impl Default for ClockConfig {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl ClockConfig {
+    /// The owner's "Gold and Blue" (2026-10-28).
+    pub const DEFAULT: Self = Self {
+            hue: 74,
+            chroma: 65,
+            hue2: 240,
+            chroma2: 65,
+            light: 67,
+            weight: 155,
+            tip: 20,
+            dials: 0,
+            speed: 100,
+            still: 5,
+            dance: 0,
+            rest: 3,
+            hours24: true,
+            dark: 0,
+            fade: 15,
+            calm: false,
+            limit: 60,
+    };
+
+    /// The stored size.
+    pub const BYTES: usize = 29;
+    /// The look and motion every stored form starts with. A form of any other
+    /// length keeps those, and the rest of it comes from [`ClockConfig::DEFAULT`].
+    const BYTES_COMMON: usize = 23;
+    /// The longest form that loads. Bigger than [`ClockConfig::BYTES`] on purpose:
+    /// a store written by a build with other settings must still reach
+    /// [`ClockConfig::from_bytes`], not fail on the way out of flash.
+    pub const BYTES_MAX: usize = 64;
+
+    /// The same settings, each within the range the Studio's patch allows.
+    #[must_use]
+    pub fn sanitised(self) -> Self {
+        Self {
+            hue: self.hue.min(360),
+            chroma: self.chroma.min(200),
+            hue2: self.hue2.min(360),
+            chroma2: self.chroma2.min(200),
+            light: self.light.clamp(40, 95),
+            weight: self.weight.clamp(100, 240),
+            tip: self.tip.clamp(20, 100),
+            dials: self.dials.min(100),
+            speed: self.speed.clamp(30, 360),
+            still: self.still.clamp(3, 60),
+            dance: self.dance,
+            rest: self.rest,
+            hours24: self.hours24,
+            dark: self.dark,
+            fade: self.fade.clamp(2, 50),
+            calm: self.calm,
+            limit: self.limit.clamp(20, 120),
+        }
+    }
+
+    /// The stored form: little-endian, in field order.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; Self::BYTES] {
+        let mut out = [0u8; Self::BYTES];
+        let words = [
+            self.hue,
+            self.chroma,
+            self.hue2,
+            self.chroma2,
+            self.light,
+            self.weight,
+            self.tip,
+            self.dials,
+            self.speed,
+            self.still,
+        ];
+        for (chunk, w) in out.chunks_exact_mut(2).zip(words) {
+            chunk.copy_from_slice(&w.to_le_bytes());
+        }
+        out[20] = self.dance;
+        out[21] = self.rest;
+        out[22] = u8::from(self.hours24);
+        out[23] = self.dark;
+        out[24..26].copy_from_slice(&self.fade.to_le_bytes());
+        out[26] = u8::from(self.calm);
+        out[27..29].copy_from_slice(&self.limit.to_le_bytes());
+        out
+    }
+
+    /// Read the stored form back; `None` when it is not this shape.
+    #[must_use]
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if !(Self::BYTES_COMMON..=Self::BYTES_MAX).contains(&b.len()) {
+            return None;
+        }
+        let d = Self::DEFAULT;
+        let tail = (b.len() == Self::BYTES).then(|| &b[Self::BYTES_COMMON..]);
+        let w = |i: usize| u16::from_le_bytes([b[i * 2], b[i * 2 + 1]]);
+        Some(
+            Self {
+                hue: w(0),
+                chroma: w(1),
+                hue2: w(2),
+                chroma2: w(3),
+                light: w(4),
+                weight: w(5),
+                tip: w(6),
+                dials: w(7),
+                speed: w(8),
+                still: w(9),
+                dance: b[20],
+                rest: b[21],
+                hours24: b[22] != 0,
+                dark: tail.map_or(d.dark, |t| t[0]),
+                fade: tail.map_or(d.fade, |t| u16::from_le_bytes([t[1], t[2]])),
+                calm: tail.is_some_and(|t| t[3] != 0),
+                limit: tail.map_or(d.limit, |t| u16::from_le_bytes([t[4], t[5]])),
+            }
+            .sanitised(),
+        )
     }
 }

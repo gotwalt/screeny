@@ -9,6 +9,7 @@
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
+use screeny_device_api::reply::ClockReply;
 use screeny_device_api::reply::{
     AcceptedReply, FirmwareReply, NetworksReply, PanicReply, SettingsReply, StatusReply, TelemetryReply, WifiReply,
     MAX_NETWORKS,
@@ -531,6 +532,17 @@ pub fn all() -> Vec<Rule> {
             flags: 0,
             run: firmware_stage_only,
         },
+        // --- GET and POST /api/v1/clock ----------------------------------
+        Rule {
+            n: 46,
+            section: "clock",
+            route: route::CLOCK,
+            name: "the clock's look reads back, and posting it again changes nothing",
+            cite: "reply::ClockReply; request::ClockRequest",
+            secs: 0.4,
+            flags: 0,
+            run: clock_round_trip,
+        },
     ]
 }
 
@@ -869,6 +881,21 @@ fn wifi_form_without_ssid(cx: &mut Ctx) -> Result<Outcome, String> {
 // ---------------------------------------------------------------------------
 // POST /api/v1/settings
 // ---------------------------------------------------------------------------
+
+fn clock_round_trip(cx: &mut Ctx) -> Result<Outcome, String> {
+    let res = cx.get(route::CLOCK)?;
+    if res.status != 200 {
+        return verdict(false, format!("HTTP {}: {}", res.status, res.snippet(80)));
+    }
+    let before: ClockReply = res.parse()?;
+    let body = format!("{{\"look\":{}}}", serde_json::to_string(&before.look).map_err(|e| e.to_string())?);
+    let res = cx.post_json(route::CLOCK, &body)?;
+    if res.status != 200 {
+        return verdict(false, format!("HTTP {}: {}", res.status, res.snippet(80)));
+    }
+    let after: ClockReply = res.parse()?;
+    verdict(after.look == before.look, format!("{:?} -> {:?}", before.look, after.look))
+}
 
 fn settings_empty(cx: &mut Ctx) -> Result<Outcome, String> {
     let res = cx.post_json(route::SETTINGS, "{}")?;
