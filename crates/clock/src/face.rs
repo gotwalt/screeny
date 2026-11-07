@@ -129,13 +129,38 @@ pub fn direction(c: u8) -> f32 {
     }
 }
 
-/// Hand angles for all 24 clocks showing `hh:mm`. Four digits, leading zeros,
-/// no separator: `09:05` is `0905`. That is the original's format and the
-/// owner's decision (card 160); a colon is not this patch's to add.
+/// A digit position with nothing in it: every dial at rest.
+pub const BLANK: u32 = 10;
+const BLANK_CELLS: [&str; 6] = ["NN"; 6];
+
+fn cells(digit: u32) -> &'static [&'static str; 6] {
+    if digit == BLANK {
+        &BLANK_CELLS
+    } else {
+        &DIGITS[digit as usize % 10]
+    }
+}
+
+/// The four digits `hh:mm` is drawn with. No separator: `09:05` is `0905`, the
+/// original's format and the owner's decision (card 160); a colon is not this
+/// patch's to add. `blank_lead` leaves a leading zero out, so that in 12-hour
+/// time 9:05 is a blank and `905` (the owner, 2026-11-07); a 24-hour clock
+/// keeps its zero.
+pub fn shown(hh: u32, mm: u32, blank_lead: bool) -> [u32; 4] {
+    let lead = if blank_lead && hh < 10 { BLANK } else { hh / 10 };
+    [lead, hh % 10, mm / 10, mm % 10]
+}
+
+/// Hand angles for all 24 clocks showing `hh:mm`, leading zero kept.
 pub fn pose(hh: u32, mm: u32, rest: Rest) -> [Hands; CLOCKS] {
+    pose_of(shown(hh, mm, false), rest)
+}
+
+/// Hand angles for all 24 clocks showing four digits ([`BLANK`] for none).
+pub fn pose_of(digits: [u32; 4], rest: Rest) -> [Hands; CLOCKS] {
     let mut out = [[REST; 2]; CLOCKS];
-    for (d, digit) in [hh / 10, hh % 10, mm / 10, mm % 10].into_iter().enumerate() {
-        for (k, cell) in DIGITS[digit as usize % 10].iter().enumerate() {
+    for (d, digit) in digits.into_iter().enumerate() {
+        for (k, cell) in cells(digit).iter().enumerate() {
             let (row, col) = (k / 2, d * 2 + k % 2);
             let (b, at_rest) = (cell.as_bytes(), rest.hands(row));
             out[row * COLS + col] = [0, 1].map(|h| match b[h] {
@@ -147,12 +172,17 @@ pub fn pose(hh: u32, mm: u32, rest: Rest) -> [Hands; CLOCKS] {
     out
 }
 
-/// Which of the 24 dials are not part of a digit at `hh:mm`, and so are drawn
-/// as being at rest.
+/// Which of the 24 dials are not part of a digit at `hh:mm`, leading zero
+/// kept, and so are drawn as being at rest.
 pub fn resting(hh: u32, mm: u32) -> [bool; CLOCKS] {
+    resting_of(shown(hh, mm, false))
+}
+
+/// [`resting`] for four digits ([`BLANK`] for none).
+pub fn resting_of(digits: [u32; 4]) -> [bool; CLOCKS] {
     let mut out = [false; CLOCKS];
-    for (d, digit) in [hh / 10, hh % 10, mm / 10, mm % 10].into_iter().enumerate() {
-        for (k, cell) in DIGITS[digit as usize % 10].iter().enumerate() {
+    for (d, digit) in digits.into_iter().enumerate() {
+        for (k, cell) in cells(digit).iter().enumerate() {
             let (row, col) = (k / 2, d * 2 + k % 2);
             out[row * COLS + col] = cell.bytes().all(|b| b == b'N');
         }

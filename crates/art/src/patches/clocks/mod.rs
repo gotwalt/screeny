@@ -460,10 +460,12 @@ mod tests {
         }
     }
 
-    /// The format, pinned. Four digits, leading zeros kept, no separator of any
-    /// kind: `09:05` is `0905` and the 24 dials are four numerals and nothing
-    /// else. This is the original's format and the author's decision (card 160);
-    /// the patch is not to grow a colon.
+    /// The format, pinned. Four digits, no separator of any kind: `09:05` is
+    /// `0905` and the 24 dials are four numerals and nothing else. This is the
+    /// original's format and the author's decision (card 160); the patch is not
+    /// to grow a colon. One exception, the owner's (2026-11-07): in 12-hour
+    /// time an hour before 10 drops its leading zero, and those six dials rest
+    /// (`crates/clock`'s `a_twelve_hour_clock_drops_its_leading_zero`).
     #[test]
     fn the_time_is_four_digits_with_no_punctuation() {
         for &rest in RESTS {
@@ -474,11 +476,14 @@ mod tests {
             // belongs to one of the four numerals.
             let idle = resting(21, 12);
             assert_eq!(idle.len(), CLOCKS);
-            // 12-hour is the same four digits: 13:11 is `0111`, 00:00 is `1200`.
+            // 12-hour reads the hour the same way - 13:11 is hour 1, 00:00 is
+            // 12 - and draws an hour before 10 without its leading zero.
             assert_eq!(Engine::digits(13 * 60 + 11, false), (1, 11));
             assert_eq!(Engine::digits(0, false), (12, 0));
             assert_eq!(Engine::digits(0, true), (0, 0));
-            assert_eq!(read_back(&Engine::target(13 * 60 + 11, false, rest), rest), [0, 1, 1, 1]);
+            assert_eq!(Engine::shown(13 * 60 + 11, false), [screeny_clock::face::BLANK, 1, 1, 1]);
+            assert_eq!(read_back(&Engine::target(13 * 60 + 11, true, rest), rest), [1, 3, 1, 1]);
+            assert_eq!(read_back(&Engine::target(22 * 60 + 11, false, rest), rest), [1, 0, 1, 1]);
         }
     }
 

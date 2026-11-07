@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use crate::ambient;
 use crate::dance::{self, Motor};
-use crate::face::{pose, resting, Hands, Rest, CELL, CLOCKS, COLS, DEFAULT_REST, REST, RESTS, ROWS};
+use crate::face::{pose_of, resting_of, shown, Hands, Rest, CELL, CLOCKS, COLS, DEFAULT_REST, REST, RESTS, ROWS};
 #[allow(unused_imports)]
 use crate::math::{F32Ext, F64Ext};
 use crate::rng::Rng;
@@ -191,9 +191,15 @@ impl Engine {
         (if hours24 { h } else { (h + 11) % 12 + 1 }, m)
     }
 
-    pub fn target(minute: i64, hours24: bool, rest: Rest) -> [Hands; CLOCKS] {
+    /// The four digits a minute-of-day is drawn with: in 12-hour time an hour
+    /// before 10 has no leading zero, and its dials rest like any unused one.
+    pub fn shown(minute: i64, hours24: bool) -> [u32; 4] {
         let (h, m) = Self::digits(minute, hours24);
-        pose(h, m, rest)
+        shown(h, m, !hours24)
+    }
+
+    pub fn target(minute: i64, hours24: bool, rest: Rest) -> [Hands; CLOCKS] {
+        pose_of(Self::shown(minute, hours24), rest)
     }
 
     /// How far each dial has receded towards its rest, 0 to 1: dials not part
@@ -289,8 +295,7 @@ impl Engine {
         self.settled = if holding { (self.settled + by).min(1.0) } else { (self.settled - by).max(0.0) };
 
         let rests = self.minute.filter(|_| holding).map_or([false; CLOCKS], |m| {
-            let (h, mm) = Self::digits(m, knobs.hours24);
-            resting(h, mm)
+            resting_of(Self::shown(m, knobs.hours24))
         });
         for (dim, rest) in self.dims.iter_mut().zip(rests) {
             *dim = if rest { (*dim + by).min(1.0) } else { (*dim - by).max(0.0) };
@@ -529,5 +534,35 @@ mod tests {
         run(&mut e, &knobs, &mut t, 0.0, 0.2);
         assert!(matches!(e.doing(), Doing::Dancing { .. }), "{:?}", e.doing());
         assert!(e.settled() < 1.0);
+    }
+}
+
+#[cfg(test)]
+mod twelve_hour {
+    use super::*;
+
+    /// 9:05 in 12-hour time has no leading zero: its six dials are at rest, and
+    /// fade once the time is held. 24-hour time keeps its zero, and so does 10:05.
+    #[test]
+    fn a_twelve_hour_clock_drops_its_leading_zero() {
+        let nine = 9 * 60 + 5;
+        assert_eq!(Engine::shown(nine, false), [crate::face::BLANK, 9, 0, 5]);
+        assert_eq!(Engine::shown(nine, true), [0, 9, 0, 5]);
+        assert_eq!(Engine::shown(10 * 60 + 5, false), [1, 0, 0, 5]);
+        assert_eq!(Engine::shown(21 * 60 + 5, false), [crate::face::BLANK, 9, 0, 5]);
+        let resting = resting_of(Engine::shown(nine, false));
+        for row in 0..ROWS {
+            for col in 0..2 {
+                assert!(resting[row * COLS + col], "dial ({col}, {row}) of the blank is not at rest");
+            }
+        }
+        let knobs = Knobs { hours24: false, ..Knobs::default() };
+        let (mut e, mut t) = (Engine::new(9), 0.0);
+        while t < 63.0 {
+            t += 0.05;
+            e.step(Tick { t, dt: 0.05, now: nine as f64 * 60.0 + t }, &knobs);
+        }
+        assert_eq!(e.dims()[0], 1.0, "the blank's top-left dial has not faded");
+        assert_eq!(e.dims()[2], 0.0, "the 9 has faded");
     }
 }
