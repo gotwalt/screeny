@@ -243,6 +243,12 @@ pub struct ClockLook {
     pub rest: u8,
     /// 24-hour digits.
     pub hours24: bool,
+    /// Seconds per displayed minute; 60 is a real clock.
+    pub pace: u16,
+    /// Minutes added to the time.
+    pub offset: u16,
+    /// A resting dial's dark ramp.
+    pub dark: u8,
 }
 
 impl ClockLook {
@@ -260,7 +266,10 @@ impl ClockLook {
         + field("still", MAX_U16_LEN)
         + field("dance", MAX_U8_LEN)
         + field("rest", MAX_U8_LEN)
-        + field("hours24", 5);
+        + field("hours24", 5)
+        + field("pace", MAX_U16_LEN)
+        + field("offset", MAX_U16_LEN)
+        + field("dark", MAX_U8_LEN);
 }
 
 const MAX_U16_LEN: usize = 5;
@@ -276,6 +285,9 @@ pub struct ClockRequest {
     /// Compose a new dance and perform it now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dance_now: Option<bool>,
+    /// Perform the last dance again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub play_again: Option<bool>,
     /// Decision 3; parsed and ignored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<PinText>,
@@ -289,6 +301,7 @@ impl ClockRequest {
     pub const MAX_JSON_LEN: usize = 1
         + field("look", ClockLook::MAX_JSON_LEN)
         + field("dance_now", 5)
+        + field("play_again", 5)
         + field("pin", 2 + MAX_PIN_LEN * ESCAPE_MAX)
         + field("counter", MAX_U32_LEN);
 }

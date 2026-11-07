@@ -10,6 +10,12 @@
 //! Light adds linearly, so the two hands are composed in linear light and only
 //! then encoded to sRGB, through a table - this runs per lit pixel.
 //!
+//! That table also does what the Studio's `AlignedDark` output does to a frame
+//! before sending it: a dark channel lands on a whole panel level rather than
+//! between two. Between two, the panel's temporal dither alternates them and
+//! the eye can see that up close (brief 2.1.1). Higher up it cannot, and the
+//! dither is what makes the ramp smooth, so it is left alone there.
+//!
 //! Only the 8 x 8 cell of each dial is visited, and a hand's body needs no
 //! square root at all (the perpendicular distance *is* the distance); only the
 //! pixels around its two round ends pay for one.
@@ -17,7 +23,7 @@
 use alloc::boxed::Box;
 use alloc::vec;
 
-use crate::face::{Hands, Rest, CELL, CLOCKS, COLS, ROWS};
+use crate::face::{dark_levels, Hands, Rest, CELL, CLOCKS, COLS, ROWS};
 #[allow(unused_imports)]
 use crate::math::F32Ext;
 
@@ -54,6 +60,9 @@ pub struct Look {
     pub tints: [Tint; 2],
     /// Brightness of a ring round each dial, 0 for none.
     pub ring: f32,
+    /// A resting dial's held ink: `0` is its own colour scaled, anything else a
+    /// [`crate::face::DARK_CHOICES`] ramp.
+    pub dark: usize,
 }
 
 impl Default for Look {
@@ -69,9 +78,20 @@ impl Default for Look {
                 Tint { hue: 240.0, chroma: 0.065, light },
             ],
             ring: 0.0,
+            dark: 0,
         }
     }
 }
+
+/// The panel's duty levels, as a share of full scale.
+const LEVELS: f32 = 63.0;
+/// Below this level a channel is steadied onto a whole level: the Studio's
+/// `DARK_ALIGN_LEVEL`, and `crates/art` checks the two agree.
+pub const DARK_ALIGN_LEVEL: usize = 16;
+/// The sRGB code that lands exactly on each level below [`DARK_ALIGN_LEVEL`],
+/// so the panel's dither has nothing to do. `crates/art` checks this against
+/// `screeny_panel::aligned_levels`, which is host-only.
+pub const LEVEL_CODES: [u8; DARK_ALIGN_LEVEL] = [0, 34, 50, 62, 71, 80, 87, 94, 100, 106, 111, 116, 121, 126, 130, 134];
 
 /// Entries in the linear -> sRGB table. 1024 steps of full scale: a hand's ink
 /// sits around a third of that, so the faintest resting dial still has dozens.
@@ -88,7 +108,7 @@ impl Raster {
     pub fn new(look: Look) -> Self {
         let mut lut = vec![0u8; LUT].into_boxed_slice();
         for (i, v) in lut.iter_mut().enumerate() {
-            *v = (linear_to_srgb(i as f32 / (LUT - 1) as f32) * 255.0 + 0.5) as u8;
+            *v = encode(i as f32 / (LUT - 1) as f32);
         }
         Raster { look, inks: look.tints.map(Tint::ink), lut }
     }
@@ -117,20 +137,31 @@ impl Raster {
         let tip = (self.look.tip + (1.0 - self.look.tip) * settled).clamp(0.0, 1.0);
         let top = (H - ROWS * CELL as usize) / 2;
         let reach_full = CELL * 0.5 - half + half * (1.0 - tip);
+        // Only once a resting dial has truly landed: a fade is moving content,
+        // and stays on the ordinary ramp the whole way.
+        let shade = (settled >= 1.0 && rest.ink < 1.0)
+            .then(|| dark_levels(self.look.dark, rest.ink))
+            .flatten()
+            .map(|levels| levels.map(|l| srgb_to_linear(LEVEL_CODES[(l as usize).min(DARK_ALIGN_LEVEL - 1)])));
         for row in 0..ROWS {
             for col in 0..COLS {
                 let i = row * COLS + col;
                 let (ink, reach) = if idle[i] { (scale[0], scale[1]) } else { (1.0, 1.0) };
                 let len = reach_full * reach;
                 let hands = [hand(angles[i][0], len, half, tip), hand(angles[i][1], len, half, tip)];
-                self.dial(out, col * CELL as usize, top + row * CELL as usize, &hands, ink);
+                let shade = if idle[i] { shade } else { None };
+                self.dial(out, col * CELL as usize, top + row * CELL as usize, &hands, ink, shade);
             }
         }
     }
 
-    fn dial(&self, out: &mut [u8], x0: usize, y0: usize, hands: &[Hand; 2], ink: f32) {
+    fn dial(&self, out: &mut [u8], x0: usize, y0: usize, hands: &[Hand; 2], ink: f32, shade: Option<[f32; 3]>) {
         let cell = CELL as usize;
-        let (ring, inks) = (self.look.ring, &self.inks);
+        let ring = self.look.ring;
+        let (inks, ink) = match &shade {
+            Some(s) => ([*s, *s], 1.0),
+            None => (self.inks, ink),
+        };
         for y in 0..cell {
             let py = y as f32 + 0.5 - CELL * 0.5;
             for x in 0..cell {
@@ -242,6 +273,25 @@ fn oklab_to_linear(l: f32, a: f32, b: f32) -> [f32; 3] {
     ]
 }
 
+/// A linear value as the code that goes to the panel.
+fn encode(v: f32) -> u8 {
+    let level = (v * LEVELS + 0.5) as usize;
+    if level < DARK_ALIGN_LEVEL {
+        LEVEL_CODES[level]
+    } else {
+        (linear_to_srgb(v) * 255.0 + 0.5) as u8
+    }
+}
+
+fn srgb_to_linear(code: u8) -> f32 {
+    let c = code as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
 fn linear_to_srgb(v: f32) -> f32 {
     if v <= 0.003_130_8 {
         v * 12.92
@@ -307,7 +357,7 @@ mod tests {
         // rows either side of it, in the hour hand's colour and no other.
         let ink = Tint::ink(Look::default().tints[0]);
         for c in 0..3 {
-            let want = (linear_to_srgb(ink[c] * 0.775) * 255.0) as i32;
+            let want = encode(ink[c] * 0.775) as i32;
             let got = out[(7 * W + 6) * 3 + c] as i32;
             assert!((got - want).abs() <= 2, "channel {c}: {got} against {want}");
         }

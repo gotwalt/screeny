@@ -943,6 +943,9 @@ fn clock_reply() -> ClockReply {
             dance: c.dance,
             rest: c.rest,
             hours24: c.hours24,
+            pace: c.pace,
+            offset: c.offset,
+            dark: c.dark,
         },
         time: crate::clock::wall_hms().and_then(|(h, m, s)| {
             let mut t = text::TimeText::new();
@@ -970,10 +973,16 @@ fn post_clock(req: ClockRequest) -> Reply {
             dance: l.dance,
             rest: l.rest,
             hours24: l.hours24,
+            pace: l.pace,
+            offset: l.offset,
+            dark: l.dark,
         });
     }
     if req.dance_now == Some(true) {
         crate::clock::dance_now();
+    }
+    if req.play_again == Some(true) {
+        crate::clock::play_again();
     }
     Reply::ok(ApiBody::Clock(clock_reply()))
 }
@@ -1519,6 +1528,10 @@ impl core::fmt::Display for Page {
         f.write_str("],RESTS=[")?;
         for rest in screeny_clock::face::RESTS {
             write!(f, "\"{}\",", rest.name)?;
+        }
+        f.write_str("],DARKS=[")?;
+        for name in screeny_clock::face::DARK_CHOICES {
+            write!(f, "\"{name}\",")?;
         }
         f.write_str("];</script>")?;
         f.write_str(after)

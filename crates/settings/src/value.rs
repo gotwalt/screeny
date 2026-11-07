@@ -327,6 +327,12 @@ pub struct ClockConfig {
     pub rest: u8,
     /// 24-hour digits.
     pub hours24: bool,
+    /// Seconds per displayed minute; 60 is a real clock.
+    pub pace: u16,
+    /// Minutes added to the time.
+    pub offset: u16,
+    /// A resting dial's dark ramp.
+    pub dark: u8,
 }
 
 impl Default for ClockConfig {
@@ -351,10 +357,15 @@ impl ClockConfig {
             dance: 0,
             rest: 3,
             hours24: true,
+            pace: 60,
+            offset: 0,
+            dark: 0,
     };
 
     /// The stored size.
-    pub const BYTES: usize = 23;
+    pub const BYTES: usize = 28;
+    /// The stored size before `pace`, `offset` and `dark`, which still loads.
+    const BYTES_V1: usize = 23;
 
     /// The same settings, each within the range the Studio's patch allows.
     #[must_use]
@@ -373,6 +384,9 @@ impl ClockConfig {
             dance: self.dance,
             rest: self.rest,
             hours24: self.hours24,
+            pace: self.pace.clamp(5, 60),
+            offset: self.offset.min(1439),
+            dark: self.dark,
         }
     }
 
@@ -398,15 +412,20 @@ impl ClockConfig {
         out[20] = self.dance;
         out[21] = self.rest;
         out[22] = u8::from(self.hours24);
+        out[23..25].copy_from_slice(&self.pace.to_le_bytes());
+        out[25..27].copy_from_slice(&self.offset.to_le_bytes());
+        out[27] = self.dark;
         out
     }
 
     /// Read the stored form back; `None` when it is not this shape.
     #[must_use]
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() != Self::BYTES {
+        if b.len() != Self::BYTES && b.len() != Self::BYTES_V1 {
             return None;
         }
+        let d = Self::DEFAULT;
+        let newer = b.len() == Self::BYTES;
         let w = |i: usize| u16::from_le_bytes([b[i * 2], b[i * 2 + 1]]);
         Some(
             Self {
@@ -423,6 +442,9 @@ impl ClockConfig {
                 dance: b[20],
                 rest: b[21],
                 hours24: b[22] != 0,
+                pace: if newer { u16::from_le_bytes([b[23], b[24]]) } else { d.pace },
+                offset: if newer { u16::from_le_bytes([b[25], b[26]]) } else { d.offset },
+                dark: if newer { b[27] } else { d.dark },
             }
             .sanitised(),
         )

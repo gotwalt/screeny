@@ -20,7 +20,11 @@ pub(crate) mod draw;
 use crate::color::Rgb;
 use crate::frame::Frame;
 use crate::patch::{choice, param, toggle, Action, Ctx, ParamSpec, Patch, PatchDef, Playing};
-pub(crate) use screeny_clock::face::{Hands, Rest, CELL, CLOCKS, COLS, DEFAULT_REST, RESTS, ROWS};
+pub(crate) use screeny_clock::face::{
+    dark_levels, Hands, Rest, CELL, CLOCKS, COLS, DARK_CHOICES, DEFAULT_DARK, DEFAULT_REST, RESTS, ROWS,
+};
+#[cfg(test)]
+pub(crate) use screeny_clock::face::DARK_RAMPS;
 #[cfg(test)]
 pub(crate) use screeny_clock::face::{pose, resting};
 use screeny_clock::engine::{Doing, Engine, Knobs, Request, Tick};
@@ -86,41 +90,6 @@ const fn dance_choices() -> [&'static str; dance::DANCES + 2] {
     out
 }
 
-/// A resting dial's held, dark ink (card 188, brief 2.1.1). Index 0, **the
-/// default**, is `"as it was"`: the old continuous `tint.scale(ink)`,
-/// untouched - the review after this card's first cut found the default
-/// picture had moved (the warm, graded rest shade the author had already
-/// tuned became a much dimmer, nearly flat one), which the card's own rule
-/// forbids. Every other entry is a short, hand-picked list of level triples,
-/// chosen **nearest the levels the old continuous colour actually measures
-/// at** (see the Log for the numbers) rather than computed or guessed - the
-/// same look, steadied, not a different one. `screeny_art::panel::level_triple`
-/// (card 188 deliverable 2) is the snap that turns a triple into the exact
-/// colour the panel shows.
-pub(crate) const DARK_CHOICES: &[&str] = &["as it was", "aligned warm", "aligned neutral", "aligned dim"];
-pub(crate) const DEFAULT_DARK: usize = 0;
-
-/// One ramp per [`DARK_CHOICES`] entry *after* `"as it was"` - `DARK_RAMPS[0]`
-/// is `DARK_CHOICES[1]`, and so on. Each is darkest-first (ink ~0.10,
-/// `"hatched, faint"`, then ink ~0.20, the other three treatments), so
-/// [`dark_shade`] can pick further in as a treatment's `ink` asks for more
-/// light.
-pub(crate) const DARK_RAMPS: &[&[[u32; 3]]] = &[
-    // "aligned warm": the nearest aligned triple to what the old continuous
-    // ink actually measured (card 188 log, 2026-09-21 - "measured, after the
-    // author's review"): ink 0.10 -> levels (6, 5, 3); ink 0.20 -> (12, 10, 7).
-    // Keeps the hour hand's own warm hue as far as per-channel alignment
-    // allows - the graded look the author had tuned, steadied rather than
-    // replaced.
-    &[[6, 5, 3], [12, 10, 7]],
-    // "aligned neutral": the same two rungs with the channels equalised
-    // (their rounded average) - no hue, same overall brightness.
-    &[[5, 5, 5], [10, 10, 10]],
-    // "aligned dim": this card's first cut, kept as a fourth, deliberately
-    // much darker choice now that it is not the default.
-    &[[1, 1, 1], [2, 2, 2], [3, 3, 3]],
-];
-
 /// The `dark` parameter's pick. `variant == 0` (`"as it was"`, the default)
 /// is `None` - the caller keeps the old continuous `tint.scale(ink)` - and
 /// every other variant indexes [`DARK_RAMPS`], further in as `ink` calls for
@@ -128,12 +97,7 @@ pub(crate) const DARK_RAMPS: &[&[[u32; 3]]] = &[
 /// mostly picks the ramp's darkest step, but stays proportional if a future
 /// treatment asks for more.
 fn dark_shade(variant: usize, ink: f32) -> Option<Rgb> {
-    if variant == 0 {
-        return None;
-    }
-    let ramp = DARK_RAMPS[(variant - 1).min(DARK_RAMPS.len() - 1)];
-    let idx = ((ink * ramp.len() as f32).ceil() as usize).clamp(1, ramp.len()) - 1;
-    Some(crate::panel::level_triple(ramp[idx]))
+    dark_levels(variant, ink).map(crate::panel::level_triple)
 }
 
 /// The instrument and its engine are `screeny-clock`, shared with the firmware;
@@ -331,6 +295,48 @@ mod device_picture {
             let worst = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
             assert!(worst < 110, "one pixel is {worst} out");
         }
+    }
+
+    /// `screeny-panel` is host-only, so the device carries these as a table.
+    #[test]
+    fn the_devices_level_table_is_the_panels() {
+        assert_eq!(screeny_clock::raster::DARK_ALIGN_LEVEL, crate::panel::DARK_ALIGN_LEVEL as usize);
+        for (level, code) in screeny_clock::raster::LEVEL_CODES.iter().enumerate() {
+            assert_eq!(*code, crate::panel::level_code(level as u32), "level {level}");
+        }
+    }
+
+    /// How many dark pixels leave work for the panel's temporal dither: a
+    /// channel between two levels alternates them, and held dark that shows.
+    fn dark_dithering(frame: &[u8]) -> (usize, usize) {
+        let q = |v: u8| (crate::color::srgb8_to_linear(v) * 1008.0).round() as i32;
+        let dark = frame.chunks(3).filter(|p| {
+            let top = p.iter().map(|v| q(*v)).max().unwrap();
+            top > 0 && top < 16 * 8
+        });
+        let (mut all, mut dithering) = (0, 0);
+        for p in dark {
+            all += 1;
+            dithering += usize::from(p.iter().any(|v| (1..15).contains(&(q(*v) % 16))));
+        }
+        (dithering, all)
+    }
+
+    /// Why the table exists. Without it every dark pixel of a held time was
+    /// dithering, against a quarter in the Studio's frames, and the owner saw
+    /// the difference on the panel (2026-11-07).
+    #[test]
+    fn the_dark_end_is_as_steady_as_the_studios() {
+        let rest = RESTS[DEFAULT_REST];
+        let (angles, idle) = (pose(10, 42, rest), resting(10, 42));
+        let tint = |hue, chroma| draw::Tint { hue, chroma, light: 0.67 };
+        let look = Look { half: 0.775, tip: 0.2, tints: [tint(74.0, 0.065), tint(240.0, 0.065)], ring: 0.0, dark: 0 };
+        let output = crate::pipeline::Output { panel: crate::panel::Panel::AlignedDark, ..Default::default() };
+        let sent = crate::pipeline::Pipeline::new(output).process(picture(&angles, &idle, rest, 1.0, look), 1.0 / 30.0);
+        let (studio, of) = dark_dithering(&sent.wire.rgb);
+        let (ours, our_of) = dark_dithering(&device(&angles, &idle, 1.0));
+        println!("dark pixels dithering: studio {studio} of {of}, device {ours} of {our_of}");
+        assert!(ours as f32 / our_of as f32 <= studio as f32 / of as f32 + 0.1, "{ours}/{our_of} against {studio}/{of}");
     }
 
     /// `SCREENY_CLOCK_PREVIEW=<dir> cargo test -p screeny-art device_picture`

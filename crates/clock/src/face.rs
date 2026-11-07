@@ -154,3 +154,49 @@ pub fn resting(hh: u32, mm: u32) -> [bool; CLOCKS] {
     out
 }
 
+
+/// A resting dial's held, dark ink (card 188, brief 2.1.1). Index 0, **the
+/// default**, is `"as it was"`: the old continuous `tint.scale(ink)`,
+/// untouched - the review after this card's first cut found the default
+/// picture had moved (the warm, graded rest shade the author had already
+/// tuned became a much dimmer, nearly flat one), which the card's own rule
+/// forbids. Every other entry is a short, hand-picked list of level triples,
+/// chosen **nearest the levels the old continuous colour actually measures
+/// at** (see the Log for the numbers) rather than computed or guessed - the
+/// same look, steadied, not a different one. ``level_triple``
+/// (card 188 deliverable 2) is the snap that turns a triple into the exact
+/// colour the panel shows.
+pub const DARK_CHOICES: &[&str] = &["as it was", "aligned warm", "aligned neutral", "aligned dim"];
+pub const DEFAULT_DARK: usize = 0;
+
+/// One ramp per [`DARK_CHOICES`] entry *after* `"as it was"` - `DARK_RAMPS[0]`
+/// is `DARK_CHOICES[1]`, and so on. Each is darkest-first (ink ~0.10,
+/// `"hatched, faint"`, then ink ~0.20, the other three treatments), so
+/// [`dark_shade`] can pick further in as a treatment's `ink` asks for more
+/// light.
+pub const DARK_RAMPS: &[&[[u32; 3]]] = &[
+    // "aligned warm": the nearest aligned triple to what the old continuous
+    // ink actually measured (card 188 log, 2026-09-21 - "measured, after the
+    // author's review"): ink 0.10 -> levels (6, 5, 3); ink 0.20 -> (12, 10, 7).
+    // Keeps the hour hand's own warm hue as far as per-channel alignment
+    // allows - the graded look the author had tuned, steadied rather than
+    // replaced.
+    &[[6, 5, 3], [12, 10, 7]],
+    // "aligned neutral": the same two rungs with the channels equalised
+    // (their rounded average) - no hue, same overall brightness.
+    &[[5, 5, 5], [10, 10, 10]],
+    // "aligned dim": this card's first cut, kept as a fourth, deliberately
+    // much darker choice now that it is not the default.
+    &[[1, 1, 1], [2, 2, 2], [3, 3, 3]],
+];
+
+/// The `dark` parameter's pick, as a level triple: `None` for `"as it was"`,
+/// and further into the ramp as `ink` calls for more light.
+pub fn dark_levels(variant: usize, ink: f32) -> Option<[u32; 3]> {
+    if variant == 0 {
+        return None;
+    }
+    let ramp = DARK_RAMPS[(variant - 1).min(DARK_RAMPS.len() - 1)];
+    let idx = ((ink * ramp.len() as f32).ceil() as usize).clamp(1, ramp.len()) - 1;
+    Some(ramp[idx])
+}

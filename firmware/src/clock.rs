@@ -14,7 +14,7 @@
 
 use alloc::boxed::Box;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use critical_section::Mutex;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
@@ -88,8 +88,8 @@ pub fn wall_hms() -> Option<(u8, u8, u8)> {
 /// The look, and a generation bumped by every change so that [`Face`] only
 /// re-reads on a change.
 static SHARED: Mutex<RefCell<(ClockConfig, u32)>> = Mutex::new(RefCell::new((ClockConfig::DEFAULT, 0)));
-/// A dance asked for from the settings page.
-static DANCE_NOW: AtomicBool = AtomicBool::new(false);
+/// A dance asked for from the settings page: `1` a new one, `2` the last again.
+static ASKED: AtomicU8 = AtomicU8::new(0);
 
 /// Called once at boot with what flash holds.
 pub fn init(settings: &Settings) {
@@ -112,12 +112,19 @@ pub fn set_look(config: ClockConfig) {
 
 /// Compose a dance and perform it now.
 pub fn dance_now() {
-    DANCE_NOW.store(true, Ordering::Relaxed);
+    ASKED.store(1, Ordering::Relaxed);
+}
+
+/// Perform the last dance again.
+pub fn play_again() {
+    ASKED.store(2, Ordering::Relaxed);
 }
 
 /// The settings as the Studio patch's knobs.
 fn knobs_of(c: &ClockConfig) -> Knobs {
     Knobs {
+        pace: c.pace as f32,
+        offset: c.offset as f32,
         speed: c.speed as f32,
         still: c.still as f32,
         dance: (c.dance as usize).min(dance::DANCES + 1),
@@ -135,6 +142,7 @@ fn look_of(c: &ClockConfig) -> Look {
         tip: c.tip as f32 / 100.0,
         tints: [tint(c.hue, c.chroma), tint(c.hue2, c.chroma2)],
         ring: c.dials as f32 / 100.0,
+        dark: c.dark as usize,
     }
 }
 
@@ -189,8 +197,10 @@ impl Face {
             self.knobs = knobs_of(&config);
             self.generation = generation;
         }
-        if DANCE_NOW.swap(false, Ordering::Relaxed) {
-            self.engine.ask(Request::Another);
+        match ASKED.swap(0, Ordering::Relaxed) {
+            1 => self.engine.ask(Request::Another),
+            2 => self.engine.ask(Request::Again),
+            _ => {}
         }
 
         let unix = wall.div_euclid(1_000_000);

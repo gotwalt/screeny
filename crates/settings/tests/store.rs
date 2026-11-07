@@ -738,3 +738,11 @@ fn a_clock_config_out_of_range_is_pulled_back_in() {
     assert_eq!((back.light, back.speed, back.weight), (95, 30, 240));
     assert_eq!(screeny_settings::ClockConfig::from_bytes(&[0; 3]), None);
 }
+
+#[test]
+fn a_clock_config_saved_before_pace_offset_and_dark_keeps_its_look() {
+    let saved = screeny_settings::ClockConfig { hue: 12, ..Default::default() }.to_bytes();
+    let back = screeny_settings::ClockConfig::from_bytes(&saved[..23]).unwrap();
+    assert_eq!(back.hue, 12);
+    assert_eq!((back.pace, back.offset, back.dark), (60, 0, 0));
+}
