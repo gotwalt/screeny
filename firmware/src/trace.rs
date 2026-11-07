@@ -61,6 +61,7 @@ pub fn report_previous() {
             read(steps, i),
             last.wrapping_sub(read(times, i))
         );
+        note(format_args!("prev {} step {} -{}ms", NAMES[i], read(steps, i), last.wrapping_sub(read(times, i))));
     }
 }
 
