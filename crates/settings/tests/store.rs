@@ -756,7 +756,8 @@ fn a_clock_config_of_an_older_shape_keeps_its_look() {
 fn a_longer_clock_config_in_flash_loads_cleanly_and_keeps_its_look() {
     let mut saved = screeny_settings::ClockConfig { hue: 12, ..Default::default() }.to_bytes().to_vec();
     saved.extend([0, 0]);
-    let mut st = store(poke_bytes(blank_flash(), key::CLOCK, &saved));
+    let flash = poke_u8(blank_flash(), key::SCHEMA_VERSION, screeny_settings::SCHEMA_VERSION);
+    let mut st = store(poke_bytes(flash, key::CLOCK, &saved));
     let (settings, report) = load(&mut st);
     assert_eq!(report.error, None, "{report:?}");
     assert_eq!(settings.clock.hue, 12);
