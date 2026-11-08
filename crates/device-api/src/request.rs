@@ -235,8 +235,9 @@ pub struct ClockLook {
     pub dials: u16,
     /// Hand speed, degrees per second.
     pub speed: u16,
-    /// Seconds the time is held before the hands may drift.
-    pub still: u16,
+    /// What the minute is for: `0` art (the time to :10, then drifting), `1`
+    /// time (the time to :45).
+    pub mode: u8,
     /// `0` varies, then each dance by number, then always composed.
     pub dance: u8,
     /// Which treatment the resting dials get.
@@ -265,7 +266,7 @@ impl ClockLook {
         + field("tip", MAX_U16_LEN)
         + field("dials", MAX_U16_LEN)
         + field("speed", MAX_U16_LEN)
-        + field("still", MAX_U16_LEN)
+        + field("mode", MAX_U8_LEN)
         + field("dance", MAX_U8_LEN)
         + field("rest", MAX_U8_LEN)
         + field("hours24", 5)

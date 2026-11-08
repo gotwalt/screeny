@@ -27,7 +27,7 @@ pub(crate) use screeny_clock::face::{
 pub(crate) use screeny_clock::face::DARK_RAMPS;
 #[cfg(test)]
 pub(crate) use screeny_clock::face::{pose, resting};
-use screeny_clock::engine::{Doing, Engine, Knobs, Request, Tick};
+use screeny_clock::engine::{Doing, Engine, Knobs, Mode, Request, Tick};
 
 pub const DEF: PatchDef = PatchDef {
     id: "clocks-numerals",
@@ -47,7 +47,8 @@ pub const DEF: PatchDef = PatchDef {
 // lived on the panel when the studio ran on Home Assistant: a brass hour hand
 // and a slate minute hand, muted, quick to settle, thin hands, faint rests.
 const PARAMS: &[ParamSpec] = &[
-    param("still", "Seconds the time is held", 3.0, 60.0, 1.0, 5.0),
+    // Art: the time from :00 to :10, then drifting. Time: from :00 to :45.
+    choice("mode", "Mode", &Mode::NAMES, 0.0),
     param("fade", "Seconds the resting dials take to dim", 0.2, 5.0, 0.1, 1.5),
     toggle("calm", "Reduce motion", false),
     param("limit", "Reduce motion: top hand speed (deg/s)", 20.0, 120.0, 1.0, 60.0),
@@ -150,7 +151,7 @@ impl Patch for Clocks {
         self.treatment = rest.name;
         let hours24 = ctx.get("hours24") >= 0.5;
         let knobs = Knobs {
-            still: ctx.get("still"),
+            mode: Mode::of(ctx.get("mode")),
             dance: ctx.get("dance") as usize,
             speed: ctx.get("speed"),
             hours24,

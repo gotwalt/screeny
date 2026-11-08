@@ -466,10 +466,12 @@ mod tests {
     }
 
     #[test]
-    fn the_biggest_request_is_the_clock_body() {
-        // Thirteen sliders and their neighbours took it past the worst-case
-        // settings body (a name of 32 control characters, all escaped).
-        assert_eq!(MAX_REQUEST_LEN, ClockRequest::MAX_JSON_LEN);
+    fn the_clock_body_fits_the_request_buffer() {
+        // The clock body and the worst-case settings body (a name of 32
+        // control characters, all escaped) are within a few bytes of each
+        // other, and which is bigger has changed as the clock's settings did.
+        assert!(MAX_REQUEST_LEN >= ClockRequest::MAX_JSON_LEN);
+        assert!(MAX_REQUEST_LEN <= ClockRequest::MAX_JSON_LEN + 64, "{MAX_REQUEST_LEN}");
     }
 
     #[test]

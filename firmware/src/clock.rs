@@ -22,7 +22,7 @@ use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Stack};
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use log::{info, warn};
 use screeny_clock::dance;
-use screeny_clock::engine::{Engine, Knobs, Request, Tick};
+use screeny_clock::engine::{Engine, Knobs, Mode, Request, Tick};
 use screeny_clock::face::RESTS;
 use screeny_clock::raster::{Look, Raster, Tint};
 use screeny_clock::sntp;
@@ -127,7 +127,7 @@ fn knobs_of(c: &ClockConfig) -> Knobs {
         calm: c.calm,
         limit: c.limit as f32,
         speed: c.speed as f32,
-        still: c.still as f32,
+        mode: if c.mode == 0 { Mode::Art } else { Mode::Time },
         dance: (c.dance as usize).min(dance::DANCES + 1),
         hours24: c.hours24,
         rest: RESTS[(c.rest as usize).min(RESTS.len() - 1)],

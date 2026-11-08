@@ -810,9 +810,11 @@ async fn a_parameter_that_is_a_list_of_choices_carries_its_names() {
     // A switch, not a two-stop slider.
     assert_eq!(param("hours24")["switch"], true);
     // And an ordinary number is untouched.
-    let still = param("still");
-    assert_eq!(still["choices"], serde_json::json!([]));
-    assert_eq!(still["switch"], false);
+    let fade = param("fade");
+    assert_eq!(fade["choices"], serde_json::json!([]));
+    assert_eq!(fade["switch"], false);
+    // The time mode is a choice, in its own words.
+    assert_eq!(param("mode")["choices"], serde_json::json!(["art", "time"]));
 
     // The value is still an `f32` on the wire and in the state: nothing about
     // a choice changes how it is set or stored.

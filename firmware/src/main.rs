@@ -261,7 +261,7 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// when DHCP moves the address without a reboot (card 251, `src/mdns.rs`), and
 /// the panic breadcrumb keeps the message's first line and an exception's
 /// `PC`/`EXCVADDR`, as `last_panic.what` (card 371, `src/panic.rs`).
-pub const FW_VERSION: &str = "0.12.9-clock";
+pub const FW_VERSION: &str = "0.12.10-clock";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;

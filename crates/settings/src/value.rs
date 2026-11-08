@@ -319,8 +319,10 @@ pub struct ClockConfig {
     pub dials: u16,
     /// Hand speed, degrees per second.
     pub speed: u16,
-    /// Seconds the time is held before the hands may drift.
-    pub still: u16,
+    /// What the minute is for: `0` art (the time to :10, then drifting), `1`
+    /// time (the time to :45). Stored as the second it is held to, where an
+    /// older build kept seconds held: anything under half a minute is art.
+    pub mode: u8,
     /// `0` varies, then each dance by number, then always composed.
     pub dance: u8,
     /// Which treatment the resting dials get.
@@ -355,7 +357,7 @@ impl ClockConfig {
             tip: 20,
             dials: 0,
             speed: 100,
-            still: 5,
+            mode: 0,
             dance: 0,
             rest: 3,
             hours24: true,
@@ -388,7 +390,7 @@ impl ClockConfig {
             tip: self.tip.clamp(20, 100),
             dials: self.dials.min(100),
             speed: self.speed.clamp(30, 360),
-            still: self.still.clamp(3, 60),
+            mode: self.mode.min(1),
             dance: self.dance,
             rest: self.rest,
             hours24: self.hours24,
@@ -413,7 +415,7 @@ impl ClockConfig {
             self.tip,
             self.dials,
             self.speed,
-            self.still,
+            if self.mode == 0 { 10 } else { 45 },
         ];
         for (chunk, w) in out.chunks_exact_mut(2).zip(words) {
             chunk.copy_from_slice(&w.to_le_bytes());
@@ -448,7 +450,7 @@ impl ClockConfig {
                 tip: w(6),
                 dials: w(7),
                 speed: w(8),
-                still: w(9),
+                mode: u8::from(w(9) >= 30),
                 dance: b[20],
                 rest: b[21],
                 hours24: b[22] != 0,

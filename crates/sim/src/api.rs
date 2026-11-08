@@ -218,7 +218,7 @@ impl ApiState {
                     tip: 20,
                     dials: 0,
                     speed: 100,
-                    still: 5,
+                    mode: 0,
                     dance: 0,
                     rest: 3,
                     hours24: true,

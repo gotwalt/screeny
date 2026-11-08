@@ -29,11 +29,39 @@ pub struct Tick {
     pub now: f64,
 }
 
+/// What the minute is for. Either way the hands land on the time as the
+/// minute turns and the dials not in it recede; the mode is how long the time
+/// is held before the hands are free again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// The time from :00 to :10, then the hands drift until the next dance.
+    Art,
+    /// The time from :00 to :45, and the dance fits in what is left.
+    Time,
+}
+
+impl Mode {
+    /// The stops of a `mode` parameter, in its order.
+    pub const NAMES: [&'static str; 2] = ["art", "time"];
+
+    pub fn of(v: f32) -> Mode {
+        if v >= 0.5 { Mode::Time } else { Mode::Art }
+    }
+
+    /// Seconds past the minute the time is held: the hands may not drift
+    /// before it, and the next minute's dance may not set off before it.
+    pub fn held(self) -> f32 {
+        match self {
+            Mode::Art => 10.0,
+            Mode::Time => 45.0,
+        }
+    }
+}
+
 /// Everything about the hands' behaviour that is a matter of taste.
 #[derive(Clone, Copy, Debug)]
 pub struct Knobs {
-    /// Seconds the time is held before the hands may drift.
-    pub still: f32,
+    pub mode: Mode,
     /// `0` varies, `1..=DANCES` names a dance, one past them always composes.
     pub dance: usize,
     /// Hand speed, degrees per second.
@@ -53,6 +81,8 @@ pub struct Knobs {
 /// the slider says is about what the hands do. Room for overlaps was tried, at
 /// 0.8, and no dance used it: the hands just stopped short of the limit.
 const CALM_MOTOR: f32 = 0.95;
+/// However early in the minute the hands landed, the time is held this long.
+const HELD_AT_LEAST: f64 = 3.0;
 /// If the minute is nearer than this, the next dance is planned at once, even
 /// though the fade has not finished: it could be due before the fade is over.
 const PLAN_NO_LATER: f64 = 25.0;
@@ -64,7 +94,7 @@ impl Default for Knobs {
     /// The owner's "Gold and Blue" behaviour (2026-10-28).
     fn default() -> Self {
         Knobs {
-            still: 5.0,
+            mode: Mode::Art,
             dance: 0,
             speed: 100.0,
             hours24: true,
@@ -132,7 +162,7 @@ pub struct Engine {
     /// Ambient motion between holding the time and the next dance.
     ambient: Option<ambient::Ambient>,
     /// The dance chosen for a minute, kept so it is composed only once.
-    chosen: Option<(i64, usize, Option<u32>, dance::Composition)>,
+    chosen: Option<(i64, usize, (Option<u32>, u32), dance::Composition)>,
     timed: Option<Timed>,
     /// The dance being performed, or the last one that was.
     performed: Option<dance::Composition>,
@@ -219,8 +249,16 @@ impl Engine {
     /// The dance for the move to `minute`. Asked for by number it comes from
     /// the repertoire (or, at 13, is always composed). Left to vary, most are
     /// composed afresh and the rest drawn from the repertoire.
-    fn dance_for(&mut self, minute: i64, choice: usize, to: &[Hands; CLOCKS], motor: Motor, limit: Option<f32>) {
-        let key = limit.map(f32::to_bits);
+    fn dance_for(
+        &mut self,
+        minute: i64,
+        choice: usize,
+        to: &[Hands; CLOCKS],
+        motor: Motor,
+        limit: Option<f32>,
+        room: f32,
+    ) {
+        let key = (limit.map(f32::to_bits), room.to_bits());
         if let Some((m, c, l, _)) = &self.chosen {
             if (*m, *c, *l) == (minute, choice, key) {
                 return;
@@ -245,12 +283,14 @@ impl Engine {
         } else {
             Some(dance::named(choice - 1, &mut rng))
         };
-        // Reduce motion is a filter and nothing else: a dance from the
-        // repertoire that breaks the limit gives way to one composed to keep it.
-        let drawn = drawn.filter(|d| dance::within(&d.phases, &self.angles, to, motor, limit));
+        // Reduce motion and the time mode are filters and nothing else: a
+        // dance from the repertoire that breaks the limit, or would set off
+        // before the time has been held long enough, gives way to one composed
+        // to keep both.
+        let drawn = drawn.filter(|d| dance::within(&d.phases, &self.angles, to, motor, limit, room));
         let composition = match drawn {
             Some(d) => d,
-            None => dance::compose(&mut rng, &self.angles, to, motor, &self.variety, limit),
+            None => dance::compose(&mut rng, &self.angles, to, motor, &self.variety, limit, room),
         };
         self.chosen = Some((minute, choice, key, composition));
     }
@@ -263,16 +303,17 @@ impl Engine {
         minute: i64,
         motor: Motor,
         limit: Option<f32>,
+        room: f32,
     ) {
         // A dance is judged where the hands were when it was chosen, and they
         // may have drifted since, which moves its overlaps. The limit is a
-        // limit: judged again here, and a dance that now breaks it gives way to
-        // one that cannot.
-        let composition = if dance::within(&composition.phases, &self.angles, &to, motor, limit) {
+        // limit: judged again here, and a dance that now breaks it, or no
+        // longer fits, gives way to one that does.
+        let composition = if dance::within(&composition.phases, &self.angles, &to, motor, limit, room) {
             composition
         } else {
             let mut rng = Rng::new(self.seed ^ minute as u64);
-            dance::named(dance::GENTLE + (minute as usize) % (dance::DANCES - dance::GENTLE), &mut rng)
+            dance::fallback(&mut rng, &self.angles, &to, motor, limit, room)
         };
         let (moves, total) = dance::plan(&composition.phases, &self.angles, &to, motor);
         for hands in &mut self.angles {
@@ -336,11 +377,11 @@ impl Engine {
                 _ => {
                     self.asked += 1;
                     self.chosen = None;
-                    self.dance_for(shown, dance::DANCES + 1, &to, motor, limit);
+                    self.dance_for(shown, dance::DANCES + 1, &to, motor, limit, f32::INFINITY);
                     self.chosen.take().expect("dance_for leaves its choice").3
                 }
             };
-            self.perform(tick.t, composition, to, shown, motor, limit);
+            self.perform(tick.t, composition, to, shown, motor, limit, f32::INFINITY);
             return;
         }
 
@@ -366,14 +407,18 @@ impl Engine {
         }
         let to = Self::target(next, hours24, rest);
         let choice = knobs.dance;
-        self.dance_for(next, choice, &to, motor, limit);
+        let held = f64::from(knobs.mode.held());
+        // The dance may not set off before the time has been held: it has the
+        // rest of the minute, and no more.
+        let room = (60.0 - held) as f32;
+        self.dance_for(next, choice, &to, motor, limit, room);
         let total = self.total(next, choice, &to, motor);
         // Engine seconds until the dance has to begin.
         let slack = next as f64 * 60.0 - clock - total as f64;
         let ready = self.ambient.as_ref().is_none_or(|a| a.at_rest());
         if self.minute.is_none() || (slack <= 0.0 && ready) {
             let composition = self.chosen.take().expect("dance_for leaves its choice").3;
-            self.perform(tick.t, composition, to, next, motor, limit);
+            self.perform(tick.t, composition, to, next, motor, limit, room);
             return;
         }
         let next_in = slack.max(0.0) as f32;
@@ -382,14 +427,14 @@ impl Engine {
             None => Doing::Holding { next: next_in },
         };
 
-        // Between the time and the next dance: hold still for a while, then
-        // drift. The ambient field is asked to settle with room to spare, so
-        // the hands are at rest when the dance has to leave.
+        // Between the time and the next dance: hold the time until the mode
+        // says, then drift. The ambient field is asked to settle with room to
+        // spare, so the hands are at rest when the dance has to leave.
         const SETTLE: f64 = 4.0;
-        let held = knobs.still as f64;
+        let into_minute = clock - (clock / 60.0).floor() * 60.0;
         match &mut self.ambient {
             Some(ambient) => ambient.step(&mut self.angles, motor, tick.dt as f32, slack < SETTLE),
-            None if tick.t - self.landed >= held && slack > SETTLE + 6.0 => {
+            None if into_minute >= held && tick.t - self.landed >= HELD_AT_LEAST && slack > SETTLE + 6.0 => {
                 let mut rng = Rng::new(self.seed ^ (next as u64).wrapping_mul(0x51ed_270b));
                 let moods: Vec<String> = (0..ambient::MOODS).map(|m| format!("mood:{m}")).collect();
                 let mood = self
@@ -524,6 +569,38 @@ mod tests {
         assert!(fastest >= knobs.limit * 0.6, "nothing came near the limit: {fastest:.1} deg/s");
         assert!(dancing > 3000 && drifting > 3000, "it stopped moving: {dancing} dancing, {drifting} drifting");
         assert!(names.len() >= 30, "only {} different dances in an hour", names.len());
+    }
+
+    /// Art holds the time from :00 to :10 and Time from :00 to :45: through
+    /// an hour of minutes, the hands are on the time for at least that long
+    /// after each one turns, and at full speed and under reduce motion alike
+    /// they go back to dancing and, in art, drifting.
+    #[test]
+    fn each_mode_holds_the_time_for_as_long_as_it_says() {
+        for (mode, calm) in [(Mode::Art, false), (Mode::Time, false), (Mode::Art, true), (Mode::Time, true)] {
+            let knobs = Knobs { mode, calm, ..Knobs::default() };
+            let (mut e, mut t) = (Engine::new(11), 0.0);
+            // Land on a minute first: the opening minute is whatever is left.
+            run(&mut e, &knobs, &mut t, 0.0, 61.0);
+            let (dt, mut early, mut drifted, mut least) = (0.05, 0, 0, 60.0_f64);
+            let mut gone: Option<f64> = None;
+            for _ in 0..(3600.0 / dt) as usize {
+                run(&mut e, &knobs, &mut t, 0.0, dt - 0.01);
+                let into = t.rem_euclid(60.0);
+                let on_time = e.plan.is_none() && *e.angles() == Engine::target(shown(&e), true, knobs.rest);
+                drifted += usize::from(matches!(e.doing(), Doing::Drifting { .. }));
+                if into < 1.0 {
+                    gone = None;
+                } else if !on_time && gone.is_none() {
+                    gone = Some(into);
+                    least = least.min(into);
+                    early += usize::from(into < f64::from(mode.held()));
+                }
+            }
+            let names = alloc::format!("{mode:?}{}", if calm { " under reduce motion" } else { "" });
+            assert_eq!(early, 0, "{names}: the time went at :{least:.1}, before :{}", mode.held());
+            assert_eq!(drifted > 0, mode == Mode::Art, "{names}: drifted for {drifted} frames");
+        }
     }
 
     #[test]

@@ -81,9 +81,9 @@ fn the_time_alone_is_the_settled_minute_whatever_the_dance() {
     let render = |seed, dance| {
         let mut params = Params::defaults(def.params);
         assert!(params.set(def.params, "dance", dance));
-        // Held for the whole minute: the default (Gold and Blue, 5 s) lets
-        // the dials drift after a few seconds, and the drift is the seed's.
-        assert!(params.set(def.params, "still", 60.0));
+        // Time mode holds the time to :45: the default, art, lets the dials
+        // drift from :10, and the drift is the seed's.
+        assert!(params.set(def.params, "mode", 1.0));
         let shot = Shot { seed, at: 20.0, warmup: 20.0, clock: at("21:12"), ..Shot::default() };
         take(def, &params, &shot).preview
     };

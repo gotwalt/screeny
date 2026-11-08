@@ -925,6 +925,7 @@ pub fn compose(
     motor: Motor,
     variety: &crate::variety::Variety,
     limit: Option<f32>,
+    room: f32,
 ) -> Composition {
     // Bounds scale with the motor: a slow motor is allowed a long dance.
     let pace = 100.0 / motor.speed;
@@ -936,7 +937,7 @@ pub fn compose(
             continue;
         }
         let r = review(&c.phases, from, digits, motor);
-        if !(6.0 * pace..=20.0 * pace).contains(&r.total) || r.peak > 2.05 || r.frozen > 1.3 || r.travel < 80.0 {
+        if !(6.0 * pace..=(20.0 * pace).min(room)).contains(&r.total) || r.peak > 2.05 || r.frozen > 1.3 || r.travel < 80.0 {
             continue;
         }
         if limit.is_some_and(|l| r.peak * motor.speed > l * LIMIT_ROOM) {
@@ -959,19 +960,55 @@ pub fn compose(
             break;
         }
     }
-    best.map(|(_, c)| c).unwrap_or_else(|| {
-        let start = (rng.u64() % DANCES as u64) as usize;
-        (0..DANCES)
-            .map(|i| named((start + i) % DANCES, rng))
-            .find(|c| within(&c.phases, from, digits, motor, limit))
-            .unwrap_or_else(|| named(GENTLE, rng))
-    })
+    best.map(|(_, c)| c).unwrap_or_else(|| fallback(rng, from, digits, motor, limit, room))
 }
 
-/// Whether a dance keeps every hand under `limit`, degrees per second. `None`
-/// is no limit, and nothing is measured.
-pub fn within(phases: &[Phase], from: &[Hands; CLOCKS], digits: &[Hands; CLOCKS], motor: Motor, limit: Option<f32>) -> bool {
-    limit.is_none_or(|l| review(phases, from, digits, motor).peak * motor.speed <= l * LIMIT_ROOM)
+/// A dance from the repertoire when nothing composed would do: one that keeps
+/// the limit and fits the room if any does, and otherwise the shortest that
+/// keeps the limit - a clock that must dance early is better than one that
+/// arrives late.
+pub fn fallback(
+    rng: &mut Rng,
+    from: &[Hands; CLOCKS],
+    digits: &[Hands; CLOCKS],
+    motor: Motor,
+    limit: Option<f32>,
+    room: f32,
+) -> Composition {
+    let start = (rng.u64() % DANCES as u64) as usize;
+    let mut shortest: Option<(f32, Composition)> = None;
+    for i in 0..DANCES {
+        let c = named((start + i) % DANCES, rng);
+        let r = review(&c.phases, from, digits, motor);
+        if limit.is_some_and(|l| r.peak * motor.speed > l * LIMIT_ROOM) {
+            continue;
+        }
+        if r.total <= room {
+            return c;
+        }
+        if shortest.as_ref().is_none_or(|(t, _)| r.total < *t) {
+            shortest = Some((r.total, c));
+        }
+    }
+    shortest.map(|(_, c)| c).unwrap_or_else(|| named(GENTLE, rng))
+}
+
+/// Whether a dance keeps every hand under `limit`, degrees per second (`None`
+/// is no limit), and takes no more than `room` seconds. With neither, nothing
+/// is measured.
+pub fn within(
+    phases: &[Phase],
+    from: &[Hands; CLOCKS],
+    digits: &[Hands; CLOCKS],
+    motor: Motor,
+    limit: Option<f32>,
+    room: f32,
+) -> bool {
+    if limit.is_none() && room.is_infinite() {
+        return true;
+    }
+    let r = review(phases, from, digits, motor);
+    limit.is_none_or(|l| r.peak * motor.speed <= l * LIMIT_ROOM) && r.total <= room
 }
 
 /// What [`within`] allows of the limit: the room is for the sampling, which sees
@@ -1038,7 +1075,7 @@ mod tests {
         let (mut fell_back, mut direct_runs) = (0, 0);
         for seed in 0..300 {
             let Composition { name, phases, tags } =
-                compose(&mut Rng::new(seed), &from, &to, MOTOR, &Default::default(), None);
+                compose(&mut Rng::new(seed), &from, &to, MOTOR, &Default::default(), None, f32::INFINITY);
             assert!(!tags.is_empty());
             fell_back += !name.contains(',') as usize;
             direct_runs += name.starts_with("direct") as usize;
@@ -1074,7 +1111,7 @@ mod tests {
         let mut uses = alloc::collections::BTreeMap::<String, usize>::new();
         for minute in 0..1440_u32 {
             let (from, to) = (pose(minute / 60, minute % 60), pose((minute + 1) / 60 % 24, (minute + 1) % 60));
-            let c = compose(&mut rng, &from, &to, MOTOR, &variety, None);
+            let c = compose(&mut rng, &from, &to, MOTOR, &variety, None, f32::INFINITY);
             variety.note(&c.name, &c.tags);
             for t in &c.tags {
                 *uses.entry(t.clone()).or_default() += 1;
