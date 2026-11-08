@@ -200,7 +200,7 @@ impl Visit {
             near: rng.range(0.22, 0.3),
             // Nearly flat to the glass, as a hand held up to it.
             pitch: PI / 2.0 - ARM + rng.range(0.03, 0.25),
-            take: (rng.u64() % clips::COUNT as u64) as usize,
+            take: clips::ROTATION[(rng.u64() % clips::ROTATION.len() as u64) as usize],
             rate: rng.range(0.85, 1.0),
             from: rng.range(0.0, 20.0),
             far: AWAY,

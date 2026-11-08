@@ -29,6 +29,11 @@ const TAKES: &[(&str, &str)] = &[
 
 pub const COUNT: usize = TAKES.len();
 
+/// The takes a visit picks from at random: all but "peace", whose V of two
+/// spread fingers over a fist reads on the 32x32 frame as a rabbit's ears
+/// (the shadow puppet's very outline). It still plays when `take` asks for it.
+pub const ROTATION: &[usize] = &[0, 1, 2, 4, 5, 6, 7, 8, 9, 10];
+
 /// Frames a second, after resampling.
 const RATE: f32 = 30.0;
 /// The smoothing, a gaussian this many frames wide (one sigma, 200 ms):
@@ -223,6 +228,13 @@ fn right_handed(frames: &[[V3; 21]]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_rotation_is_every_take_but_peace() {
+        let names: Vec<&str> = ROTATION.iter().map(|&i| TAKES[i].0).collect();
+        assert_eq!(names.len(), COUNT - 1);
+        assert!(!names.contains(&"peace"));
+    }
 
     #[test]
     fn every_take_reads_as_a_right_hand() {
