@@ -51,11 +51,10 @@ const PARAMS: &[ParamSpec] = &[
     choice("mode", "Mode", &Mode::NAMES, 0.0),
     param("fade", "Seconds the resting dials take to dim", 0.2, 5.0, 0.1, 1.5),
     toggle("calm", "Reduce motion", false),
-    param("limit", "Reduce motion: top hand speed (deg/s)", 20.0, 120.0, 1.0, 60.0),
     choice("dance", "Choreography", DANCE_CHOICES, 0.0),
     choice("rest", "Resting dials", REST_CHOICES, DEFAULT_REST as f32),
     choice("dark", "Dark ramp", DARK_CHOICES, DEFAULT_DARK as f32),
-    param("speed", "Hand speed (deg/s)", 30.0, 360.0, 1.0, 100.0),
+    param("speed", "Hand speed", 30.0, 360.0, 1.0, 100.0),
     toggle("hours24", "24-hour", true),
     param("weight", "Hand weight (LEDs)", 1.0, 2.4, 0.05, 1.55),
     param("tip", "Hand tip while dancing (1 = blunt)", 0.2, 1.0, 0.05, 0.2),
@@ -158,7 +157,6 @@ impl Patch for Clocks {
             rest,
             fade: ctx.get("fade"),
             calm: ctx.get("calm") >= 0.5,
-            limit: ctx.get("limit"),
         };
         self.engine.step(Tick { t: ctx.t, dt: ctx.dt, now: ctx.now }, &knobs);
         let tint = |hue: &str, chroma: &str| draw::Tint {

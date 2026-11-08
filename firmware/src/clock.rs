@@ -125,7 +125,6 @@ fn knobs_of(c: &ClockConfig) -> Knobs {
     Knobs {
         fade: c.fade as f32 / 10.0,
         calm: c.calm,
-        limit: c.limit as f32,
         speed: c.speed as f32,
         mode: if c.mode == 0 { Mode::Art } else { Mode::Time },
         dance: (c.dance as usize).min(dance::DANCES + 1),

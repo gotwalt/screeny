@@ -743,7 +743,7 @@ fn a_clock_config_out_of_range_is_pulled_back_in() {
 fn a_clock_config_of_an_older_shape_keeps_its_look() {
     let saved = screeny_settings::ClockConfig { hue: 12, calm: true, ..Default::default() }.to_bytes();
     let back = screeny_settings::ClockConfig::from_bytes(&saved[..23]).unwrap();
-    assert_eq!((back.hue, back.fade, back.calm, back.limit), (12, 15, false, 60));
+    assert_eq!((back.hue, back.fade, back.calm), (12, 15, false));
     let mut longer = saved.to_vec();
     longer.extend([0, 0]);
     assert_eq!(screeny_settings::ClockConfig::from_bytes(&longer).unwrap().hue, 12);

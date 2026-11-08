@@ -70,12 +70,14 @@ pub struct Knobs {
     pub rest: Rest,
     /// Seconds the resting dials take to dim, and to come back.
     pub fade: f32,
-    /// Reduce motion: the same dances and the same drifting, slower, and only
-    /// the ones that stay under [`Knobs::limit`].
+    /// Reduce motion: only the less active dances, and the drifting, with no
+    /// hand ever turning faster than [`CALM_LIMIT`]. One switch: the owner
+    /// found a top-speed slider in degrees a second confusing (2026-11-07).
     pub calm: bool,
-    /// Under [`Knobs::calm`], the fastest any hand may turn, degrees per second.
-    pub limit: f32,
 }
+
+/// Under reduce motion, the fastest any hand may turn, degrees per second.
+pub const CALM_LIMIT: f32 = 60.0;
 
 /// Under [`Knobs::calm`] the motor runs at this share of the limit, so that what
 /// the slider says is about what the hands do. Room for overlaps was tried, at
@@ -101,7 +103,6 @@ impl Default for Knobs {
             rest: RESTS[DEFAULT_REST],
             fade: 1.5,
             calm: false,
-            limit: 60.0,
         }
     }
 }
@@ -345,7 +346,7 @@ impl Engine {
 
     fn advance(&mut self, tick: Tick, knobs: &Knobs) {
         let clock = tick.now;
-        let limit = knobs.calm.then_some(knobs.limit);
+        let limit = knobs.calm.then_some(CALM_LIMIT);
         let speed = limit.map_or(knobs.speed, |l| knobs.speed.min(l * CALM_MOTOR));
         let motor = Motor { speed, acc: speed * 1.6 };
         let (hours24, rest) = (knobs.hours24, knobs.rest);
@@ -565,8 +566,8 @@ mod tests {
                 names.insert(p.name.clone());
             }
         }
-        assert!(fastest <= knobs.limit, "a hand turned at {fastest:.1} deg/s");
-        assert!(fastest >= knobs.limit * 0.6, "nothing came near the limit: {fastest:.1} deg/s");
+        assert!(fastest <= CALM_LIMIT, "a hand turned at {fastest:.1} deg/s");
+        assert!(fastest >= CALM_LIMIT * 0.6, "nothing came near the limit: {fastest:.1} deg/s");
         assert!(dancing > 3000 && drifting > 3000, "it stopped moving: {dancing} dancing, {drifting} drifting");
         assert!(names.len() >= 30, "only {} different dances in an hour", names.len());
     }

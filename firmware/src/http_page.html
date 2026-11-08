@@ -63,8 +63,7 @@ progress{width:100%}
 <label><span>Mode</span><select id="cmode"><option value="0">Art: the time from :00 to :10, then the hands drift</option><option value="1">Time: the time from :00 to :45</option></select></label>
 <label><span>Choreography</span><select id="cdance"></select></label>
 <label class="ck"><input id="c24" type="checkbox"> 24-hour</label>
-<label class="ck"><input id="ccalm" type="checkbox"> Reduce motion</label>
-<div id="calmsl"></div>
+<label class="ck"><input id="ccalm" type="checkbox"> Reduce motion: only the calmer dances</label>
 <div class="row"><button type="button" id="cgo">Compose another</button><button type="button" id="cagain">Play it again</button></div>
 <details><summary>Look</summary>
 <div id="csl"></div>
@@ -207,15 +206,14 @@ poll();setInterval(poll,4000);
    frame and flash takes it once they stop, so nothing here needs an Apply. */
 const CS=[["hue","Hour hand hue",0,360],["chroma","Hour hand colour",0,200],["hue2","Minute hand hue",0,360],["chroma2","Minute hand colour",0,200],
 ["light","Hand lightness",60,95],["weight","Hand weight",100,240],["tip","Hand tip while dancing",20,100],["dials","Dial rings",0,100],
-["speed","Hand speed, degrees a second",30,360],["fade","Resting dials dim over, tenths of a second",2,50],
-["limit","Top hand speed, degrees a second",20,120]];
-const GB={hue:74,chroma:65,hue2:240,chroma2:65,light:67,weight:155,tip:20,dials:0,speed:100,mode:0,dance:0,rest:3,hours24:true,dark:0,fade:15,calm:false,limit:60};
+["speed","Hand speed",30,360],["fade","Resting dials dim over, tenths of a second",2,50]];
+const GB={hue:74,chroma:65,hue2:240,chroma2:65,light:67,weight:155,tip:20,dials:0,speed:100,mode:0,dance:0,rest:3,hours24:true,dark:0,fade:15,calm:false};
 const opt=(s,a)=>{s.innerHTML="";a.forEach((t,i)=>s.add(new Option(t,i)))};
 opt($("#cdance"),["vary",...DANCES,"composed"]);opt($("#crest"),RESTS);opt($("#cdark"),DARKS);
 const sl=c=>`<label><span>${c[1]} <output id="o-${c[0]}"></output></span><input id="c-${c[0]}" type="range" min="${c[2]}" max="${c[3]}"></label>`;
-$("#csl").innerHTML=CS.slice(0,-1).map(sl).join("");$("#calmsl").innerHTML=sl(CS[CS.length-1]);
+$("#csl").innerHTML=CS.map(sl).join("");
 const look=()=>{const l={};CS.forEach(c=>l[c[0]]=+$("#c-"+c[0]).value);l.mode=+$("#cmode").value;l.dance=+$("#cdance").value;l.rest=+$("#crest").value;l.dark=+$("#cdark").value;l.hours24=$("#c24").checked;l.calm=$("#ccalm").checked;return l};
-const cpaint=()=>{CS.forEach(c=>{$("#o-"+c[0]).textContent=$("#c-"+c[0]).value});$("#calmsl").hidden=!$("#ccalm").checked};
+const cpaint=()=>CS.forEach(c=>{$("#o-"+c[0]).textContent=$("#c-"+c[0]).value});
 const show=j=>{CS.forEach(c=>{$("#c-"+c[0]).value=j.look[c[0]]});$("#cmode").value=j.look.mode;$("#cdance").value=j.look.dance;$("#crest").value=j.look.rest;$("#cdark").value=j.look.dark;$("#c24").checked=j.look.hours24;$("#ccalm").checked=j.look.calm;cpaint()};
 const now=j=>{$("#cnow").textContent=j.time?"San Francisco time. The panel says "+j.time+".":"Waiting for a time server."};
 const post=b=>fetch("/api/v1/clock",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json());

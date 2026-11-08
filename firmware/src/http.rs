@@ -952,7 +952,6 @@ fn clock_reply() -> ClockReply {
             dark: c.dark,
             fade: c.fade,
             calm: c.calm,
-            limit: c.limit,
         },
         time: crate::clock::wall_hms().and_then(|(h, m, s)| {
             let mut t = text::TimeText::new();
@@ -983,7 +982,6 @@ fn post_clock(req: ClockRequest) -> Reply {
             dark: l.dark,
             fade: l.fade,
             calm: l.calm,
-            limit: l.limit,
         });
     }
     if req.dance_now == Some(true) {

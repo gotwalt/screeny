@@ -333,10 +333,8 @@ pub struct ClockConfig {
     pub dark: u8,
     /// Tenths of a second the resting dials take to dim.
     pub fade: u16,
-    /// Reduce motion.
+    /// Reduce motion: only the less active dances.
     pub calm: bool,
-    /// Under reduce motion, the fastest a hand may turn, degrees per second.
-    pub limit: u16,
 }
 
 impl Default for ClockConfig {
@@ -364,7 +362,6 @@ impl ClockConfig {
             dark: 0,
             fade: 15,
             calm: false,
-            limit: 60,
     };
 
     /// The stored size.
@@ -397,7 +394,6 @@ impl ClockConfig {
             dark: self.dark,
             fade: self.fade.clamp(2, 50),
             calm: self.calm,
-            limit: self.limit.clamp(20, 120),
         }
     }
 
@@ -426,7 +422,8 @@ impl ClockConfig {
         out[23] = self.dark;
         out[24..26].copy_from_slice(&self.fade.to_le_bytes());
         out[26] = u8::from(self.calm);
-        out[27..29].copy_from_slice(&self.limit.to_le_bytes());
+        // Where a top-speed setting was: reduce motion has a fixed one now.
+        out[27..29].copy_from_slice(&60u16.to_le_bytes());
         out
     }
 
@@ -457,7 +454,6 @@ impl ClockConfig {
                 dark: tail.map_or(d.dark, |t| t[0]),
                 fade: tail.map_or(d.fade, |t| u16::from_le_bytes([t[1], t[2]])),
                 calm: tail.is_some_and(|t| t[3] != 0),
-                limit: tail.map_or(d.limit, |t| u16::from_le_bytes([t[4], t[5]])),
             }
             .sanitised(),
         )
