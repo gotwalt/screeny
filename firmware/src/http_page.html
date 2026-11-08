@@ -5,41 +5,47 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>screeny</title>
 <style>
-:root{color-scheme:light dark;--fg:#111;--bg:#fff;--dim:#666;--line:#ddd;--acc:#06c}
-@media(prefers-color-scheme:dark){:root{--fg:#e8e8e8;--bg:#161616;--dim:#999;--line:#333;--acc:#6af}}
+:root{color-scheme:light dark;--fg:#111;--bg:#f4f4f2;--card:#fff;--dim:#6b6b6b;--line:#e2e2df;--acc:#0a63c9}
+@media(prefers-color-scheme:dark){:root{--fg:#e8e8e8;--bg:#111;--card:#1b1b1b;--dim:#9a9a9a;--line:#2e2e2e;--acc:#6aa8ff}}
 *{box-sizing:border-box}
-body{margin:0;padding:16px;max-width:36rem;font:15px/1.5 system-ui,sans-serif;color:var(--fg);background:var(--bg)}
-h1{font-size:1.3rem;margin:0 0 2px}
-h2{font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:24px 0 6px}
-p.sub{margin:0 0 4px;color:var(--dim);font-size:.85rem}
-table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
-th,td{text-align:left;padding:3px 0;border-bottom:1px solid var(--line);font-weight:400}
-th{color:var(--dim);width:9rem;vertical-align:top}td{word-break:break-word}
-label{display:block;margin:8px 0}
-label span{display:block;color:var(--dim);font-size:.85rem}
-input,select,button{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
-input[type=range]{padding:0;border:0;width:100%}
+body{margin:0 auto;padding:20px 16px 40px;max-width:34rem;font:15px/1.45 system-ui,sans-serif;color:var(--fg);background:var(--bg)}
+h1{font-size:1.4rem;margin:0}
+h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);margin:26px 4px 8px;font-weight:600}
+.sub{margin:2px 0 0;color:var(--dim);font-size:.85rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:4px 14px}
+.card>*+*{border-top:1px solid var(--line)}
+label,.it{display:block;padding:10px 0;margin:0}
+label>span{display:flex;justify-content:space-between;gap:8px;color:var(--dim);font-size:.85rem;margin-bottom:4px}
+label.ck{display:flex;gap:10px;align-items:center}
+input,select,button{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+input:not([type]),input[type=password],select{width:100%}
+input[type=range]{padding:0;border:0;width:100%;accent-color:var(--acc)}
+input[type=checkbox]{width:1.1rem;height:1.1rem;accent-color:var(--acc)}
 button{cursor:pointer;border-color:var(--acc);color:var(--acc)}
 button.warn{border-color:#c33;color:#c33}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-#msg{min-height:1.2em;font-size:.85rem;color:var(--dim)}
-details{margin:10px 0}summary{cursor:pointer;color:var(--acc);font-size:.9rem}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:10px 0}
+summary{cursor:pointer;padding:12px 0;list-style:none;display:flex;justify-content:space-between}
+summary::after{content:"\203A";color:var(--dim);transition:transform .15s}
+details[open]>summary::after{transform:rotate(90deg)}
+summary::-webkit-details-marker{display:none}
+details[open]{padding-bottom:6px}
+details details{border-top:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.9rem}
+th,td{text-align:left;padding:4px 0;border-top:1px solid var(--line);font-weight:400}
+th{color:var(--dim);width:9rem;vertical-align:top}td{word-break:break-word}
+#msg{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:6px 14px;border-radius:99px;font-size:.85rem;opacity:0;transition:opacity .2s;pointer-events:none}
+#msg.on{opacity:.92}
 progress{width:100%}
-[hidden]{display:none}
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
 <h1 id="title">screeny</h1>
-<p class="sub">Your Tidbyt, running Screeny firmware.</p>
+<p class="sub" id="line">Your Tidbyt, running Screeny firmware.</p>
 
-<h2>Status</h2>
-<table><tbody><!--STATUS--></tbody></table></details>
-<p id="msg"></p>
-
-<h2>Settings</h2>
-<form id="set">
-<label><span>Name (leave empty to use the default, screeny-&lt;id&gt;)</span><input id="name" maxlength="32" placeholder="screeny"></label>
-<label><span>Brightness <output id="bv"></output> (the panel limits the top end to stay safe)</span><input id="bright" type="range" min="0" max="255"></label>
+<h2>Display</h2>
+<div class="card">
+<label><span>Brightness <output id="bv"></output></span><input id="bright" type="range" min="0" max="255"></label>
 <label><span>When nothing is streaming</span>
 <select id="idle">
 <option value="clock">the clock</option>
@@ -48,45 +54,50 @@ progress{width:100%}
 <option value="dim">dim the last frame</option>
 <option value="black">black</option>
 </select></label>
-<details><summary>Advanced</summary>
-<label><span>Colour order. Gen 1 panels use "rotated"; switch only if the colours look wrong. It takes effect after a reboot.</span>
-<select id="colour">
-<option value="rotated">rotated (Gen 1)</option>
-<option value="published">published pin map</option>
-</select></label>
-</details>
-<div class="row"><button type="submit">Apply</button>
-<button type="button" id="ident">Identify</button>
-<button type="button" id="boot" class="warn">Reboot</button></div>
-</form>
+</div>
 
+<div id="clock" hidden>
 <h2>Clock</h2>
-<p class="sub" id="cnow">The twenty-four clocks, running on the panel itself, on San Francisco time. A stream from the Studio still takes over, and the clock comes back when it ends.</p>
-<form id="clk">
+<div class="card" id="clk">
+<p class="it sub" id="cnow">The twenty-four clocks, on San Francisco time.</p>
 <label><span>Mode</span><select id="cmode"><option value="0">Art: the time from :00 to :10, then the hands drift</option><option value="1">Time: the time from :00 to :45</option></select></label>
-<div id="csl"></div>
 <label><span>Choreography</span><select id="cdance"></select></label>
+<label class="ck"><input id="c24" type="checkbox"> 24-hour</label>
+<label class="ck"><input id="ccalm" type="checkbox"> Reduce motion</label>
+<div id="calmsl"></div>
+<div class="row"><button type="button" id="cgo">Compose another</button><button type="button" id="cagain">Play it again</button></div>
+<details><summary>Look</summary>
+<div id="csl"></div>
 <label><span>Resting dials</span><select id="crest"></select></label>
 <label><span>Dark ramp</span><select id="cdark"></select></label>
-<label class="ck"><input id="ccalm" type="checkbox"> Reduce motion: the same dances, slower, and only those under the top speed below</label>
-<label class="ck"><input id="c24" type="checkbox"> 24-hour</label>
-<div class="row"><button type="button" id="cgo">Compose another</button>
-<button type="button" id="cagain">Play it again</button>
-<button type="button" id="cdef">Gold and Blue</button></div>
-</form>
+<div class="row"><button type="button" id="cdef">Reset to Gold and Blue</button></div>
+</details>
+</div>
+</div>
 
-<h2>Wi-Fi</h2>
+<h2>Panel</h2>
+<div class="card">
+<label><span>Name</span><input id="name" maxlength="32" placeholder="screeny-&lt;id&gt;"></label>
+<div class="row"><button type="button" id="ident">Identify</button><span class="sub">Lights this panel up for ten seconds.</span></div>
+</div>
+
+<h2>System</h2>
+<div class="card">
+<details><summary>Status</summary>
+<table><tbody><!--STATUS--></tbody></table></details>
+</details>
+<details><summary>Wi-Fi</summary>
 <form method="post" action="/setup">
 <label><span>Network name</span><input name="ssid" maxlength="32" required autocapitalize="none" autocorrect="off" spellcheck="false"></label>
 <label><span>Password (empty for an open network)</span><input name="psk" type="password" maxlength="64" autocapitalize="none" autocorrect="off"></label>
 <div class="row"><button type="submit">Join this network</button></div>
-</form>
 <p class="sub">The panel leaves this network while it tries the new one. If that fails, it comes back to this one.</p>
-
-<h2>Firmware</h2>
-<p class="sub" id="fwline">The installed version is shown above, under Firmware.</p>
-<p class="sub">To update, use the Panel screen in Screeny Studio, or the update entity in Home Assistant. Or upload a firmware file here: download <code>screeny-fw-&lt;version&gt;.bin</code> from
-<a href="https://github.com/gotwalt/screeny/releases" rel="noopener">github.com/gotwalt/screeny/releases</a> (not the one ending in <code>-full.bin</code>).</p>
+</form>
+</details>
+<details><summary>Firmware update</summary>
+<p class="sub" id="fwline"></p>
+<p class="sub">The Studio's Panel screen and Home Assistant can update it for you. Or download <code>screeny-fw-&lt;version&gt;.bin</code> (not the <code>-full.bin</code>) from
+<a href="https://github.com/gotwalt/screeny/releases" rel="noopener">github.com/gotwalt/screeny/releases</a> and upload it here.</p>
 <form id="up" hidden>
 <label><input id="fwfile" type="file" accept=".bin" required></label>
 <div class="row"><button type="submit" id="upgo">Upload and install</button></div>
@@ -94,23 +105,36 @@ progress{width:100%}
 <p id="upm" class="sub"></p>
 </form>
 <noscript><p class="sub">Uploading a file needs JavaScript.</p></noscript>
+</details>
+<details><summary>Advanced</summary>
+<label><span>Colour order: Gen 1 panels use "rotated". Change it only if the colours look wrong; it takes effect after a reboot.</span>
+<select id="colour">
+<option value="rotated">rotated (Gen 1)</option>
+<option value="published">published pin map</option>
+</select></label>
+<div class="row"><button type="button" id="boot" class="warn">Reboot</button></div>
+</details>
+</div>
+<p id="msg"></p>
 
 <!--CLOCK-->
 <script>
-const $=s=>document.querySelector(s),msg=t=>{$("#msg").textContent=t};
-let touched=false;
-["#name","#bright","#idle","#colour"].forEach(s=>$(s).addEventListener("input",()=>{touched=true}));
-$("#bright").addEventListener("input",()=>{$("#bv").textContent=$("#bright").value});
+const $=s=>document.querySelector(s);let mt;
+const msg=t=>{const m=$("#msg");m.textContent=t;m.classList.add("on");clearTimeout(mt);mt=setTimeout(()=>m.classList.remove("on"),2500)};
 // These words and the uptime/signal wording mirror the table the firmware
 // renders (http.rs), so the page reads the same before and after a refresh.
 const W={idle:"idle",live:"showing a stream",hold:"holding the last frame",identify:"identifying",provisioning:"setup mode",
  disconnected:"not connected",connecting:"connecting",connected:"connected",failed:"failed",
- status:"status screen",hold_forever:"hold the last frame",dim:"dim the last frame",black:"black"};
+ status:"status screen",hold_forever:"hold the last frame",dim:"dim the last frame",black:"black",clock:"the clock"};
 const w=k=>W[k]||k;
 function up(t){const m=Math.floor(t/60),h=Math.floor(m/60);
  return t<60?t+" s":h<1?m+" min":h<24?h+" h "+m%60+" min":Math.floor(h/24)+" d "+h%24+" h"}
 function sig(d){return d>=0?"-":(d>=-55?"excellent":d>=-67?"good":d>=-80?"fair":"weak")+" ("+d+" dBm)"}
-const put=(k,v)=>{const c=document.querySelector('[data-k="'+k+'"]');if(c)c.textContent=v};
+const cell=k=>document.querySelector('[data-k="'+k+'"]');
+const put=(k,v)=>{const c=cell(k);if(c)c.textContent=v};
+// A control being worked is not repainted under the hand working it.
+let busy=0;const hold=()=>{busy=Date.now()};
+const showClock=()=>{$("#clock").hidden=$("#idle").value!=="clock"};
 function paint(s){
  put("name",s.name);put("id",s.id);put("fw",s.fw);put("state",w(s.state));put("wifi",w(s.wifi_state));
  put("ssid",s.ssid??"-");put("ip",s.ip??"-");put("rssi",sig(s.rssi_dbm));
@@ -121,33 +145,39 @@ function paint(s){
  put("firmware",s.fw_slot+" / "+s.fw_state);put("reset",s.reset_reason);
  // The `panic` and `colour_order` rows are rendered by the firmware and not
  // repainted: neither can change while the device runs.
- $("#fwline").textContent="Installed version: "+s.fw+".";
+ $("#fwline").textContent="Installed: "+s.fw+".";
  $("#title").textContent=s.name||("screeny-"+s.id);document.title=$("#title").textContent;
- if(!touched){$("#name").value=s.name;$("#bright").value=s.brightness;$("#bv").textContent=s.brightness;$("#idle").value=s.idle_mode;
-  const c=document.querySelector('[data-k="colour_order"]');if(c)$("#colour").value=c.textContent}
+ $("#line").textContent=(s.state==="live"?"Showing a stream":"Idle: "+w(s.idle_mode))+" · "+(s.ssid?s.ssid+", "+sig(s.rssi_dbm).split(" ")[0]:w(s.wifi_state))+" · "+s.fw;
+ if(Date.now()-busy>3000){
+  if(document.activeElement!==$("#name"))$("#name").value=s.name;
+  $("#bright").value=s.brightness;$("#bv").textContent=s.brightness;$("#idle").value=s.idle_mode;showClock();
+  const c=cell("colour_order");if(c)$("#colour").value=c.textContent}
 }
 async function poll(){
- try{const r=await fetch("/api/v1/status",{cache:"no-store"});if(r.ok)paint(await r.json())}catch(e){msg("device unreachable")}
+ try{const r=await fetch("/api/v1/status",{cache:"no-store"});if(r.ok)paint(await r.json())}catch(e){msg("The panel is not answering")}
 }
-async function send(path,body){
+async function send(path,body,ok){
  try{
   const r=await fetch(path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
   const j=await r.json();
-  if(!r.ok){msg("error: "+j.error+(j.detail?" - "+j.detail:""));return null}
-  msg("ok");return j;
- }catch(e){msg("request failed");return null}
+  if(!r.ok){msg("Error: "+j.error+(j.detail?" - "+j.detail:""));return null}
+  if(ok)msg(ok);return j;
+ }catch(e){msg("The request failed");return null}
 }
-$("#set").addEventListener("submit",async e=>{
- e.preventDefault();
- const was=document.querySelector('[data-k="colour_order"]').textContent;
- const j=await send("/api/v1/settings",{name:$("#name").value,brightness:+$("#bright").value,idle_mode:$("#idle").value,colour_order:$("#colour").value});
- if(j){touched=false;msg("applied: brightness "+j.brightness);
-  const c=document.querySelector('[data-k="colour_order"]');if(c)c.textContent=j.colour_order;
-  if(j.colour_order&&j.colour_order!==was&&confirm("Colour order saved. It takes effect after a reboot - reboot now?"))send("/api/v1/reboot",{confirm:"RBOO"});
-  poll()}
+// Settings apply as they change: there is no Apply button.
+const setting=(b,ok)=>send("/api/v1/settings",b,ok);
+let bt;
+$("#bright").addEventListener("input",()=>{hold();$("#bv").textContent=$("#bright").value;clearTimeout(bt);bt=setTimeout(()=>setting({brightness:+$("#bright").value}),150)});
+$("#idle").addEventListener("change",()=>{hold();showClock();setting({idle_mode:$("#idle").value},"When idle: "+w($("#idle").value))});
+$("#name").addEventListener("change",async()=>{hold();if(await setting({name:$("#name").value},"Name saved"))poll()});
+$("#name").addEventListener("keydown",e=>{if(e.key==="Enter")$("#name").blur()});
+$("#colour").addEventListener("change",async()=>{
+ hold();const j=await setting({colour_order:$("#colour").value},"Colour order saved");
+ if(j){put("colour_order",j.colour_order);
+  if(confirm("The colour order takes effect after a reboot. Reboot now?"))send("/api/v1/reboot",{confirm:"RBOO"},"Rebooting")}
 });
-$("#ident").addEventListener("click",()=>send("/api/v1/identify",{duration_ms:10000}));
-$("#boot").addEventListener("click",()=>{if(confirm("Reboot the panel now?"))send("/api/v1/reboot",{confirm:"RBOO"})});
+$("#ident").addEventListener("click",()=>send("/api/v1/identify",{duration_ms:10000},"Identifying"));
+$("#boot").addEventListener("click",()=>{if(confirm("Reboot the panel now?"))send("/api/v1/reboot",{confirm:"RBOO"},"Rebooting")});
 const UE={bad_magic:"that is not a firmware file",wrong_chip:"it was built for a different chip",wrong_project:"that is not Screeny firmware",
  bad_checksum:"the file is damaged - download it again",bad_sha256:"the file is damaged or incomplete - download it again",
  too_large:"the file is too big for this panel",busy:"another update is already running",flash:"the panel could not write it to its memory"};
@@ -173,28 +203,28 @@ $("#up").addEventListener("submit",e=>{
 });
 poll();setInterval(poll,4000);
 
-/* The clock. Sliders apply as they move: the panel takes the look on its next
+/* The clock. Controls apply as they move: the panel takes the look on its next
    frame and flash takes it once they stop, so nothing here needs an Apply. */
 const CS=[["hue","Hour hand hue",0,360],["chroma","Hour hand colour",0,200],["hue2","Minute hand hue",0,360],["chroma2","Minute hand colour",0,200],
 ["light","Hand lightness",60,95],["weight","Hand weight",100,240],["tip","Hand tip while dancing",20,100],["dials","Dial rings",0,100],
-["speed","Hand speed, degrees a second",30,360],["fade","Tenths of a second the resting dials take to dim",2,50],
-["limit","Reduce motion: top hand speed, degrees a second",20,120]];
+["speed","Hand speed, degrees a second",30,360],["fade","Resting dials dim over, tenths of a second",2,50],
+["limit","Top hand speed, degrees a second",20,120]];
 const GB={hue:74,chroma:65,hue2:240,chroma2:65,light:67,weight:155,tip:20,dials:0,speed:100,mode:0,dance:0,rest:3,hours24:true,dark:0,fade:15,calm:false,limit:60};
 const opt=(s,a)=>{s.innerHTML="";a.forEach((t,i)=>s.add(new Option(t,i)))};
 opt($("#cdance"),["vary",...DANCES,"composed"]);opt($("#crest"),RESTS);opt($("#cdark"),DARKS);
-$("#csl").innerHTML=CS.map(c=>`<label><span>${c[1]} <output id="o-${c[0]}"></output></span><input id="c-${c[0]}" type="range" min="${c[2]}" max="${c[3]}"></label>`).join("");
+const sl=c=>`<label><span>${c[1]} <output id="o-${c[0]}"></output></span><input id="c-${c[0]}" type="range" min="${c[2]}" max="${c[3]}"></label>`;
+$("#csl").innerHTML=CS.slice(0,-1).map(sl).join("");$("#calmsl").innerHTML=sl(CS[CS.length-1]);
 const look=()=>{const l={};CS.forEach(c=>l[c[0]]=+$("#c-"+c[0]).value);l.mode=+$("#cmode").value;l.dance=+$("#cdance").value;l.rest=+$("#crest").value;l.dark=+$("#cdark").value;l.hours24=$("#c24").checked;l.calm=$("#ccalm").checked;return l};
-const cpaint=()=>CS.forEach(c=>{$("#o-"+c[0]).textContent=$("#c-"+c[0]).value});
+const cpaint=()=>{CS.forEach(c=>{$("#o-"+c[0]).textContent=$("#c-"+c[0]).value});$("#calmsl").hidden=!$("#ccalm").checked};
 const show=j=>{CS.forEach(c=>{$("#c-"+c[0]).value=j.look[c[0]]});$("#cmode").value=j.look.mode;$("#cdance").value=j.look.dance;$("#crest").value=j.look.rest;$("#cdark").value=j.look.dark;$("#c24").checked=j.look.hours24;$("#ccalm").checked=j.look.calm;cpaint()};
-const now=j=>{$("#cnow").textContent=j.time?"The panel says "+j.time+".":"Waiting for a time server."};
+const now=j=>{$("#cnow").textContent=j.time?"San Francisco time. The panel says "+j.time+".":"Waiting for a time server."};
 const post=b=>fetch("/api/v1/clock",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(b)}).then(r=>r.json());
 let ct;
 const send2=()=>{clearTimeout(ct);ct=setTimeout(()=>post({look:look()}).then(j=>j.look&&now(j)).catch(()=>{}),120)};
 $("#clk").addEventListener("input",()=>{cpaint();send2()});
-$("#clk").addEventListener("submit",e=>e.preventDefault());
-$("#cgo").addEventListener("click",()=>post({dance_now:true}));
-$("#cagain").addEventListener("click",()=>post({play_again:true}));
-$("#cdef").addEventListener("click",()=>{show({look:GB});post({look:GB})});
+$("#cgo").addEventListener("click",()=>post({dance_now:true}).then(()=>msg("Composing")));
+$("#cagain").addEventListener("click",()=>post({play_again:true}).then(()=>msg("Again")));
+$("#cdef").addEventListener("click",()=>{show({look:GB});post({look:GB}).then(()=>msg("Gold and Blue"))});
 fetch("/api/v1/clock").then(r=>r.json()).then(j=>{show(j);now(j)}).catch(()=>{});
 setInterval(()=>fetch("/api/v1/clock").then(r=>r.json()).then(now).catch(()=>{}),5000);
 </script>
