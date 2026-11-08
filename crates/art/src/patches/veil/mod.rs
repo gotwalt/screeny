@@ -1,7 +1,7 @@
 //! Veil: something living inside the frame comes up to the glass. Made for
 //! the 32x32 Art Frame, whose white diffuser is frosted glass: what is
 //! behind it is seen only by its own light, sharp where it touches and soft
-//! and faint further back (`glass.rs`).
+//! and faint further back (`super::glass`).
 //!
 //! What comes is a real hand (`hand.rs`, a skinned model posed by bending
 //! its fingers), always the whole hand, like something living in the box:
@@ -16,16 +16,12 @@
 //! -2..2, which is what the Art Frame shows of the 64x32 frame.
 
 mod clips;
-mod glass;
 mod hand;
 
-use crate::color::{oklch, Rgb};
-use crate::dither::Dither;
-use crate::frame::{self, Frame};
-use crate::palette::Palette;
+use crate::frame::Frame;
 use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
-use glass::Glass;
+use super::glass::{self, Glass};
 use hand::{Model, Pose, Rigid};
 use std::f32::consts::{PI, TAU};
 
@@ -481,23 +477,7 @@ impl Patch for Veil {
         self.glass.shine(glass_at, ctx.get("depth"));
         self.dark = self.glass.dark();
 
-        let colour = oklch(0.97, ctx.get("tint"), ctx.get("hue"));
-        let glow = ctx.get("glow");
-        let glass = &self.glass;
-        // The Art Frame's 32 LEDs span 2.16 units; the frame is 64 wide.
-        let unit = 2.16 / frame::H as f32;
-        let lit = Frame::supersample(ctx.get("samples") as usize, |px, py| {
-            let x = (px - frame::W as f32 / 2.0) * unit;
-            let y = (frame::H as f32 / 2.0 - py) * unit;
-            if x.abs() > 1.15 {
-                return Rgb::BLACK;
-            }
-            let light = glass.at(x, y) * glow;
-            Rgb { r: colour.r * light, g: colour.g * light, b: colour.b * light }
-        });
-        // As many steps as the panel can show, down to just above black, so
-        // the light falls off in a gradient, not a step.
-        Palette::ramps(&[ctx.get("hue")], ctx.get("steps") as usize, (0.1, 0.96), ctx.get("tint")).map(&lit, Dither::BlueNoise, ctx.get("dither"))
+        self.glass.picture(&glass::Look::from(ctx))
     }
 }
 

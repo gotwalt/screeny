@@ -1,9 +1,41 @@
-//! The Art Frame's front as frosted glass: flat, still, and only as clear as
+//! The Art Frame's front as frosted glass (made for veil, shared with dove): flat, still, and only as clear as
 //! the hand is near it. Whatever is behind lights it with its own glow, which
 //! fades and spreads the further back it is: pressed to the glass a sharp
 //! bright print, further back a soft and fainter bloom. The panel's diffuser
 //! is white with the LEDs off, so that light is all there is to see the
 //! hand by.
+
+use crate::color::{oklch, Rgb};
+use crate::dither::Dither;
+use crate::frame::{self, Frame};
+use crate::palette::Palette;
+use crate::patch::Ctx;
+
+/// How the light through the glass is shown: the settings every patch
+/// behind it has under the same names.
+pub struct Look {
+    pub hue: f32,
+    pub tint: f32,
+    pub glow: f32,
+    pub steps: usize,
+    pub dither: f32,
+    pub samples: usize,
+}
+
+impl Look {
+    /// From a patch's settings: `hue`, `tint`, `glow`, `steps`, `dither` and
+    /// `samples`.
+    pub fn from(ctx: &Ctx) -> Look {
+        Look {
+            hue: ctx.get("hue"),
+            tint: ctx.get("tint"),
+            glow: ctx.get("glow"),
+            steps: ctx.get("steps") as usize,
+            dither: ctx.get("dither"),
+            samples: ctx.get("samples") as usize,
+        }
+    }
+}
 
 /// Cells per side, over `-EXTENT..EXTENT` in x and y. The Art Frame's 32
 /// LEDs span 2.16 units, so this is about four cells per LED.
@@ -158,6 +190,25 @@ impl Glass {
     /// Whether no light at all comes through.
     pub fn dark(&self) -> bool {
         self.glow.iter().all(|&g| g <= 0.0)
+    }
+
+    /// The frame: the centre square the Art Frame shows, lit by the glass,
+    /// in as many steps as the panel can show down to just above black, so
+    /// the light falls off in a gradient, not a step.
+    pub fn picture(&self, look: &Look) -> Frame {
+        let colour = oklch(0.97, look.tint, look.hue);
+        // The Art Frame's 32 LEDs span 2.16 units; the frame is 64 wide.
+        let unit = 2.16 / frame::H as f32;
+        let lit = Frame::supersample(look.samples, |px, py| {
+            let x = (px - frame::W as f32 / 2.0) * unit;
+            let y = (frame::H as f32 / 2.0 - py) * unit;
+            if x.abs() > 1.15 {
+                return Rgb::BLACK;
+            }
+            let light = self.at(x, y) * look.glow;
+            Rgb { r: colour.r * light, g: colour.g * light, b: colour.b * light }
+        });
+        Palette::ramps(&[look.hue], look.steps, (0.1, 0.96), look.tint).map(&lit, Dither::BlueNoise, look.dither)
     }
 
     /// The light through the glass at a point in sheet units, bilinear

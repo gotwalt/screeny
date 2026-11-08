@@ -32,6 +32,10 @@ mod overland;
 pub(crate) mod vesta;
 // A hand through a veil, for the 32x32 Art Frame (2026-10-29, an experiment).
 mod veil;
+// A dove behind the same glass (2026-11-07, an experiment).
+mod dove;
+// The Art Frame's frosted front, that veil and dove are seen through.
+mod glass;
 
 /// Card 178 took two out of this list, at the author's word ("let's also kill
 /// the plasma and test card patches - they're not interesting"):
@@ -62,6 +66,7 @@ pub static ALL: &[PatchDef] = &[
     #[cfg(feature = "gpu")]
     physarum::DEF,
     veil::DEF,
+    dove::DEF,
     #[cfg(feature = "gpu")]
     ghosts::DEF,
     #[cfg(feature = "gpu")]
