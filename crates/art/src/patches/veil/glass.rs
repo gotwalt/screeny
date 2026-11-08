@@ -20,6 +20,12 @@ const NOTHING: f32 = -9.0;
 const FADE: f32 = 0.5;
 /// How sharply the light falls as the surface turns away from us.
 const FACING: f32 = 2.0;
+/// How far behind the glass (sheet units, at `depth` 1) the light starts to
+/// give out, and where it has gone entirely: the back of the box is dark, so
+/// a hand drawn back past `GONE` shows nothing at all, where the fade alone
+/// would leave a faint bloom however far it went.
+const FADING: f32 = 0.8;
+pub const GONE: f32 = 1.3;
 const BANDS: [(f32, usize); 5] = [(0.0, 0), (0.12, 2), (0.36, 5), (0.8, 10), (1.6, 18)];
 
 fn cell(v: f32) -> f32 {
@@ -126,8 +132,9 @@ impl Glass {
                 } else {
                     0.0
                 };
-                if w > 0.0 {
-                    self.layer[i] = w * (-gap / FADE).exp() * self.facing[i] * self.light[i];
+                let left = 1.0 - crate::color::smoothstep(FADING, GONE, gap);
+                if w > 0.0 && left > 0.0 {
+                    self.layer[i] = w * left * (-gap / FADE).exp() * self.facing[i] * self.light[i];
                     any = true;
                 }
             }
@@ -146,6 +153,11 @@ impl Glass {
                 self.glow[i] += self.layer[i];
             }
         }
+    }
+
+    /// Whether no light at all comes through.
+    pub fn dark(&self) -> bool {
+        self.glow.iter().all(|&g| g <= 0.0)
     }
 
     /// The light through the glass at a point in sheet units, bilinear

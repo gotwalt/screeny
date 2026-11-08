@@ -56,7 +56,7 @@ const PARAMS: &[ParamSpec] = &[
 ];
 
 fn make(seed: u64) -> Box<dyn Patch> {
-    Box::new(Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None })
+    Box::new(Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None, dark: true })
 }
 
 /// The finger size the choreography's depths and spacings are written for;
@@ -64,10 +64,18 @@ fn make(seed: u64) -> Box<dyn Patch> {
 /// proportion and its neighbour stays a finger's width away.
 const DRAWN_AT: f32 = 0.19;
 
-/// Where the tip is at rest, far back in the box - far enough that its glow
-/// has gone - and we are +z; the hand comes as near as a visit's `near`,
-/// where the diffuser shows it sharpest.
+/// Where the tip is at rest, far back in the box, and we are +z; the hand
+/// comes as near as a visit's `near`, where the diffuser shows it sharpest.
+/// A visit starts and ends further back than this if that is what it takes
+/// for its light to have gone entirely (see `Visit::far`).
 const AWAY: f32 = -1.4;
+
+/// How much further than `glass::GONE` a visit goes, to be sure.
+const BEYOND: f32 = 0.05;
+
+/// How long a visit may wait, after its path is over, for the glass to go
+/// dark (in its own seconds), should `depth` have grown while it was out.
+const DARK_WAIT: f32 = 10.0;
 
 /// Where the first visit's hand starts: near enough to glow faintly.
 const FIRST: f32 = -0.5;
@@ -129,6 +137,9 @@ struct Visit {
     take: usize,
     rate: f32,
     from: f32,
+    /// Where the hand starts and where it goes back to: far enough behind
+    /// the glass that none of its light comes through.
+    far: f32,
 }
 
 /// Builds a path: each step adds a key, `t` seconds after the last.
@@ -173,7 +184,9 @@ impl Path {
 }
 
 impl Visit {
-    fn plan(slot: u64, seed: f32) -> Self {
+    /// `reach` is how far behind the glass (in path z) the hand's light has
+    /// gone entirely, for the size and depth it is drawn at.
+    fn plan(slot: u64, seed: f32, reach: f32) -> Self {
         let mut rng = Rng::new(((seed * 1e9) as u64) ^ slot.wrapping_mul(0x9e37_79b9_7f4a_7c15));
         // The first slot comes soon: whoever starts the patch should see what
         // it is.
@@ -190,8 +203,10 @@ impl Visit {
             take: (rng.u64() % clips::COUNT as u64) as usize,
             rate: rng.range(0.85, 1.0),
             from: rng.range(0.0, 20.0),
+            far: AWAY,
         };
-        v.keys = Self::approach(&mut rng, start, v.near).keys;
+        v.far = (v.near - reach - BEYOND).min(AWAY);
+        v.keys = Self::approach(&mut rng, start, v.near, v.far).keys;
         if slot == 0 {
             // Already faintly there when the patch starts, not far back in
             // the dark.
@@ -200,13 +215,19 @@ impl Visit {
         v
     }
 
-    /// A hand that comes up near, holds, perhaps eases back and comes again,
-    /// and goes.
-    fn approach(rng: &mut Rng, start: f32, near: f32) -> Path {
+    /// A hand that comes up near out of the dark at `far`, holds, perhaps
+    /// eases back and comes again, and always goes the same way: drawn back
+    /// away from us until none of it shows, never fading out in place.
+    fn approach(rng: &mut Rng, start: f32, near: f32, far: f32) -> Path {
         let (x, y) = (rng.range(-0.1, 0.1), rng.range(-0.15, 0.05));
-        let mut p = Path { keys: vec![Key { t: start, x, y, z: AWAY, ease: Ease::Gentle }] };
+        let mut p = Path { keys: vec![Key { t: start, x, y, z: far, ease: Ease::Gentle }] };
         let full = near;
-        p.to(rng.range(4.0, 7.0), x, y, full, Ease::Gentle);
+        // The timings are written for a hand that comes from `AWAY`; from
+        // further back it takes longer, so it moves as fast where it shows -
+        // up to a point: at the deepest depths and smallest sizes it is a
+        // long way back, and moves faster through the dark.
+        let further = ((near - far) / (near - AWAY)).min(1.6);
+        p.to(rng.range(4.0, 7.0) * further, x, y, full, Ease::Gentle);
         p.stay(rng.range(1.5, 3.0));
         if rng.f32() < 0.4 {
             p.to(rng.range(1.5, 2.5), x, y, full - rng.range(0.08, 0.15), Ease::Gentle);
@@ -216,9 +237,9 @@ impl Visit {
         // Snatched back, or sinking slowly away.
         let k = p.last();
         if rng.f32() < 0.4 {
-            p.to(rng.range(0.7, 1.6), k.x, k.y, AWAY - 0.1, Ease::Snatch);
+            p.to(rng.range(0.7, 1.6) * further, k.x, k.y, far, Ease::Snatch);
         } else {
-            p.to(rng.range(2.5, 4.0), k.x, k.y, AWAY - 0.1, Ease::Gentle);
+            p.to(rng.range(2.5, 4.0) * further, k.x, k.y, far, Ease::Gentle);
         }
         p
     }
@@ -304,6 +325,9 @@ struct Veil {
     /// The hand as a body with weight, following its path; `None` between
     /// visits.
     body: Option<Body>,
+    /// Whether the last frame showed nothing of the hand: a visit is over
+    /// only when it has gone entirely.
+    dark: bool,
 }
 
 /// The hand's own motion: where it is and how fast it moves, following the
@@ -383,12 +407,13 @@ impl Patch for Veil {
         let next = match &self.visit {
             // Time went backwards (a restart): begin again.
             Some((_, start, _)) if t < *start => Some(0),
-            Some((n, _, v)) if self.clock >= v.keys.last().unwrap().t + REST + ctx.get("pause") * pace => Some(n + 1),
+            Some((n, _, v)) if self.clock >= v.keys.last().unwrap().t + REST + ctx.get("pause") * pace && (self.dark || self.clock >= v.keys.last().unwrap().t + DARK_WAIT) => Some(n + 1),
             Some(_) => None,
             None => Some(0),
         };
         if let Some(n) = next {
-            self.visit = Some((n, if n == 0 { 0.0 } else { t }, Visit::plan(n, self.seed)));
+            let reach = glass::GONE * ctx.get("depth") * DRAWN_AT / ctx.get("size");
+            self.visit = Some((n, if n == 0 { 0.0 } else { t }, Visit::plan(n, self.seed, reach)));
             self.clock = 0.0;
             // A new visit is a new hand: nothing carries over.
             self.body = None;
@@ -454,6 +479,7 @@ impl Patch for Veil {
             }
         }
         self.glass.shine(glass_at, ctx.get("depth"));
+        self.dark = self.glass.dark();
 
         let colour = oklch(0.97, ctx.get("tint"), ctx.get("hue"));
         let glow = ctx.get("glow");
@@ -484,6 +510,9 @@ mod tests {
         [a[0] / l, a[1] / l, a[2] / l]
     }
 
+    /// How far back the light goes at the default size and depth.
+    const REACH: f32 = glass::GONE * DRAWN_AT / 0.11;
+
     /// Longest a visit should run, and time left after it.
     const VISIT: f32 = 30.0;
     const SETTLE: f32 = 6.0;
@@ -491,23 +520,23 @@ mod tests {
     #[test]
     fn every_visit_is_over_before_its_slot_ends() {
         for slot in 0..500 {
-            let v = Visit::plan(slot, 0.37);
+            let v = Visit::plan(slot, 0.37, REACH);
             let end = v.keys.last().unwrap().t;
             assert!(end + SETTLE <= VISIT, "slot {slot}: ends at {end}");
-            assert!(v.moment(VISIT).is_none_or(|m| m.tip.2 <= AWAY), "slot {slot}: still pressing at the end");
+            assert!(v.moment(VISIT).is_none_or(|m| m.tip.2 <= v.far), "slot {slot}: still pressing at the end");
         }
     }
 
     #[test]
     fn the_first_slot_shows_a_hand_early() {
-        let v = Visit::plan(0, 0.9);
+        let v = Visit::plan(0, 0.9, REACH);
         assert!((1..15).any(|t| v.moment(t as f32).is_some_and(|m| m.tip.2 > 0.2)));
     }
 
     #[test]
     fn visits_move_differently() {
         let shapes: std::collections::HashSet<(usize, u32)> =
-            (1..60).map(|s| Visit::plan(s, 0.5)).map(|v| (v.keys.len(), v.keys.last().unwrap().t as u32)).collect();
+            (1..60).map(|s| Visit::plan(s, 0.5, REACH)).map(|v| (v.keys.len(), v.keys.last().unwrap().t as u32)).collect();
         assert!(shapes.len() >= 10, "only {} different paths", shapes.len());
     }
 
@@ -515,7 +544,7 @@ mod tests {
     fn the_arm_runs_back_into_the_box() {
         let model = Model::get();
         for slot in 0..120 {
-            let v = Visit::plan(slot, 0.61);
+            let v = Visit::plan(slot, 0.61, REACH);
             for i in 0..60 {
                 let Some(mut m) = v.moment(i as f32 * 0.5) else { continue };
                 if i % 2 == 0 {
@@ -541,7 +570,7 @@ mod tests {
         params.set(PARAMS, "samples", 1.0);
         for (seed, speed) in [(3, 1.0), (62, 1.0), (7, 0.6), (62, 0.25), (101, 0.25)] {
             params.set(PARAMS, "speed", speed);
-            let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None };
+            let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None, dark: true };
             let mut last: Option<Vec<[f32; 3]>> = None;
             let mut worst = (0.0f32, 0.0);
             for i in 1..30 * 80 {
@@ -561,6 +590,34 @@ mod tests {
         }
     }
 
+    /// Every visit ends with the hand drawn back until none of it shows: the
+    /// glass is dark before the next visit begins and as it begins, so
+    /// nothing is ever cut off, at any depth or size.
+    #[test]
+    fn every_visit_ends_in_the_dark() {
+        let mut params = crate::patch::Params::defaults(PARAMS);
+        params.set(PARAMS, "samples", 1.0);
+        for (seed, pause, depth, size, speed) in [(5, 2.0, 1.0, 0.11, 0.6), (9, 0.0, 1.0, 0.11, 1.0), (13, 0.0, 3.0, 0.11, 1.0), (21, 0.0, 4.0, 0.05, 1.0), (34, 1.0, 0.1, 0.35, 0.6)] {
+            for (name, v) in [("pause", pause), ("depth", depth), ("size", size), ("speed", speed)] {
+                params.set(PARAMS, name, v);
+            }
+            let mut veil = Veil { seed: Rng::new(seed).f32(), glass: Glass::new(), skinned: Vec::new(), visit: None, clock: 0.0, body: None, dark: true };
+            let (mut was, mut prev, mut changes) = (true, None, 0);
+            for i in 1..30 * 240 {
+                veil.render(&Ctx { t: i as f64 / 30.0, dt: 1.0 / 30.0, now: 0.0, params: &params });
+                let n = veil.visit.as_ref().map(|v| v.0);
+                if prev.is_some() && n != prev {
+                    let what = format!("seed {seed}, depth {depth}, size {size}: visit {prev:?}");
+                    assert!(was, "{what} still showed when the next began");
+                    assert!(veil.dark, "{what}: the next one began already showing");
+                    changes += 1;
+                }
+                (was, prev) = (veil.dark, n);
+            }
+            assert!(changes >= 3, "seed {seed}: only {changes} visits in 4 minutes");
+        }
+    }
+
     fn dist(p: &[f32; 3], q: &[f32; 3]) -> f32 {
         ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
     }
@@ -571,3 +628,4 @@ mod tests {
         v.iter().map(|p| std::array::from_fn(|k| p[k] - c[k])).collect()
     }
 }
+
