@@ -261,7 +261,15 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// when DHCP moves the address without a reboot (card 251, `src/mdns.rs`), and
 /// the panic breadcrumb keeps the message's first line and an exception's
 /// `PC`/`EXCVADDR`, as `last_panic.what` (card 371, `src/panic.rs`).
-pub const FW_VERSION: &str = "0.12.12-clock";
+///
+/// **0.12.0: the clock runs on the panel itself.** A new idle choice, "the
+/// clock": the Studio's twenty-four clocks drawn on the chip, on San Francisco
+/// time from SNTP, with its controls on the device page (art or time mode,
+/// choreography, reduce motion, 24-hour, the look). The page is regrouped into
+/// Display, Clock, Panel and System, and settings apply as they change. Swaps
+/// and flash writes no longer meet, so the panel stops blinking during an
+/// update.
+pub const FW_VERSION: &str = "0.12.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
