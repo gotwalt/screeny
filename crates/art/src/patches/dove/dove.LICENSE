@@ -1,0 +1,9 @@
+dove.glb is "Paloma_animada" by accdecer
+(https://sketchfab.com/3d-models/paloma-animada-5029b4e4f14b43e2a147e168f3b4277d),
+licensed under Creative Commons Attribution 4.0 International (CC BY 4.0,
+https://creativecommons.org/licenses/by/4.0/).
+
+Changed: cut down to its shape - positions, skin weights, indices, skeleton
+and wingbeat animation - by tools/gltf-shape.py; its normals, texture
+coordinates, materials, textures, camera and lights were removed. dove/mod.rs
+levels and centres it when it plays.

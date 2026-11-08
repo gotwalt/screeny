@@ -1,27 +1,30 @@
 //! Dove: a white dove flying behind the Art Frame's frosted glass, after the
 //! dove of the Holy Spirit in church art - upright in the glass, belly to us,
 //! head up, wings beating. It is simply there, as a bird would be: it holds
-//! the way it is turned (three settings turn it) and only its wings and the
-//! lift they give it move.
+//! the way it is turned (three settings turn it) and only its wings move.
+//!
+//! The bird is a modelled and animated dove (`model.rs`): its wingbeat is
+//! the animation's, and a glide holds the wings as they are at the widest
+//! moment of it.
 //!
 //! It is seen as veil's hand is (`super::glass`): by its own light, sharp
 //! only where it is nearest the glass and soft and faint further back, so the
 //! wings come into focus and go out of it as they beat. It sits so that its
 //! nearest wingtip, over a whole beat, just reaches the glass.
 
-mod bird;
+mod model;
 
 use super::glass::{self, Glass};
 use crate::frame::Frame;
 use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
-use bird::{Mesh, Wings};
-use std::f32::consts::TAU;
+use model::Model;
+use std::sync::OnceLock;
 
 pub const DEF: PatchDef = PatchDef {
     id: "dove",
     name: "Dove",
-    blurb: "A white dove behind frosted glass, after the dove of the Holy Spirit: a 3D bird beating its wings, sharp only where it nears the glass. Made for the 32x32 Art Frame.",
+    blurb: "A white dove behind frosted glass, after the dove of the Holy Spirit: an animated 3D dove (\"Paloma animada\" by accdecer, CC BY 4.0) beating its wings, sharp only where it nears the glass. Made for the 32x32 Art Frame.",
     params: PARAMS,
     make,
     // Nothing in it is chosen by the seed that a person would call another
@@ -35,8 +38,8 @@ const PARAMS: &[ParamSpec] = &[
     param("spin", "Spun in the picture (°)", -180.0, 180.0, 1.0, 0.0),
     param("size", "Wingspan, of the frame's width", 0.3, 1.6, 0.01, 0.9),
     param("near", "How far behind the glass it glides", 0.0, 1.5, 0.01, 0.0),
-    param("beat", "Wingbeats a second", 0.1, 4.0, 0.05, 0.7),
-    param("stroke", "How deep the wings beat (°)", 0.0, 80.0, 1.0, 50.0),
+    param("beat", "Wingbeats a second (the model's own is about 1)", 0.1, 3.0, 0.05, 0.7),
+    param("stroke", "How much of the wingbeat it beats (0: held as in a glide)", 0.0, 1.0, 0.01, 1.0),
     param("glide", "Share of the time spent gliding", 0.0, 1.0, 0.01, 0.4),
     param("depth", "How far behind the glass the dove stays clear", 0.1, 4.0, 0.01, 1.0),
     param("glow", "The dove's light through the glass", 0.0, 2.0, 0.01, 1.0),
@@ -54,17 +57,6 @@ fn make(seed: u64) -> Box<dyn Patch> {
 /// The Art Frame's width in sheet units (32 LEDs).
 const FRAME: f32 = 2.16;
 
-/// The wings held out in a glide: raised a little.
-const GLIDE_LIFT: f32 = 0.12;
-
-/// How far the tips trail the stroke, and how far the wings draw in on the
-/// upstroke, at a full beat.
-const BEND: f32 = 0.5;
-const FOLD: f32 = 0.35;
-
-/// How far the body rises and falls with each beat (bird units).
-const BOB: f32 = 0.025;
-
 /// How quickly the wings take up or leave off beating (s).
 const EASE: f32 = 0.5;
 
@@ -74,8 +66,9 @@ const LONGEST_GLIDE: f32 = 30.0;
 struct Dove {
     rng: Rng,
     glass: Glass,
-    mesh: Mesh,
-    /// The mesh's points as placed behind the glass this frame.
+    /// The model's points, as it is posed and then as placed behind the
+    /// glass this frame.
+    skinned: Vec<[f32; 3]>,
     placed: Vec<[f32; 3]>,
     /// Where in a beat the wings are (0..1), how much they beat (0 gliding,
     /// 1 a full beat), whether they are beating, and until when.
@@ -88,14 +81,68 @@ struct Dove {
 
 impl Dove {
     fn new(seed: u64) -> Self {
-        Dove { rng: Rng::new(seed ^ 0xd0e), glass: Glass::new(), mesh: Mesh::default(), placed: Vec::new(), phase: 0.0, amp: 1.0, beating: true, until: 0.0, last: 0.0 }
+        Dove { rng: Rng::new(seed ^ 0xd0e), glass: Glass::new(), skinned: Vec::new(), placed: Vec::new(), phase: 0.0, amp: 1.0, beating: true, until: 0.0, last: 0.0 }
     }
 }
 
-/// The wings at `phase` of a beat `amp` deep.
-fn wings(phase: f32, amp: f32, stroke: f32) -> Wings {
-    let (s, c) = (TAU * phase).sin_cos();
-    Wings { lift: GLIDE_LIFT + amp * stroke * c, bend: amp * BEND * s, fold: amp * FOLD * (-s).max(0.0) }
+/// What the model is like, read off it once: the moment of its wingbeat
+/// when the wings are spread widest, which a glide holds, its span then, and
+/// how to set it straight - the model is a little banked and off centre, so
+/// it is turned until its wingtips are level across it and its tail is
+/// straight behind its head, and centred.
+struct Fit {
+    held: f32,
+    span: f32,
+    centre: [f32; 3],
+    /// The bird's right, forward and up, in the model's axes.
+    axes: [[f32; 3]; 3],
+}
+
+fn fit() -> &'static Fit {
+    static FIT: OnceLock<Fit> = OnceLock::new();
+    FIT.get_or_init(|| {
+        let model = Model::get();
+        let mut points = Vec::new();
+        let widest = |points: &[[f32; 3]]| points.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[0]), hi.max(p[0])));
+        let held = (0..64)
+            .map(|k| k as f32 / 64.0)
+            .max_by(|&a, &b| {
+                let mut span = |at: f32| {
+                    model.skin(&model.pose(at, 0.0, 0.0), &mut points);
+                    let (lo, hi) = widest(&points);
+                    hi - lo
+                };
+                span(a).total_cmp(&span(b))
+            })
+            .unwrap();
+        model.skin(&model.pose(held, 0.0, 0.0), &mut points);
+        // The model's axes: x along the wings (to the bird's left), y up, z
+        // forward. Its wingtips, beak and tail tip set it straight.
+        let most = |k: usize, sign: f32| *points.iter().max_by(|a, b| (a[k] * sign).total_cmp(&(b[k] * sign))).unwrap();
+        let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        let unit = |a: [f32; 3]| {
+            let l = dot(a, a).sqrt();
+            a.map(|x| x / l)
+        };
+        let left = unit(sub(most(0, 1.0), most(0, -1.0)));
+        let ahead = sub(most(2, 1.0), most(2, -1.0));
+        let forward = unit(sub(ahead, left.map(|x| x * dot(ahead, left))));
+        let right = left.map(|x| -x);
+        let up = [right[1] * forward[2] - right[2] * forward[1], right[2] * forward[0] - right[0] * forward[2], right[0] * forward[1] - right[1] * forward[0]];
+        let straight = |p: [f32; 3]| [dot(p, right), dot(p, forward), dot(p, up)];
+        let (lo, hi) = points.iter().map(|&p| straight(p)).fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
+        let centre: [f32; 3] = std::array::from_fn(|k| (lo[k] + hi[k]) / 2.0);
+        Fit { held, span: hi[0] - lo[0], centre, axes: [right, forward, up] }
+    })
+}
+
+impl Fit {
+    /// A point of the model in the bird's axes - x to its right, y forward,
+    /// z up - set straight and centred.
+    fn bird(&self, p: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|k| self.axes[k][0] * p[0] + self.axes[k][1] * p[1] + self.axes[k][2] * p[2] - self.centre[k])
+    }
 }
 
 /// A rotation as its three columns' images: the bird's x, y and z in the
@@ -131,7 +178,6 @@ impl Patch for Dove {
         self.last = ctx.t;
         let dt = (ctx.dt as f32).clamp(0.0, 0.1);
         let (beat, glide) = (ctx.get("beat"), ctx.get("glide"));
-        let stroke = ctx.get("stroke").to_radians();
 
         // Beating for a few beats, then gliding a while, and again.
         if glide <= 0.0 {
@@ -152,22 +198,25 @@ impl Patch for Dove {
         // brings them up to the glass, sharp, and the upstroke takes them
         // back into the blur. (Nothing goes through: what would is held at
         // the glass, as sharp as it gets.)
+        let model = Model::get();
+        let fit = fit();
+        let (held, span) = (fit.held, fit.span);
         let turn = orientation(ctx.get("turn").to_radians(), ctx.get("tip").to_radians(), ctx.get("spin").to_radians());
-        let scale = ctx.get("size") * FRAME / bird::SPAN;
-        bird::build(wings(0.0, 0.0, stroke), &mut self.mesh);
-        let front = self.mesh.points.iter().map(|&p| apply(&turn, p)[2]).fold(f32::MIN, f32::max);
+        let scale = ctx.get("size") * FRAME / span;
+        let to_sheet = |p: [f32; 3]| apply(&turn, fit.bird(p));
+        model.skin(&model.pose(held, held, 1.0), &mut self.skinned);
+        let front = self.skinned.iter().map(|&p| to_sheet(p)[2]).fold(f32::MIN, f32::max);
         let back = -ctx.get("near") - front * scale;
 
-        // Each downstroke lifts it a little towards its back.
-        let lift = BOB * self.amp * (TAU * self.phase).sin();
-        bird::build(wings(self.phase, self.amp, stroke), &mut self.mesh);
+        let hold = 1.0 - self.amp * ctx.get("stroke");
+        model.skin(&model.pose(self.phase, held, hold), &mut self.skinned);
         self.glass.clear();
         self.placed.clear();
-        self.placed.extend(self.mesh.points.iter().map(|&p| {
-            let q = apply(&turn, [p[0], p[1], p[2] + lift]);
+        self.placed.extend(self.skinned.iter().map(|&p| {
+            let q = to_sheet(p);
             [q[0] * scale, q[1] * scale, q[2] * scale + back]
         }));
-        for tri in &self.mesh.triangles {
+        for tri in &model.triangles {
             let [a, b, c] = tri.map(|i| self.placed[i as usize]);
             self.glass.press(a, b, c, [1.0; 3]);
         }
