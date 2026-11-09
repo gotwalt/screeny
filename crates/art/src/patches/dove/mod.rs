@@ -41,7 +41,7 @@ const PARAMS: &[ParamSpec] = &[
     param("beat", "Wingbeats a second (the model's own is about 1)", 0.1, 3.0, 0.05, 0.7),
     param("stroke", "How much of the wingbeat it beats (0: held as in a glide)", 0.0, 1.0, 0.01, 1.0),
     param("glide", "Share of the time spent gliding", 0.0, 1.0, 0.01, 0.4),
-    param("depth", "How far behind the glass the dove stays clear", 0.1, 4.0, 0.01, 1.0),
+    param("depth", "How far behind the glass the dove stays clear", 0.1, 4.0, 0.01, 2.2),
     param("glow", "The dove's light through the glass", 0.0, 2.0, 0.01, 1.0),
     param("hue", "Hue", 0.0, 360.0, 1.0, 60.0),
     param("tint", "Tint (0: white)", 0.0, 0.12, 0.001, 0.0),
