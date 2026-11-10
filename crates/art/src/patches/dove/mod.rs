@@ -3,7 +3,7 @@
 //! head up, wings beating. It is simply there, as a bird would be: it holds
 //! the way it is turned (three settings turn it) and only its wings move.
 //!
-//! The bird is a modelled and animated dove (`model.rs`): its wingbeat is
+//! The bird is a modelled and animated dove (`dove.glb`, see `super::skinned`): its wingbeat is
 //! the animation's, and a glide holds the wings as they are at the widest
 //! moment of it.
 //!
@@ -12,14 +12,19 @@
 //! wings come into focus and go out of it as they beat. It sits so that its
 //! nearest wingtip, over a whole beat, just reaches the glass.
 
-mod model;
-
 use super::glass::{self, Glass};
 use crate::frame::Frame;
 use crate::patch::{param, Ctx, ParamSpec, Patch, PatchDef};
 use crate::rng::Rng;
-use model::Model;
+use super::skinned::Model;
 use std::sync::OnceLock;
+
+/// The dove: "Paloma animada" by accdecer, CC BY 4.0 (see `dove.LICENSE`).
+/// Its one animation is a wingbeat.
+pub(crate) fn model() -> &'static Model {
+    static MODEL: OnceLock<Model> = OnceLock::new();
+    MODEL.get_or_init(|| Model::read(include_bytes!("dove.glb")))
+}
 
 pub const DEF: PatchDef = PatchDef {
     id: "dove",
@@ -101,7 +106,7 @@ struct Fit {
 fn fit() -> &'static Fit {
     static FIT: OnceLock<Fit> = OnceLock::new();
     FIT.get_or_init(|| {
-        let model = Model::get();
+        let model = model();
         let mut points = Vec::new();
         let widest = |points: &[[f32; 3]]| points.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[0]), hi.max(p[0])));
         let held = (0..64)
@@ -198,7 +203,7 @@ impl Patch for Dove {
         // brings them up to the glass, sharp, and the upstroke takes them
         // back into the blur. (Nothing goes through: what would is held at
         // the glass, as sharp as it gets.)
-        let model = Model::get();
+        let model = model();
         let fit = fit();
         let (held, span) = (fit.held, fit.span);
         let turn = orientation(ctx.get("turn").to_radians(), ctx.get("tip").to_radians(), ctx.get("spin").to_radians());

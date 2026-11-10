@@ -64,11 +64,24 @@ def main(src, dst):
             prims.append({"attributes": attrs, "indices": take(p["indices"])})
         meshes.append({"name": m.get("name", ""), "primitives": prims})
     skins = [dict(s, inverseBindMatrices=take(s["inverseBindMatrices"])) for s in g.get("skins", [])]
+    nodes = [{k: v for k, v in n.items() if k not in ("camera", "extensions")} for n in g["nodes"]]
     animations = []
     for a in g.get("animations", []):
-        samplers = [dict(s, input=take(s["input"]), output=take(s["output"])) for s in a["samplers"]]
-        animations.append({"name": a.get("name", ""), "channels": a["channels"], "samplers": samplers})
-    nodes = [{k: v for k, v in n.items() if k not in ("camera", "extensions")} for n in g["nodes"]]
+        # A channel that never changes is no animation: its one value
+        # becomes the node's own.
+        channels, samplers = [], []
+        for c in a["channels"]:
+            s = a["samplers"][c["sampler"]]
+            out = g["accessors"][s["output"]]
+            values = struct.unpack(f"<{out['count'] * WIDTH[out['type']]}f", raw(s["output"]))
+            w = WIDTH[out["type"]]
+            first = values[:w]
+            if all(abs(v - first[k % w]) < 1e-6 for k, v in enumerate(values)) and "matrix" not in nodes[c["target"]["node"]]:
+                nodes[c["target"]["node"]][c["target"]["path"]] = list(first)
+                continue
+            samplers.append(dict(s, input=take(s["input"]), output=take(s["output"])))
+            channels.append({"sampler": len(samplers) - 1, "target": c["target"]})
+        animations.append({"name": a.get("name", ""), "channels": channels, "samplers": samplers})
 
     out = {
         "asset": {"version": "2.0", "generator": "screeny tools/gltf-shape.py"},

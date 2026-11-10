@@ -1,10 +1,9 @@
-//! The dove: a skinned, animated glTF ("Paloma animada" by accdecer, CC BY
-//! 4.0, see `dove.LICENSE`), cut down to its shape by `tools/gltf-shape.py`.
-//! Its one animation is a wingbeat; this plays it, and can hold the wings
-//! still at any moment of it (a glide), blending between the two.
+//! A skinned, animated glTF model, cut down to its shape by
+//! `tools/gltf-shape.py` (the dove's and the goldfish's). It plays the
+//! model's first animation as a loop, and can hold it still at any moment of
+//! it, blending between the two.
 
 use serde_json::Value;
-use std::sync::OnceLock;
 
 pub type V3 = [f32; 3];
 type M4 = [f32; 16];
@@ -33,35 +32,37 @@ struct Channel {
 
 pub struct Model {
     pub positions: Vec<V3>,
-    joints: Vec<[u8; 4]>,
+    /// Each point's mesh, by its index in `meshes`, and the meshes' names.
+    pub part: Vec<u16>,
+    pub meshes: Vec<String>,
+    joints: Vec<[u16; 4]>,
     weights: Vec<[f32; 4]>,
     pub triangles: Vec<[u32; 3]>,
     parent: Vec<Option<usize>>,
     /// Nodes in an order where every parent comes before its children.
     order: Vec<usize>,
     rest: Vec<Trs>,
+    /// Nodes given as a fixed matrix rather than a transform (never animated).
+    fixed: Vec<Option<M4>>,
     skin: Vec<usize>,
     inverse_bind: Vec<M4>,
     channels: Vec<Channel>,
-    /// The wingbeat: when it starts and how long it lasts (s), back round to
+    /// The loop: when it starts and how long it lasts (s), back round to
     /// its start.
     start: f32,
-    pub beat: f32,
+    pub length: f32,
 }
 
 /// Each joint's transform, ready to skin with.
 pub struct Pose(Vec<M4>);
 
 impl Model {
-    pub fn get() -> &'static Model {
-        static MODEL: OnceLock<Model> = OnceLock::new();
-        MODEL.get_or_init(|| Model::read(include_bytes!("dove.glb")))
-    }
-
-    fn read(glb: &[u8]) -> Model {
+    /// Reads a .glb: every primitive of every mesh, all skinned by its one
+    /// skin.
+    pub fn read(glb: &[u8]) -> Model {
         let word = |at: usize| u32::from_le_bytes(glb[at..at + 4].try_into().unwrap()) as usize;
         let json_len = word(12);
-        let json: Value = serde_json::from_slice(&glb[20..20 + json_len]).expect("dove.glb: JSON chunk");
+        let json: Value = serde_json::from_slice(&glb[20..20 + json_len]).expect("glb: JSON chunk");
         let bin = &glb[20 + json_len + 8..];
         let accessor = |i: &Value| -> (&[u8], usize, usize, u64) {
             let a = &json["accessors"][i.as_u64().unwrap() as usize];
@@ -72,39 +73,50 @@ impl Model {
                 "VEC3" => 3,
                 "VEC4" => 4,
                 "MAT4" => 16,
-                t => panic!("dove.glb: accessor type {t}"),
+                t => panic!("glb: accessor type {t}"),
             };
             (&bin[start..], a["count"].as_u64().unwrap() as usize, width, a["componentType"].as_u64().unwrap())
         };
         let floats = |i: &Value| -> Vec<f32> {
             let (b, n, w, kind) = accessor(i);
-            assert_eq!(kind, 5126, "dove.glb: floats");
+            assert_eq!(kind, 5126, "glb: floats");
             (0..n * w).map(|k| f32::from_le_bytes(b[k * 4..k * 4 + 4].try_into().unwrap())).collect()
         };
-        let prim = &json["meshes"][0]["primitives"][0];
-        let positions: Vec<V3> = floats(&prim["attributes"]["POSITION"]).chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
-        let weights = floats(&prim["attributes"]["WEIGHTS_0"]).chunks(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
-        let (jb, jn, _, kind) = accessor(&prim["attributes"]["JOINTS_0"]);
-        assert_eq!(kind, 5121, "dove.glb: joints as bytes");
-        let joints = (0..jn).map(|k| [jb[k * 4], jb[k * 4 + 1], jb[k * 4 + 2], jb[k * 4 + 3]]).collect();
-        let (ib, n, _, kind) = accessor(&prim["indices"]);
-        let index = |k: usize| match kind {
-            5123 => u16::from_le_bytes([ib[k * 2], ib[k * 2 + 1]]) as u32,
-            5125 => u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()),
-            _ => panic!("dove.glb: indices"),
-        };
-        let triangles = (0..n / 3).map(|t| [index(t * 3), index(t * 3 + 1), index(t * 3 + 2)]).collect();
+        let (mut positions, mut joints, mut weights, mut triangles, mut part, mut meshes) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for (m, mesh) in json["meshes"].as_array().unwrap().iter().enumerate() {
+            meshes.push(mesh["name"].as_str().unwrap_or("").to_string());
+            for prim in mesh["primitives"].as_array().unwrap() {
+                let base = positions.len() as u32;
+                positions.extend(floats(&prim["attributes"]["POSITION"]).chunks(3).map(|c| [c[0], c[1], c[2]]));
+                part.resize(positions.len(), m as u16);
+                weights.extend(floats(&prim["attributes"]["WEIGHTS_0"]).chunks(4).map(|c| [c[0], c[1], c[2], c[3]]));
+                let (jb, jn, _, kind) = accessor(&prim["attributes"]["JOINTS_0"]);
+                joints.extend((0..jn * 4).map(|k| match kind {
+                    5121 => jb[k] as u16,
+                    5123 => u16::from_le_bytes([jb[k * 2], jb[k * 2 + 1]]),
+                    _ => panic!("glb: joints"),
+                }).collect::<Vec<_>>().chunks(4).map(|c| [c[0], c[1], c[2], c[3]]));
+                let (ib, n, _, kind) = accessor(&prim["indices"]);
+                let index = |k: usize| match kind {
+                    5121 => ib[k] as u32,
+                    5123 => u16::from_le_bytes([ib[k * 2], ib[k * 2 + 1]]) as u32,
+                    5125 => u32::from_le_bytes(ib[k * 4..k * 4 + 4].try_into().unwrap()),
+                    _ => panic!("glb: indices"),
+                };
+                triangles.extend((0..n / 3).map(|t| [base + index(t * 3), base + index(t * 3 + 1), base + index(t * 3 + 2)]));
+            }
+        }
 
         let nodes = json["nodes"].as_array().unwrap();
         let vec = |v: &Value, d: &[f32]| -> Vec<f32> { v.as_array().map_or(d.to_vec(), |a| a.iter().map(|x| x.as_f64().unwrap() as f32).collect()) };
         let rest = nodes
             .iter()
             .map(|n| {
-                assert!(n.get("matrix").is_none(), "dove.glb: a node with a matrix");
                 let (t, r, s) = (vec(&n["translation"], &[0.0; 3]), vec(&n["rotation"], &[0.0, 0.0, 0.0, 1.0]), vec(&n["scale"], &[1.0; 3]));
                 Trs { t: [t[0], t[1], t[2]], r: [r[0], r[1], r[2], r[3]], s: [s[0], s[1], s[2]] }
             })
             .collect();
+        let fixed = nodes.iter().map(|n| n.get("matrix").map(|m| vec(m, &[]).try_into().expect("glb: a 4x4 matrix"))).collect();
         let mut parent = vec![None; nodes.len()];
         for (i, n) in nodes.iter().enumerate() {
             for c in n["children"].as_array().into_iter().flatten() {
@@ -129,12 +141,12 @@ impl Model {
         let mut channels = Vec::new();
         for c in anim["channels"].as_array().unwrap() {
             let sampler = &anim["samplers"][c["sampler"].as_u64().unwrap() as usize];
-            assert_eq!(sampler["interpolation"].as_str().unwrap_or("LINEAR"), "LINEAR", "dove.glb: only linear keys");
+            assert_eq!(sampler["interpolation"].as_str().unwrap_or("LINEAR"), "LINEAR", "glb: only linear keys");
             let path = match c["target"]["path"].as_str().unwrap() {
                 "translation" => Path::T,
                 "rotation" => Path::R,
                 "scale" => Path::S,
-                p => panic!("dove.glb: animates {p}"),
+                p => panic!("glb: animates {p}"),
             };
             let width = if matches!(path, Path::R) { 4 } else { 3 };
             let values = floats(&sampler["output"]).chunks(width).map(|v| std::array::from_fn(|k| v.get(k).copied().unwrap_or(0.0))).collect();
@@ -143,19 +155,19 @@ impl Model {
         let start = channels.iter().map(|c| c.times[0]).fold(f32::MAX, f32::min);
         let end = channels.iter().map(|c| *c.times.last().unwrap()).fold(f32::MIN, f32::max);
         // The loop's last key runs back into its first a key's time later.
-        let key = channels[0].times[1] - channels[0].times[0];
-        Model { positions, joints, weights, triangles, parent, order, rest, skin, inverse_bind, channels, start, beat: end - start + key }
+        let key = channels.iter().filter(|c| c.times.len() > 1).map(|c| c.times[1] - c.times[0]).fold(f32::MAX, f32::min);
+        Model { positions, part, meshes, joints, weights, triangles, parent, order, rest, fixed, skin, inverse_bind, channels, start, length: end - start + key }
     }
 
-    /// Every node's own transform at `at` (0..1) of the wingbeat.
+    /// Every node's own transform at `at` (0..1) of the loop.
     fn local(&self, at: f32) -> Vec<Trs> {
-        let time = self.start + at.rem_euclid(1.0) * self.beat;
+        let time = self.start + at.rem_euclid(1.0) * self.length;
         let mut out = self.rest.clone();
         for c in &self.channels {
             let n = c.times.len();
             // After its last key the loop runs back into its first.
             let (a, b, u) = if time >= c.times[n - 1] {
-                let u = (time - c.times[n - 1]) / (self.start + self.beat - c.times[n - 1]).max(1e-6);
+                let u = (time - c.times[n - 1]) / (self.start + self.length - c.times[n - 1]).max(1e-6);
                 (c.values[n - 1], c.values[0], u.clamp(0.0, 1.0))
             } else {
                 let k = c.times.partition_point(|&x| x <= time).clamp(1, n - 1);
@@ -172,8 +184,8 @@ impl Model {
         out
     }
 
-    /// The joints at `at` of the wingbeat, held `hold` of the way (0..1)
-    /// towards the wings as they are at `held`.
+    /// The joints at `at` (0..1) of the loop, held `hold` of the way (0..1)
+    /// towards the pose at `held`.
     pub fn pose(&self, at: f32, held: f32, hold: f32) -> Pose {
         let mut local = self.local(at);
         if hold > 0.0 {
@@ -184,7 +196,7 @@ impl Model {
         }
         let mut global = vec![IDENTITY; local.len()];
         for &i in &self.order {
-            let own = trs(&local[i]);
+            let own = self.fixed[i].unwrap_or_else(|| trs(&local[i]));
             global[i] = match self.parent[i] {
                 Some(p) => mul(&global[p], &own),
                 None => own,
@@ -270,11 +282,11 @@ mod tests {
         a.iter().zip(b).map(|(p, q)| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()).fold(0.0, f32::max)
     }
 
-    /// The wingbeat loops: its end runs into its start no more suddenly
-    /// than any other step of it.
+    /// The dove's wingbeat loops: its end runs into its start no more
+    /// suddenly than any other step of it.
     #[test]
     fn the_wingbeat_loops_without_a_jump() {
-        let m = Model::get();
+        let m = crate::patches::dove::model();
         let (mut a, mut b) = (Vec::new(), Vec::new());
         let step = 1.0 / 60.0;
         let mut worst_step = 0.0f32;

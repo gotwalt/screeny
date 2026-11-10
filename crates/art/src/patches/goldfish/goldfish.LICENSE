@@ -1,0 +1,12 @@
+comet.glb is "Comet goldfish" by somitsu
+(https://sketchfab.com/3d-models/comet-goldfish-5adcbf784df540a0b46dae8950bd3ec6),
+and ryukin.glb is "Ryukin goldfish" by somitsu
+(https://sketchfab.com/3d-models/ryukin-goldfish-df9a7c57c2b34d5a818f360e679b576a),
+both licensed under Creative Commons Attribution 4.0 International (CC BY 4.0,
+https://creativecommons.org/licenses/by/4.0/).
+
+Changed: cut down to their shape - positions, skin weights, indices, skeleton
+and swimming animation - by tools/gltf-shape.py; their normals, texture
+coordinates, materials and textures were removed, and animation channels
+that never change were folded into the skeleton. goldfish/mod.rs centres
+them and moves them about a tank.
