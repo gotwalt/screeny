@@ -35,6 +35,7 @@ const PARAMS: &[ParamSpec] = &[
     choice("kind", "Fish", KINDS, 2.0),
     param("count", "How many fish", 1.0, 8.0, 1.0, 3.0),
     param("agitation", "How restless they are", 0.0, 1.0, 0.01, 0.3),
+    param("tempo", "How fast time runs in the tank (1: as it is, less: slow motion)", 0.2, 1.5, 0.01, 0.6),
     param("size", "A fish's length, of the frame's width", 0.2, 1.2, 0.01, 0.7),
     param("tank", "The tank's width, in frames", 1.0, 5.0, 0.1, 2.5),
     param("deep", "How far back the tank goes (1: as far as the glass shows)", 0.3, 1.5, 0.01, 1.0),
@@ -112,6 +113,11 @@ fn unit(a: V3) -> V3 {
 /// The steepest a fish climbs or dives (radians).
 const MOST_PITCH: f32 = 0.4;
 
+/// The longest step the water is worked out in (seconds of tank time): a
+/// frame is cut into as many of these as it takes, so the swimming is the
+/// same at any frame rate and the contacts never overshoot.
+const STEP: f32 = 1.0 / 120.0;
+
 /// A heading's angle about the up-down axis (from +x towards +z) and up or
 /// down.
 fn angles(h: V3) -> (f32, f32) {
@@ -123,16 +129,55 @@ fn heading(yaw: f32, pitch: f32) -> V3 {
     [yaw.cos() * cp, sp, yaw.sin() * cp]
 }
 
+/// The nearest points of segments `a0..a1` and `b0..b1`, as how far along
+/// each (0..1).
+fn nearest(a0: V3, a1: V3, b0: V3, b1: V3) -> (f32, f32) {
+    let (d1, d2, r) = (sub(a1, a0), sub(b1, b0), sub(a0, b0));
+    let (a, e, f) = (dot(d1, d1), dot(d2, d2), dot(d2, r));
+    let (c, b) = (dot(d1, r), dot(d1, d2));
+    let denom = a * e - b * b;
+    let mut s = if denom > 1e-9 { ((b * f - c * e) / denom).clamp(0.0, 1.0) } else { 0.0 };
+    let mut t = (b * s + f) / e.max(1e-9);
+    if t < 0.0 {
+        t = 0.0;
+        s = (-c / a.max(1e-9)).clamp(0.0, 1.0);
+    } else if t > 1.0 {
+        t = 1.0;
+        s = ((b - c) / a.max(1e-9)).clamp(0.0, 1.0);
+    }
+    (s, t)
+}
+
+/// The turn about the up-down axis that a push `force` at `lever` from a
+/// fish's middle gives it (towards larger yaw), for a fish `long` long: a
+/// fish is a rod, hardest to turn about its middle.
+fn twist(lever: V3, force: V3, long: f32) -> f32 {
+    // Yaw grows from +x towards +z, which is a turn about -y.
+    -0.3 * (lever[2] * force[0] - lever[0] * force[2]) / (long * long / 12.0)
+}
+
 struct Fish {
     kind: usize,
     /// Its own size and pace, a little either side of the setting's.
     size: f32,
     pace: f32,
-    /// Where its middle is, which way it heads (a unit vector) and how fast
-    /// (sheet units a second).
+    /// Where its middle is and how it is moving (sheet units a second).
     at: V3,
-    heading: V3,
-    speed: f32,
+    vel: V3,
+    /// Which way it faces - about the up-down axis, and up or down - and how
+    /// fast each is changing (radians a second). It turns as a body in water
+    /// does: gathering its turn and easing out of it, never snapping.
+    yaw: f32,
+    pitch: f32,
+    spin: f32,
+    climb: f32,
+    /// What it is turning towards this frame, and how fast it is swimming
+    /// for (sheet units a second).
+    aim_yaw: f32,
+    aim_pitch: f32,
+    aim_speed: f32,
+    /// The aim as it turns towards it, eased: a new wish comes on gradually.
+    toward: f32,
     /// Where it would like to go, how fast (a share of its cruising
     /// speed), and until when it keeps that wish.
     goal: V3,
@@ -148,6 +193,12 @@ struct Fish {
     leaving: bool,
 }
 
+impl Fish {
+    fn heading(&self) -> V3 {
+        heading(self.yaw, self.pitch)
+    }
+}
+
 struct Tank {
     rng: Rng,
     glass: Glass,
@@ -155,6 +206,8 @@ struct Tank {
     skinned: Vec<V3>,
     /// The points pressed against the glass this frame, every fish's.
     placed: Vec<V3>,
+    /// The tank's own time, which runs at `tempo`.
+    clock: f32,
     last: f64,
     started: bool,
 }
@@ -176,7 +229,7 @@ impl Bounds {
 
 impl Tank {
     fn new(seed: u64) -> Self {
-        Tank { rng: Rng::new(seed ^ 0x901d), glass: Glass::new(), fish: Vec::new(), skinned: Vec::new(), placed: Vec::new(), last: 0.0, started: false }
+        Tank { rng: Rng::new(seed ^ 0x901d), glass: Glass::new(), fish: Vec::new(), skinned: Vec::new(), placed: Vec::new(), clock: 0.0, last: 0.0, started: false }
     }
 
     /// A new fish: anywhere in the tank at the start, and from the dark at
@@ -184,16 +237,34 @@ impl Tank {
     fn spawn(&mut self, n: usize, kind: usize, tank: &Bounds, length: f32) -> Fish {
         let r = &mut self.rng;
         let kind = if kind == 2 { n % 2 } else { kind };
-        let z = if self.started { -tank.back - length } else { -r.range(0.15, 0.8) * tank.back };
+        // Clear of the others: the best of a few places.
+        let mut at = [0.0; 3];
+        let mut best = f32::MIN;
+        for _ in 0..24 {
+            let z = if self.started { -tank.back - length } else { -r.range(0.15, 0.8) * tank.back };
+            let place = [r.range(-1.0, 1.0) * tank.wide * 0.8, r.range(-1.0, 1.0) * tank.tall * 0.7, z];
+            let room = self.fish.iter().map(|f| dot(sub(f.at, place), sub(f.at, place))).fold(f32::MAX, f32::min);
+            if room > best {
+                (best, at) = (room, place);
+            }
+        }
+        let z = at[2];
         let angle = r.range(0.0, TAU);
-        let heading = unit([angle.cos(), r.range(-0.2, 0.2), 0.5 * angle.sin()]);
+        let (yaw, pitch) = angles(unit([angle.cos(), r.range(-0.2, 0.2), 0.5 * angle.sin()]));
         Fish {
             kind,
             size: r.range(0.8, 1.15),
             pace: r.range(0.85, 1.15),
-            at: [r.range(-1.0, 1.0) * tank.wide * 0.8, r.range(-1.0, 1.0) * tank.tall * 0.7, z],
-            heading,
-            speed: 0.0,
+            at,
+            vel: [0.0; 3],
+            yaw,
+            pitch,
+            spin: 0.0,
+            climb: 0.0,
+            aim_yaw: yaw,
+            aim_pitch: pitch,
+            aim_speed: 0.0,
+            toward: yaw,
             goal: [0.0, 0.0, z],
             eager: 1.0,
             until: 0.0,
@@ -203,26 +274,244 @@ impl Tank {
             leaving: false,
         }
     }
-}
 
-impl Tank {
     /// How far in front of its middle a fish of length `long` and `flank`
     /// heading this way reaches towards the glass: its nose, or its side.
     fn reach(long: f32, flank: f32, heading: V3) -> f32 {
         long * (0.5 * heading[2].max(0.0) + flank)
     }
+
+    /// Each fish decides, once a frame, where it is going and how fast: a
+    /// wish, which the water then makes into motion (`flow`).
+    fn decide(&mut self, tank: &Bounds, length: f32, agitation: f32) {
+        let t = self.clock;
+        let cruise = length * (0.05 + 0.35 * agitation);
+        // Where each will be a little from now, to steer clear of it early.
+        let others: Vec<(V3, V3)> = self.fish.iter().map(|f| (f.at, f.vel)).collect();
+        for (i, f) in self.fish.iter_mut().enumerate() {
+            let long = length * f.size;
+            let flank = kinds()[f.kind].flank;
+            let there = sub(f.goal, f.at);
+            if t >= f.until || dot(there, there) < (0.6 * long).powi(2) {
+                let r = &mut self.rng;
+                // Somewhere in the tank, more often near the glass than far
+                // back: a goldfish comes up to look out.
+                let far = r.f32().powi(5);
+                let front = Self::reach(long, flank, [1.0, 0.0, 0.0]) + 0.05 * long;
+                // Well off to one side, so it swims mostly along the glass,
+                // as goldfish in a tank do: in and out only on the way.
+                let (wide, tall) = (tank.wide - (0.6 * long).min(0.4 * tank.wide), tank.tall - (0.4 * long).min(0.4 * tank.tall));
+                let x = (f.at[0] + r.sign() * r.range(1.0, 2.5) * long).clamp(-wide, wide);
+                f.goal = [x, r.range(-1.0, 1.0) * tall, -front - far * (tank.back - front).max(0.0)];
+                // Mostly cruising; calm fish now and then hang nearly still,
+                // restless ones now and then dart.
+                let roll = r.f32();
+                f.eager = if roll < 0.15 * (1.0 - agitation) {
+                    0.1
+                } else if roll > 1.0 - 0.2 * agitation {
+                    2.5
+                } else {
+                    r.range(0.7, 1.2)
+                };
+                let calm = if f.eager > 2.0 { 1.2 } else { r.range(5.0, 12.0) * (1.0 - 0.6 * agitation) };
+                f.until = t + calm;
+            }
+            // Away from the walls, the glass and the others, more strongly
+            // the nearer it will be in a moment.
+            let ahead = add(f.at, scale(f.vel, 1.5));
+            let mut want = unit(sub(f.goal, f.at));
+            let push = |d: f32, margin: f32| ((margin - d) / margin).max(0.0).powi(2) * 4.0;
+            let (side, top) = ((0.8 * long).min(0.4 * tank.wide), (0.5 * long).min(0.4 * tank.tall));
+            want[0] += push(tank.wide - ahead[0], side) * -1.0 + push(ahead[0] + tank.wide, side);
+            want[1] += push(tank.tall - ahead[1], top) * -1.0 + push(ahead[1] + tank.tall, top);
+            // The glass only turns it once it is nearly there: it may swim
+            // right up to it.
+            let reach = Self::reach(long, flank, f.heading());
+            let close = long * 0.35;
+            let glass = ((close - (-ahead[2] - reach)) / close).max(0.0).powi(2) * 4.0;
+            want[2] += -glass + if f.leaving { 0.0 } else { push(ahead[2] + tank.back, long * 0.6) };
+            // The others: where each pair will be nearest, over the next
+            // couple of seconds, and how near that is.
+            for (j, &(o, ov)) in others.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                let (dp, dv) = (sub(f.at, o), sub(f.vel, ov));
+                let when = (-dot(dp, dv) / dot(dv, dv).max(1e-9)).clamp(0.0, 2.5);
+                let apart = add(dp, scale(dv, when));
+                let d = dot(apart, apart).sqrt();
+                let room = long * 1.4;
+                if d < room {
+                    let away = if d > 1e-4 { unit(apart) } else { [1.0, 0.0, 0.0] };
+                    want = add(want, scale(away, 1.8 * (1.0 - d / room) * (1.0 - when / 4.0)));
+                }
+            }
+            if f.leaving {
+                want = [want[0] * 0.3, want[1] * 0.3, -1.0];
+            }
+            // It turns towards its wish, about the up-down axis and, less,
+            // up or down - never steeply: a fish swims level.
+            let (want_yaw, want_pitch) = angles(unit(want));
+            // Turning right round, it keeps on the way it began, rather
+            // than dithering between the two.
+            let mut turn = (want_yaw - f.yaw + PI).rem_euclid(TAU) - PI;
+            if turn.abs() > 0.8 * PI && f.turned != 0.0 {
+                turn = turn.abs() * f.turned.signum();
+            }
+            f.turned = turn;
+            f.aim_yaw = f.yaw + turn;
+            f.aim_pitch = want_pitch.clamp(-MOST_PITCH, MOST_PITCH);
+            f.aim_speed = cruise * f.pace * f.size * if f.leaving { 1.0 } else { f.eager };
+        }
+    }
+
+    /// The water, for `dt` seconds: each fish is a body in it, driven by its
+    /// tail along the way it faces, slowed by the water - little along its
+    /// length, much across it, so it goes where it faces and glides on when
+    /// it stops beating - carried a little by the water the others stir,
+    /// and pushed off the others, the walls and the glass where it touches
+    /// them, which turns it as well as moving it.
+    fn flow(&mut self, dt: f32, tank: &Bounds, length: f32, agitation: f32) {
+        let n = self.fish.len();
+        // How quickly a fish gathers speed and loses it, and its turning: a
+        // calm fish leans into a turn over seconds.
+        let gather = 1.0 / (2.5 - 1.5 * agitation);
+        let across = 4.0;
+        let ease = 0.55 + 0.9 * agitation;
+        let most_spin = 0.3 + 1.2 * agitation;
+        let most_gather = 0.3 + 1.5 * agitation;
+        let mut push = vec![[0.0f32; 3]; n];
+        let mut turn = vec![0.0f32; n];
+        let mut water = vec![[0.0f32; 3]; n];
+        let steps = (dt / STEP).ceil().max(1.0) as usize;
+        let h = dt / steps as f32;
+        for _ in 0..steps {
+            // Each fish as a capsule: a rod down its body, as thick as it.
+            let bodies: Vec<(V3, V3, f32, f32)> = self
+                .fish
+                .iter()
+                .map(|f| {
+                    let long = length * f.size;
+                    let half = scale(f.heading(), 0.38 * long);
+                    let r = long * kinds()[f.kind].flank.max(0.12);
+                    (sub(f.at, half), add(f.at, half), r, long)
+                })
+                .collect();
+            push.iter_mut().for_each(|p| *p = [0.0; 3]);
+            turn.iter_mut().for_each(|t| *t = 0.0);
+            water.iter_mut().for_each(|w| *w = [0.0; 3]);
+            for i in 0..n {
+                for j in 0..n {
+                    if i == j {
+                        continue;
+                    }
+                    // The water a fish stirs: drawn along behind and beside
+                    // it, and pushed aside ahead of it.
+                    let (o, d) = (&self.fish[j], sub(self.fish[i].at, self.fish[j].at));
+                    let reach = 0.8 * bodies[j].3;
+                    let w = (-dot(d, d) / (reach * reach)).exp();
+                    if w > 1e-3 {
+                        let speed = dot(o.vel, o.vel).sqrt();
+                        let ahead = dot(unit(d), unit(o.vel)).max(0.0);
+                        water[i] = add(water[i], add(scale(o.vel, 0.35 * w), scale(unit(d), 0.3 * speed * ahead * w)));
+                    }
+                }
+                for j in i + 1..n {
+                    let ((a0, a1, ra, la), (b0, b1, rb, lb)) = (bodies[i], bodies[j]);
+                    let (s, t) = nearest(a0, a1, b0, b1);
+                    let (ca, cb) = (add(a0, scale(sub(a1, a0), s)), add(b0, scale(sub(b1, b0), t)));
+                    let gap = sub(ca, cb);
+                    let d = dot(gap, gap).sqrt();
+                    // A soft cushion of water between them, then their
+                    // bodies: a gentle nudge first, firmer the more they
+                    // touch.
+                    let room = ra + rb + 0.1 * (la + lb);
+                    if d < room {
+                        let normal = if d > 1e-5 { scale(gap, 1.0 / d) } else { [0.0, 1.0, 0.0] };
+                        let deep = (room - d) / room;
+                        let closing = dot(sub(self.fish[i].vel, self.fish[j].vel), normal);
+                        let f = ((10.0 + 120.0 * deep * deep) * (room - d) - 8.0 * closing).max(0.0);
+                        let force = scale(normal, f);
+                        push[i] = add(push[i], force);
+                        push[j] = sub(push[j], force);
+                        turn[i] += twist(sub(ca, self.fish[i].at), force, la);
+                        turn[j] += twist(sub(cb, self.fish[j].at), scale(force, -1.0), lb);
+                    }
+                }
+                // The walls, the floor, the back and the glass, at each end
+                // of it: firm at the glass, which it may not pass, and
+                // softer elsewhere.
+                let (a0, a1, r, long) = bodies[i];
+                let f = &self.fish[i];
+                for end in [a0, a1] {
+                    let mut walls = vec![(-end[2], [0.0, 0.0, -1.0], 60.0), (tank.wide - end[0], [-1.0, 0.0, 0.0], 15.0), (end[0] + tank.wide, [1.0, 0.0, 0.0], 15.0), (tank.tall - end[1], [0.0, -1.0, 0.0], 15.0), (end[1] + tank.tall, [0.0, 1.0, 0.0], 15.0)];
+                    if !f.leaving {
+                        walls.push((end[2] + tank.back + long, [0.0, 0.0, 1.0], 15.0));
+                    }
+                    for (d, normal, firm) in walls {
+                        if d < r {
+                            let closing = dot(f.vel, normal);
+                            let force = scale(normal, (firm * (r - d) - 4.0 * closing.min(0.0)).max(0.0));
+                            push[i] = add(push[i], force);
+                            turn[i] += twist(sub(end, f.at), force, long);
+                        }
+                    }
+                }
+            }
+            for (i, f) in self.fish.iter_mut().enumerate() {
+                let forward = f.heading();
+                let moving = sub(f.vel, water[i]);
+                let along = dot(moving, forward);
+                let slip = sub(moving, scale(forward, along));
+                let gather = gather * f.pace;
+                let thrust = gather * f.aim_speed;
+                let accel = add(add(scale(forward, thrust - gather * along), scale(slip, -across)), push[i]);
+                f.vel = add(f.vel, scale(accel, h));
+                f.at = add(f.at, scale(f.vel, h));
+                // Turning: eased in and out, like a spring just stiff
+                // enough not to overshoot, and never faster than a fish
+                // of its temper turns.
+                let ease = ease * f.pace;
+                f.toward += (f.aim_yaw - f.toward) * (1.0 - (-h * ease).exp());
+                let gathering = (ease * ease * (f.toward - f.yaw) - 2.0 * ease * f.spin).clamp(-most_gather, most_gather);
+                f.spin += (gathering + turn[i]) * h;
+                f.spin = f.spin.clamp(-most_spin * 1.5, most_spin * 1.5);
+                f.yaw += f.spin * h;
+                let rise = 0.7 * ease;
+                f.climb += (rise * rise * (f.aim_pitch - f.pitch) - 2.0 * rise * f.climb) * h;
+                f.pitch = (f.pitch + f.climb * h).clamp(-MOST_PITCH, MOST_PITCH);
+                // Nothing goes far past a wall, whatever the push.
+                let long = length * f.size;
+                f.at[0] = f.at[0].clamp(-tank.wide - long * 0.3, tank.wide + long * 0.3);
+                f.at[1] = f.at[1].clamp(-tank.tall - long * 0.1, tank.tall + long * 0.1);
+            }
+        }
+        for f in &mut self.fish {
+            // Leaning into a turn: the faster it turns and swims, the more.
+            let long = length * f.size;
+            let speed = dot(f.vel, f.heading()).max(0.0) / long;
+            let lean = (-f.spin * (0.4 + 2.0 * speed)).clamp(-0.5, 0.5);
+            f.roll += (lean - f.roll) * (1.0 - (-dt / 0.8).exp());
+            // Its tail beats faster the faster it swims, and as it turns.
+            let model = &kinds()[f.kind].model;
+            let work = (f.aim_speed / long).max(speed) / 0.3;
+            let rate = 0.4 + 1.4 * work.min(1.6) + 0.5 * f.spin.abs().min(1.0);
+            f.phase = (f.phase + rate * dt / model.length).fract();
+        }
+    }
 }
 
 impl Patch for Tank {
     fn render(&mut self, ctx: &Ctx) -> Frame {
-        let t = ctx.t as f32;
         if ctx.t < self.last {
             // Time went backwards (a restart): begin again.
             self.fish.clear();
             self.started = false;
         }
         self.last = ctx.t;
-        let dt = (ctx.dt as f32).clamp(0.0, 0.1);
+        let real = (ctx.dt as f32).clamp(0.0, 0.1);
+        let dt = real * ctx.get("tempo");
+        self.clock += dt;
         let tank = Bounds::of(ctx);
         let length = ctx.get("size") * FRAME;
         let agitation = ctx.get("agitation");
@@ -242,96 +531,8 @@ impl Patch for Tank {
         self.started = true;
         self.fish.retain(|f| !(f.leaving && f.at[2] < -tank.back - length));
 
-        // How they swim: cruising faster, turning harder and changing their
-        // minds more often the more agitated they are.
-        let cruise = length * (0.06 + 0.45 * agitation);
-        let turning = 0.5 + 2.0 * agitation;
-        let others: Vec<V3> = self.fish.iter().map(|f| f.at).collect();
-        for (i, f) in self.fish.iter_mut().enumerate() {
-            let long = length * f.size;
-            let there = sub(f.goal, f.at);
-            if t >= f.until || dot(there, there) < (0.4 * long).powi(2) {
-                let r = &mut self.rng;
-                // Somewhere in the tank, more often near the glass than far
-                // back: a goldfish comes up to look out.
-                let far = r.f32().powi(5);
-                let front = Self::reach(long, kinds()[f.kind].flank, [1.0, 0.0, 0.0]);
-                // Well off to one side, so it swims mostly along the glass,
-                // as goldfish in a tank do: in and out only on the way.
-                let (wide, tall) = (tank.wide - (0.6 * long).min(0.4 * tank.wide), tank.tall - (0.4 * long).min(0.4 * tank.tall));
-                let x = (f.at[0] + r.sign() * r.range(1.0, 2.5) * long).clamp(-wide, wide);
-                f.goal = [x, r.range(-1.0, 1.0) * tall, -front - far * (tank.back - front).max(0.0)];
-                // Mostly cruising; calm fish now and then hang nearly still,
-                // restless ones now and then dart.
-                let roll = r.f32();
-                f.eager = if roll < 0.15 * (1.0 - agitation) {
-                    0.1
-                } else if roll > 1.0 - 0.2 * agitation {
-                    2.5
-                } else {
-                    r.range(0.7, 1.2)
-                };
-                let calm = if f.eager > 2.0 { 0.8 } else { r.range(3.0, 9.0) * (1.0 - 0.6 * agitation) };
-                f.until = t + calm;
-            }
-            // Away from the walls, the glass and the others, more strongly
-            // the nearer they are.
-            let mut want = unit(sub(f.goal, f.at));
-            let push = |d: f32, margin: f32| ((margin - d) / margin).max(0.0).powi(2) * 6.0;
-            let (side, top) = ((0.6 * long).min(0.4 * tank.wide), (0.4 * long).min(0.4 * tank.tall));
-            // How far its nose reaches towards the glass.
-            let reach = Self::reach(long, kinds()[f.kind].flank, f.heading);
-            want[0] += push(tank.wide - f.at[0], side) * -1.0 + push(f.at[0] + tank.wide, side);
-            want[1] += push(tank.tall - f.at[1], top) * -1.0 + push(f.at[1] + tank.tall, top);
-            // The glass only turns it once it is nearly there: it may swim
-            // right up to it.
-            let close = long * 0.25;
-            let glass = ((close - (-f.at[2] - reach)) / close).max(0.0).powi(2) * 6.0;
-            want[2] += -glass + push(f.at[2] + tank.back, long * 0.6);
-            for (j, o) in others.iter().enumerate() {
-                let apart = sub(f.at, *o);
-                let d = dot(apart, apart).sqrt();
-                if j != i && d < long * 1.2 {
-                    want = add(want, scale(unit(apart), 1.5 * (1.0 - d / (long * 1.2))));
-                }
-            }
-            if f.leaving {
-                want = [want[0] * 0.3, want[1] * 0.3, -1.0];
-            }
-            // It turns towards its wish, about the up-down axis and, less,
-            // up or down - never steeply: a fish swims level.
-            let was = f.heading;
-            let (yaw, pitch) = angles(was);
-            let (want_yaw, want_pitch) = angles(unit(want));
-            let most = turning * f.pace * dt;
-            // Turning right round, it keeps on the way it began, rather
-            // than dithering between the two.
-            let mut turn = (want_yaw - yaw + PI).rem_euclid(TAU) - PI;
-            if turn.abs() > 0.8 * PI && f.turned != 0.0 {
-                turn = turn.abs() * f.turned.signum();
-            }
-            let turn = turn.clamp(-most, most);
-            f.turned = turn;
-            let pitch = pitch + (want_pitch.clamp(-MOST_PITCH, MOST_PITCH) - pitch).clamp(-most * 0.6, most * 0.6);
-            f.heading = heading(yaw + turn, pitch);
-            // Leaning into a turn: the faster it turns, the more.
-            let side = cross(was, f.heading)[1] / dt.max(1e-3);
-            let lean = (-side * 0.3).clamp(-0.5, 0.5);
-            f.roll += (lean - f.roll) * (1.0 - (-dt / 0.4).exp());
-            let goal = cruise * f.pace * f.size * if f.leaving { 1.0 } else { f.eager };
-            let ease = if goal > f.speed { 0.4 } else { 1.2 };
-            f.speed += (goal - f.speed) * (1.0 - (-dt / ease).exp());
-            f.at = add(f.at, scale(f.heading, f.speed * dt));
-            // Nothing goes through the glass or far past a wall, whatever
-            // the push.
-            f.at[2] = f.at[2].min(-Self::reach(long, kinds()[f.kind].flank, f.heading));
-            f.at[0] = f.at[0].clamp(-tank.wide - long * 0.3, tank.wide + long * 0.3);
-            f.at[1] = f.at[1].clamp(-tank.tall - long * 0.1, tank.tall + long * 0.1);
-            // Its tail beats faster the faster it swims.
-            let model = &kinds()[f.kind].model;
-            let rate = 0.5 + 1.5 * (f.speed / long / 0.4).min(1.6);
-            f.phase = (f.phase + rate * dt / model.length).fract();
-        }
+        self.decide(&tank, length, agitation);
+        self.flow(dt, &tank, length, agitation);
 
         // Goldfish fins are sheer: the body shows solid, the fins as a veil.
         let fins = ctx.get("fins");
@@ -341,7 +542,7 @@ impl Patch for Tank {
             let k = &kinds()[f.kind];
             k.model.skin(&k.model.pose(f.phase, 0.0, 0.0), &mut self.skinned);
             // The model's x, y and z (across, up, forward) as the fish heads.
-            let forward = f.heading;
+            let forward = f.heading();
             let up = unit(sub([0.0, 1.0, 0.0], scale(forward, forward[1])));
             let across = cross(up, forward);
             let (s, c) = f.roll.sin_cos();
@@ -352,12 +553,14 @@ impl Patch for Tank {
                 let q = scale(sub(p, k.centre), to);
                 add(f.at, add(scale(across, q[0]), add(scale(up, q[1]), scale(forward, q[2]))))
             }));
-            // What of it reaches the glass - a flick of the tail - eases the
-            // whole fish back from it, rather than jumping it back; until
-            // then it is pressed against the glass, as sharp as it gets.
+            // What of it still reaches the glass - a flick of the tail -
+            // eases the whole fish back from it; until then it is pressed
+            // against the glass, as sharp as it gets.
             let over = self.placed[start as usize..].iter().map(|p| p[2]).fold(f32::MIN, f32::max);
             if over > 0.0 {
-                f.at[2] -= over * (1.0 - (-dt / 0.15).exp());
+                let back = over * (1.0 - (-real / 0.15).exp());
+                f.at[2] -= back;
+                f.vel[2] = f.vel[2].min(0.0);
             }
             for tri in &k.model.triangles {
                 let [a, b, c] = tri.map(|i| self.placed[(start + i) as usize]);
@@ -410,7 +613,7 @@ mod tests {
             last = Some(px);
         });
         assert!(most > 40, "at most {most} LEDs ever lit");
-        assert!(changed > 600, "only {changed} frames changed");
+        assert!(changed > 250, "only {changed} frames changed");
     }
 
     /// Every kind, count and agitation: the fish stay in the tank and none
@@ -452,7 +655,7 @@ mod tests {
         let mut params = quick();
         params.set(PARAMS, "count", 6.0);
         let mut tank = Tank::new(3);
-        let mut frame = |tank: &mut Tank, params: &Params, i: usize| {
+        let frame = |tank: &mut Tank, params: &Params, i: usize| {
             tank.render(&Ctx { t: i as f64 / 30.0, dt: 1.0 / 30.0, now: 0.0, params });
         };
         for i in 1..300 {
@@ -464,6 +667,55 @@ mod tests {
             frame(&mut tank, &params, i);
         }
         assert_eq!(tank.fish.len(), 2, "the extra fish never left");
+    }
+
+    /// Crowded and restless, the fish still bump rather than pass through
+    /// one another: two bodies never sink far into each other.
+    #[test]
+    fn the_fish_do_not_pass_through_each_other() {
+        let mut params = quick();
+        for (id, v) in [("count", 8.0), ("agitation", 1.0), ("tank", 1.0), ("deep", 0.5)] {
+            params.set(PARAMS, id, v);
+        }
+        let length = params.get("size") * FRAME;
+        let mut worst = 0.0f32;
+        run(&params, 90.0, |tank, _, _| {
+            let bodies: Vec<(V3, V3, f32)> = tank
+                .fish
+                .iter()
+                .map(|f| {
+                    let half = scale(f.heading(), 0.38 * length * f.size);
+                    (sub(f.at, half), add(f.at, half), length * f.size * kinds()[f.kind].flank.max(0.12))
+                })
+                .collect();
+            for i in 0..bodies.len() {
+                for j in i + 1..bodies.len() {
+                    let ((a0, a1, ra), (b0, b1, rb)) = (bodies[i], bodies[j]);
+                    let (s, t) = nearest(a0, a1, b0, b1);
+                    let gap = sub(add(a0, scale(sub(a1, a0), s)), add(b0, scale(sub(b1, b0), t)));
+                    let sink = 1.0 - dot(gap, gap).sqrt() / (ra + rb);
+                    worst = worst.max(sink);
+                }
+            }
+        });
+        assert!(worst < 0.5, "two fish sank {worst} of the way into each other");
+    }
+
+    /// Alone and calm, a fish turns smoothly: how fast it is turning never
+    /// jumps from one frame to the next.
+    #[test]
+    fn the_turns_are_smooth() {
+        let mut params = quick();
+        params.set(PARAMS, "count", 1.0);
+        let (mut was, mut worst) = (None, 0.0f32);
+        run(&params, 120.0, |tank, _, _| {
+            let spin = tank.fish[0].spin;
+            if let Some(w) = was {
+                worst = worst.max((spin - w as f32).abs() * 30.0);
+            }
+            was = Some(spin);
+        });
+        assert!(worst < 1.0, "its turning changed at {worst} rad/s^2");
     }
 
     /// Each fish's swimming loops: its end runs into its start no more
