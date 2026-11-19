@@ -657,6 +657,7 @@ async fn status() -> StatusReply {
         id: text::text(ctx().id).unwrap_or_default(),
         name,
         fw: text::text(crate::FW_VERSION).unwrap_or_default(),
+        board: Some(crate::board::BOARD),
         boot_id: BOOT_ID.load(Ordering::Relaxed),
         uptime_ms: crate::now_ms(),
         heap_used: heap.current_usage as u32,

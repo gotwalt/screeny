@@ -140,13 +140,21 @@ use display::Mode;
 // project actually versions by: it is the `fw=` mDNS TXT key, the `GET_INFO`
 // field and `status.fw`, and now it is what `POST /api/v1/firmware` reports
 // back about the image it just staged. Everything else is the macro's own
-// default, copied from its definition.
+// default, copied from its definition - except `idf_ver`.
+//
+// **`idf_ver` is the board tag** (card 377): `board=tidbyt` or
+// `board=art-panel`, spelled by `crates/fwimage` and checked by every
+// firmware from 0.12.1 before it erases a sector (check 4b). Nothing in the
+// boot path reads the field - the bootloader checks the eFuse revisions and
+// the secure version beside it - so the pretend ESP-IDF version it used to
+// hold was never load-bearing. `project_name` stays `screeny-fw`, which is
+// what lets firmware from before the card take a tagged image at all.
 esp_bootloader_esp_idf::esp_app_desc!(
     FW_VERSION,
     env!("CARGO_PKG_NAME"),
     esp_bootloader_esp_idf::BUILD_TIME,
     esp_bootloader_esp_idf::BUILD_DATE,
-    esp_bootloader_esp_idf::ESP_IDF_COMPATIBLE_VERSION,
+    screeny_fwimage::board_tag(board::BOARD),
     esp_bootloader_esp_idf::MMU_PAGE_SIZE,
     0,
     u16::MAX,

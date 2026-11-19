@@ -774,7 +774,7 @@ fn report_scan(path: &str, bytes: &[u8]) -> bool {
             // Card 377: the scan here checks every board; the device checks
             // its own, so say which one this image is for.
             match img.board {
-                Some(b) => println!("  board {b} (only a {b} device takes it)"),
+                Some(b) => println!("  board {b} (firmware that knows its board takes it only on {b})"),
                 None => println!(
                     "  board: none (built before card 377; firmware that knows its board refuses it as wrong_board)"
                 ),

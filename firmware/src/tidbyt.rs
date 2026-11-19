@@ -17,6 +17,10 @@
 //! rediscover it the hard way.
 #![allow(dead_code)]
 
+/// Which board this is, as the image's tag (`esp_app_desc.idf_ver`), the
+/// upload check and `GET /api/v1/status` say it (card 377).
+pub const BOARD: screeny_device_api::Board = screeny_device_api::Board::Tidbyt;
+
 /// Panel geometry. 1/16 scan, so the panel shifts two rows at a time and the
 /// row address only needs four bits.
 pub const PANEL_COLS: usize = 64;

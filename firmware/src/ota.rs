@@ -538,7 +538,8 @@ impl Upload {
             offset: 0,
             written: 0,
             expected: declared,
-            scan: Scan::new(slot.len()),
+            // Card 377: only an image tagged for this board (check 4b).
+            scan: Scan::new(slot.len(), crate::board::BOARD),
             timing: Timing::new(),
             mark,
             front_checked: false,
@@ -1018,8 +1019,8 @@ fn write_selection(
 
 /// Read the front of a slot and say what version is in it.
 ///
-/// [`HEAD_LEN`] is 112 bytes, which is the image header, the first segment
-/// header and `esp_app_desc` up to the end of `version`. The buffer is
+/// [`HEAD_LEN`] is 176 bytes, which is the image header, the first segment
+/// header and `esp_app_desc` up to the end of `idf_ver` (the board tag). The buffer is
 /// word-aligned so that `read_nor` reads straight into it and esp-storage's
 /// 4 KB sector buffer never appears (the same reasoning as [`read_back`]).
 #[inline(never)]
