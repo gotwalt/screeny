@@ -420,9 +420,14 @@ fn reset_reason() -> ResetReason {
 /// still spelt once.
 enum ApiBody {
     Status(StatusReply),
-    /// The RTC breadcrumb (card 243). Smaller than [`ApiBody::Status`], so it
-    /// costs this enum - and every frame that holds one - nothing.
-    Panic(PanicReply),
+    /// The RTC breadcrumb (card 243). **Boxed since card 378**: with
+    /// `last_trace` a `PanicReply` outgrew [`ApiBody::Status`] (about 236
+    /// bytes against 208), which would have made it the variant that sizes
+    /// this enum and every request-path frame that holds one - card 243b's
+    /// twelve-fold cost. On the heap it is four bytes here, and it is
+    /// allocated once per `GET /api/v1/panic`, which a reader asks once per
+    /// boot.
+    Panic(alloc::boxed::Box<PanicReply>),
     Telemetry(TelemetryReply),
     Wifi(WifiReply),
     Settings(SettingsReply),
@@ -688,7 +693,7 @@ async fn status() -> StatusReply {
 /// change while the device runs, because a panic reboots it.
 fn get_panic() -> Reply {
     let crumb = crate::panic::report();
-    Reply::ok(ApiBody::Panic(PanicReply {
+    Reply::ok(ApiBody::Panic(alloc::boxed::Box::new(PanicReply {
         boot_count: crumb.boots,
         panic_count: crumb.panics,
         last_panic: crumb.last.map(|p| PanicRecord {
@@ -715,7 +720,10 @@ fn get_panic() -> Reply {
         // about why this device is running what it is running. `wdt` here is
         // the liveness watchdog having fired.
         last_reset: Some(crate::panic::reset_reason()),
-    }))
+        // Card 378: where core 0's tasks were when the previous run ended -
+        // ten words of RTC memory copied at boot (`trace::keep_previous`).
+        last_trace: crate::trace::previous(),
+    })))
 }
 
 // ---------------------------------------------------------------------------

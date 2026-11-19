@@ -8,5 +8,6 @@
     "slot": "ota_1",
     "version": "0.7.1"
   },
-  "last_reset": "software"
+  "last_reset": "software",
+  "last_trace": null
 }

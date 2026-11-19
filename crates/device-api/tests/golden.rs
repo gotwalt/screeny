@@ -15,7 +15,7 @@ use screeny_device_api::enums::{
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
     AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply, StatusReply, TelemetryReply,
-    UpdateRecord, WifiReply,
+    TraceMark, TraceRecord, UpdateRecord, WifiReply,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 use screeny_device_api::text::{ipv4_text, text};
@@ -86,6 +86,16 @@ fn the_panic_breadcrumb() {
             }),
             update: None,
             last_reset: Some(ResetReason::PowerOn),
+            // Card 378: core 0 at the moment of that panic - the frame task
+            // waiting for a datagram, a status request just past the heap
+            // stats.
+            last_trace: Some(TraceRecord {
+                frames: TraceMark { step: 1, before_ms: 0 },
+                upload: TraceMark { step: 0, before_ms: 94_312 },
+                request: TraceMark { step: 4, before_ms: 114 },
+                flash: TraceMark { step: 0, before_ms: 94_312 },
+                telemetry: TraceMark { step: 1, before_ms: 4_500 },
+            }),
         },
     );
 }
@@ -101,6 +111,7 @@ fn the_panic_breadcrumb_of_a_device_that_has_not_panicked() {
             last_panic: None,
             update: None,
             last_reset: Some(ResetReason::PowerOn),
+            last_trace: None,
         },
     );
 }
@@ -124,6 +135,7 @@ fn an_update_on_trial() {
                 version: Some(text("0.7.1").unwrap()),
             }),
             last_reset: Some(ResetReason::Software),
+            last_trace: None,
         },
     );
 }
@@ -154,6 +166,7 @@ fn an_update_that_was_rolled_back() {
                 version: Some(text("0.7.1").unwrap()),
             }),
             last_reset: Some(ResetReason::Software),
+            last_trace: None,
         },
     );
 }

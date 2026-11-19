@@ -10,5 +10,27 @@
     "what": "ProCpu 'LoadProhibited' pc=0x400d6f2c addr=0x00000000"
   },
   "update": null,
-  "last_reset": "power_on"
+  "last_reset": "power_on",
+  "last_trace": {
+    "frames": {
+      "step": 1,
+      "before_ms": 0
+    },
+    "upload": {
+      "step": 0,
+      "before_ms": 94312
+    },
+    "request": {
+      "step": 4,
+      "before_ms": 114
+    },
+    "flash": {
+      "step": 0,
+      "before_ms": 94312
+    },
+    "telemetry": {
+      "step": 1,
+      "before_ms": 4500
+    }
+  }
 }

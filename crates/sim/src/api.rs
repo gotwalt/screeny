@@ -435,6 +435,8 @@ fn panic_breadcrumb(shared: &Shared) -> Response {
         // Card 241b: a simulator is a process. If it stops, the operating
         // system is what says so, and there is no reset register to read.
         last_reset: None,
+        // Card 378: no previous run, for the same reason.
+        last_trace: None,
     })
 }
 

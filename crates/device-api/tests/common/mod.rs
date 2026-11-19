@@ -30,7 +30,7 @@ use screeny_device_api::enums::{
 use screeny_device_api::error::{ErrorCode, ErrorReply};
 use screeny_device_api::reply::{
     AcceptedReply, FirmwareReply, NetworksReply, PanicRecord, PanicReply, SettingsReply, StatusReply, TelemetryReply,
-    UpdateRecord, WifiReply, MAX_NETWORKS,
+    TraceMark, TraceRecord, UpdateRecord, WifiReply, MAX_NETWORKS,
 };
 use screeny_device_api::request::{IdentifyRequest, RebootRequest, SettingsRequest};
 
@@ -182,7 +182,14 @@ pub fn worst_panic_reply() -> PanicReply {
         last_panic: Some(worst_panic()),
         update: Some(worst_update()),
         last_reset: Some(ResetReason::DeepSleep),
+        last_trace: Some(worst_trace()),
     }
+}
+
+/// The longest [`TraceRecord`] that can exist (card 378).
+pub fn worst_trace() -> TraceRecord {
+    let m = TraceMark { step: u32::MAX, before_ms: u32::MAX };
+    TraceRecord { frames: m, upload: m, request: m, flash: m, telemetry: m }
 }
 
 /// The longest [`UpdateRecord`] that can exist.

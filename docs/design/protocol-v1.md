@@ -1223,6 +1223,20 @@ shape here bumps it and moves the prefix, a new optional field does not.
   same `file:line`, the HAL's exception handler. Older firmware omits the key;
   a reader treats that as `null`.
 
+  Since card 378 (firmware after 0.12.0) it also carries **`last_trace`**:
+  `null`, or where core 0's tasks last were when the **previous** run ended -
+  `{frames, upload, request, flash, telemetry}`, each `{step, before_ms}`.
+  `step` is the last point that task marked (`0`: it never did) and
+  `before_ms` how long before the run's last mark, by any task, it marked it,
+  so the task with the largest `before_ms` stopped first. The previous run is
+  boot `boot_count - 1`: when that is `last_panic.boot`, this is core 0 at the
+  moment of that panic - the half a core-1 exception's `what` cannot give -
+  and after a `wdt` reset it is where core 0 stopped. It is a diagnostic: the
+  step numbers belong to the build that wrote them and are read against its
+  source (`firmware/src/trace.rs` and its `mark` calls); only the shape is
+  this spec's. `null` on the first boot after power-on, from the simulator,
+  and - by omission - from older firmware.
+
   Since firmware 0.7.0 it also carries **`update`**, which is `null` or
   `{outcome, reason, slot, version}` and is what became of the last firmware
   update this device activated (§8.10): `outcome` is `trial` / `confirmed` /

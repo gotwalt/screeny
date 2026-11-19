@@ -116,7 +116,6 @@ fn no_reply_is_bigger_than_the_one_on_the_hot_path() {
     println!("StatusReply = {status} bytes (the hot path, GET /api/v1/status)");
     for (name, n) in [
         ("TelemetryReply", size_of::<TelemetryReply>()),
-        ("PanicReply", size_of::<PanicReply>()),
         ("WifiReply", size_of::<WifiReply>()),
         ("SettingsReply", size_of::<SettingsReply>()),
         ("AcceptedReply", size_of::<AcceptedReply>()),
@@ -137,4 +136,9 @@ fn no_reply_is_bigger_than_the_one_on_the_hot_path() {
     // variant for it, which is why this list is explicit rather than "every
     // type in the module".
     println!("NetworksReply = {} bytes (not served by the firmware)", size_of::<NetworksReply>());
+    // `PanicReply` is the other exception, decided in card 378: `last_trace`
+    // took it past `StatusReply`, so the firmware's `ApiBody::Panic` holds a
+    // `Box<PanicReply>` and the variant costs the enum four bytes. A reader
+    // asks for it once per boot, so the allocation is not on the hot path.
+    println!("PanicReply = {} bytes (boxed in the firmware's reply enum)", size_of::<PanicReply>());
 }
