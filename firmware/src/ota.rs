@@ -523,7 +523,6 @@ impl Upload {
         // serial log they were not attached to.
         crate::panic::set_in_upload(true);
 
-        crate::trace::note(format_args!("started"));
         info!(
             "ota: upload started - staging into {:#x} ({} KB slot), content-length {:?}",
             slot.offset(),
@@ -757,7 +756,6 @@ impl Upload {
     /// has the timing for a refusal as well as for a success.
     pub async fn failed(mut self, why: FirmwareError) {
         self.answered = true;
-        crate::trace::note(format_args!("refused {:?} at {}", why, self.written));
         warn!("ota: upload refused: {:?}", why);
         self.report("refused").await;
     }
@@ -765,7 +763,6 @@ impl Upload {
 
 impl Drop for Upload {
     fn drop(&mut self) {
-        crate::trace::note(format_args!("drop answered={} at {}", self.answered, self.written));
         if !self.answered {
             warn!("ota: upload dropped unanswered at {} of {:?} bytes", self.written, self.expected);
         }
