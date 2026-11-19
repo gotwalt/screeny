@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use serde::{de::DeserializeOwned, Serialize};
 
 use screeny_device_api::enums::{
-    Accepted, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    Accepted, Board, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
     StreamState, UpdateOutcome, WifiState,
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
@@ -152,6 +152,7 @@ pub fn worst_status() -> StatusReply {
         id: worst_text(),
         name: worst_text(),
         fw: worst_text(),
+        board: Some(Board::ArtPanel),
         boot_id: u32::MAX,
         uptime_ms: u32::MAX,
         heap_used: u32::MAX,

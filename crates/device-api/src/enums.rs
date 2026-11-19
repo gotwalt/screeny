@@ -361,6 +361,57 @@ impl RevertReason {
     pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("deadline", "aborted", "rejected");
 }
 
+/// Which circuit board a firmware image is built for, and which one a device
+/// is (card 377).
+///
+/// One image does not fit every board: the LED Art Panel is a revision-1
+/// ESP32 with 4 MB of flash, a 32x32 panel and its display on core 0, and a
+/// Tidbyt image booted on it crashes before it can confirm itself. So an image
+/// names its board (`crates/fwimage`, spec section 8.7) and a device refuses
+/// any other ([`FirmwareError::WrongBoard`]).
+///
+/// The wire spelling is the board id, the same string the image's tag and the
+/// release file names use: `"tidbyt"`, `"art-panel"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Board {
+    /// The Tidbyt Gen 1: ESP32 rev 3, 8 MB flash, 64x32. The default build.
+    #[serde(rename = "tidbyt")]
+    Tidbyt,
+    /// The LED Art Panel ("Art Frame"): ESP32 rev 1, 4 MB flash, 32x32.
+    /// Feature `board-art-panel`.
+    #[serde(rename = "art-panel")]
+    ArtPanel,
+}
+
+impl Board {
+    /// Every board, in a fixed order.
+    pub const ALL: [Board; 2] = [Board::Tidbyt, Board::ArtPanel];
+
+    /// The board id: the wire spelling, the image tag's and the release file
+    /// names'.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Board::Tidbyt => "tidbyt",
+            Board::ArtPanel => "art-panel",
+        }
+    }
+
+    /// The board whose id this is.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Board> {
+        Board::ALL.into_iter().find(|b| b.id() == id)
+    }
+
+    pub(crate) const MAX_JSON_LEN: usize = 2 + longest!("tidbyt", "art-panel");
+}
+
+impl core::fmt::Display for Board {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
 /// Why a firmware upload was refused.
 ///
 /// The first five are research 006 section 5's five checks on the image
@@ -385,6 +436,10 @@ pub enum FirmwareError {
     Busy,
     /// The flash write itself failed.
     Flash,
+    /// A screeny image, but for a different board - or one that does not say
+    /// which board it is for, which every image up to 0.12.0 is (card 377).
+    /// Decided from the first sector, like the checks before it.
+    WrongBoard,
 }
 
 impl FirmwareError {
@@ -397,6 +452,7 @@ impl FirmwareError {
         "too_large",
         "busy",
         "flash",
+        "wrong_board",
     );
 }
 

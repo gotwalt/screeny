@@ -55,11 +55,13 @@ fn a_typical_reply_is_far_shorter_than_its_bound() {
     // took its breadcrumb fields back out of this type**: 44 bytes added here
     // cost 3,488 bytes of the device's stack, because the firmware moves one
     // of these through picoserve's response chain many times in one inlined
-    // async frame. The breadcrumb is `PanicReply` on its own route.
+    // async frame. The breadcrumb is `PanicReply` on its own route. Card 377's
+    // `"board"` added 18 bytes on the wire and **none** to the struct (208
+    // bytes before and after: the one-byte enum sits in padding).
     let real = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/status.json")).unwrap();
     let value: StatusReply = serde_json::from_str(&real).unwrap();
     let on_the_wire = wire(&value).len();
-    assert!(on_the_wire < 400, "a real status reply is {on_the_wire} bytes");
+    assert!(on_the_wire < 420, "a real status reply is {on_the_wire} bytes");
     assert!(
         StatusReply::MAX_JSON_LEN > on_the_wire * 2,
         "the bound is {} and a real reply is {on_the_wire}",

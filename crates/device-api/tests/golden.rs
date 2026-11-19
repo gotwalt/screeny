@@ -9,7 +9,7 @@ mod common;
 
 use common::check;
 use screeny_device_api::enums::{
-    Accepted, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    Accepted, Board, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
     StreamState, UpdateOutcome, WifiState,
 };
 use screeny_device_api::error::{ErrorCode, ErrorReply};
@@ -28,6 +28,7 @@ fn status() -> StatusReply {
         id: text("4a00a4").unwrap(),
         name: text("Studio panel").unwrap(),
         fw: text("0.2.0").unwrap(),
+        board: Some(Board::Tidbyt),
         boot_id: 3_054_198_966,
         uptime_ms: 3_600_000,
         heap_used: 46_112,
@@ -274,6 +275,27 @@ fn firmware() {
     // The default: the device is about to reboot into it (card 241).
     check("firmware_activating", &FirmwareReply::activating(998_448));
     check("firmware_failed", &FirmwareReply::failed(4_096, FirmwareError::WrongProject));
+    // Card 377: a screeny image for another board, refused from the first
+    // sector like the checks before it.
+    check("firmware_wrong_board", &FirmwareReply::failed(4_096, FirmwareError::WrongBoard));
+}
+
+#[test]
+fn status_from_firmware_that_does_not_know_its_board() {
+    // Card 377: every firmware up to 0.12.0 answers without `board`. A Studio
+    // built from this commit reads it as `None` - with both parsers, because
+    // the firmware's own (serde-json-core) reads goldens too.
+    let golden = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/status.json"),
+    )
+    .unwrap();
+    let old: String = golden.lines().filter(|l| !l.trim_start().starts_with("\"board\"")).collect::<Vec<_>>().join("\n");
+    assert!(!old.contains("board") && golden.contains("\"board\": \"tidbyt\""));
+    let back: StatusReply = serde_json::from_str(&old).unwrap();
+    assert_eq!(back, StatusReply { board: None, ..status() });
+    let mut unescape = [0u8; screeny_device_api::request::MIN_UNESCAPE_BUFFER];
+    let (back, _) = serde_json_core::from_slice_escaped::<StatusReply>(old.as_bytes(), &mut unescape).unwrap();
+    assert_eq!(back, StatusReply { board: None, ..status() });
 }
 
 #[test]
@@ -338,6 +360,7 @@ fn the_golden_directory_has_no_strays() {
         "firmware_ok",
         "firmware_activating",
         "firmware_failed",
+        "firmware_wrong_board",
         "accepted_trying",
         "accepted_rebooting",
         "accepted_identifying",
