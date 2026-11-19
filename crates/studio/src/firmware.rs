@@ -102,7 +102,7 @@ pub fn check_image(bytes: &[u8]) -> Result<String, String> {
     if bytes.len() > MAX_IMAGE {
         return Err(format!("{} bytes is more than an OTA slot", bytes.len()));
     }
-    let mut scan = screeny_fwimage::Scan::new(u32::try_from(MAX_IMAGE).unwrap_or(u32::MAX));
+    let mut scan = screeny_fwimage::Scan::any_board(u32::try_from(MAX_IMAGE).unwrap_or(u32::MAX));
     for chunk in bytes.chunks(screeny_fwimage::SECTOR) {
         scan.push(chunk).map_err(|e| format!("not an image this panel would take: {e:?}"))?;
         scan.check_front().map_err(|e| format!("not an image this panel would take: {e:?}"))?;
@@ -439,6 +439,7 @@ fn explain(e: FirmwareError) -> &'static str {
         FirmwareError::TooLarge => "too big for the update slot",
         FirmwareError::Busy => "another update or flash write is going on",
         FirmwareError::Flash => "the flash write failed",
+        FirmwareError::WrongBoard => "built for a different board",
     }
 }
 

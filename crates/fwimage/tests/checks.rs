@@ -7,7 +7,7 @@
 
 use screeny_device_api::FirmwareError;
 use screeny_fwimage::build::{Builder, Segment, CHIP_ID_ESP32C3};
-use screeny_fwimage::{plan_write, Image, Scan, HEADER_LEN, HEAD_LEN, SECTOR};
+use screeny_fwimage::{plan_write, Board, Image, Scan, HEADER_LEN, HEAD_LEN, SECTOR};
 
 /// Two megabytes: `ota_0` and `ota_1` in `firmware/partitions.csv`.
 const SLOT: u32 = 0x20_0000;
@@ -16,7 +16,7 @@ const SLOT: u32 = 0x20_0000;
 /// firmware's staging loop does - push, then ask whether the front is good
 /// enough to start erasing - and return what the scan made of it.
 fn scan_in_chunks(image: &[u8], slot_len: u32, chunk: usize) -> Result<Image, FirmwareError> {
-    let mut scan = Scan::new(slot_len);
+    let mut scan = Scan::new(slot_len, Board::Tidbyt);
     for piece in image.chunks(chunk.max(1)) {
         scan.push(piece)?;
         scan.check_front()?;
@@ -87,7 +87,7 @@ fn sixty_four_zero_bytes_are_bad_magic() {
 #[test]
 fn an_empty_body_is_bad_magic() {
     assert_eq!(scan_in_chunks(&[], SLOT, SECTOR), Err(FirmwareError::BadMagic));
-    let scan = Scan::new(SLOT);
+    let scan = Scan::new(SLOT, Board::Tidbyt);
     assert_eq!(scan.seen(), 0);
     assert_eq!(scan.image_len(), None);
     assert_eq!(scan.check_front(), Ok(()), "nothing has arrived to judge yet");
@@ -111,7 +111,7 @@ fn the_chip_is_decided_from_the_first_twenty_four_bytes() {
     let mut b = Builder::good();
     b.chip_id = CHIP_ID_ESP32C3;
     let image = b.build();
-    let mut scan = Scan::new(SLOT);
+    let mut scan = Scan::new(SLOT, Board::Tidbyt);
     assert_eq!(
         scan.push(&image[..HEADER_LEN]),
         Err(FirmwareError::WrongChip),
@@ -158,7 +158,7 @@ fn the_project_is_decided_from_the_first_sector() {
     let mut b = Builder::good();
     b.project = "esp-idf-blink";
     let image = b.build();
-    let mut scan = Scan::new(SLOT);
+    let mut scan = Scan::new(SLOT, Board::Tidbyt);
     scan.push(&image[..SECTOR]).expect("the header itself is fine");
     assert_eq!(scan.check_front(), Err(FirmwareError::WrongProject));
 }
@@ -166,9 +166,116 @@ fn the_project_is_decided_from_the_first_sector() {
 #[test]
 fn the_good_image_passes_check_front_on_its_first_sector() {
     let image = Builder::good().build();
-    let mut scan = Scan::new(SLOT);
+    let mut scan = Scan::new(SLOT, Board::Tidbyt);
     scan.push(&image[..SECTOR]).unwrap();
     assert_eq!(scan.check_front(), Ok(()));
+}
+
+// ---------------------------------------------------------------------------
+// Check 4b: which board (card 377)
+// ---------------------------------------------------------------------------
+
+fn scan_for(image: &[u8], board: Board) -> Result<Image, FirmwareError> {
+    let mut scan = Scan::new(SLOT, board);
+    for piece in image.chunks(SECTOR) {
+        scan.push(piece)?;
+        scan.check_front()?;
+    }
+    scan.finish()
+}
+
+#[test]
+fn an_image_for_this_board_is_accepted_and_says_so() {
+    for board in Board::ALL {
+        let out = scan_for(&Builder::for_board(board).build(), board).expect("same board");
+        assert_eq!(out.board, Some(board));
+    }
+}
+
+/// The Art Frame incident: a Tidbyt image offered to the LED Art Panel. Every
+/// other check passes, which is the point - only 4b can tell them apart.
+#[test]
+fn an_image_for_another_board_is_wrong_board() {
+    let tidbyt = Builder::for_board(Board::Tidbyt).build();
+    let art = Builder::for_board(Board::ArtPanel).build();
+    assert_eq!(scan_for(&tidbyt, Board::ArtPanel), Err(FirmwareError::WrongBoard));
+    assert_eq!(scan_for(&art, Board::Tidbyt), Err(FirmwareError::WrongBoard));
+}
+
+/// Every release up to 0.12.0 names no board. They are all Tidbyt images and
+/// all older than any firmware that checks, so a Tidbyt refuses them too.
+#[test]
+fn an_image_that_names_no_board_is_wrong_board_on_every_board() {
+    let old = Builder::untagged().build();
+    for board in Board::ALL {
+        assert_eq!(scan_for(&old, board), Err(FirmwareError::WrongBoard), "{board}");
+    }
+    // A board tag that is nearly right is no tag.
+    let mut b = Builder::good();
+    b.board = None;
+    let mut image = b.build();
+    let at = 32 + 112;
+    image[at..at + 12].copy_from_slice(b"board=tidbyX");
+    let mut scan = Scan::new(SLOT, Board::Tidbyt);
+    scan.push(&image[..SECTOR]).unwrap();
+    assert_eq!(scan.check_front(), Err(FirmwareError::WrongBoard));
+}
+
+#[test]
+fn the_board_is_decided_from_the_first_sector() {
+    let image = Builder::for_board(Board::Tidbyt).build();
+    let mut scan = Scan::new(SLOT, Board::ArtPanel);
+    // One byte short of the tag's end, nothing is decided yet.
+    scan.push(&image[..HEAD_LEN - 1]).unwrap();
+    assert_eq!(scan.check_front(), Ok(()));
+    scan.push(&image[HEAD_LEN - 1..SECTOR]).unwrap();
+    assert_eq!(scan.check_front(), Err(FirmwareError::WrongBoard), "refused before an erase");
+    assert_eq!(scan.finish(), Err(FirmwareError::WrongBoard));
+}
+
+/// Somebody else's project is `wrong_project` whatever its `idf_ver` says:
+/// 4b only speaks about screeny images.
+#[test]
+fn the_project_is_checked_before_the_board() {
+    let image = Builder::wrong_project().build();
+    assert_eq!(scan_for(&image, Board::ArtPanel), Err(FirmwareError::WrongProject));
+}
+
+/// `any_board` is the Studio's question - which board is this image for? - and
+/// judges nothing but the board.
+#[test]
+fn any_board_reports_the_board_and_refuses_nothing_for_it() {
+    let scan = |image: &[u8]| {
+        let mut s = Scan::any_board(SLOT);
+        s.push(image).unwrap();
+        s.finish()
+    };
+    assert_eq!(scan(&Builder::for_board(Board::ArtPanel).build()).unwrap().board, Some(Board::ArtPanel));
+    assert_eq!(scan(&Builder::untagged().build()).unwrap().board, None);
+    let mut s = Scan::any_board(SLOT);
+    assert_eq!(
+        s.push(&Builder::wrong_project().build()).and_then(|()| s.finish().map(|_| ())),
+        Err(FirmwareError::WrongProject)
+    );
+}
+
+#[test]
+fn the_board_can_be_read_from_the_front_without_scanning() {
+    for board in Board::ALL {
+        let image = Builder::for_board(board).build();
+        assert_eq!(screeny_fwimage::board_of(&image[..HEAD_LEN]), Some(board));
+    }
+    assert_eq!(screeny_fwimage::board_of(&Builder::untagged().build()[..HEAD_LEN]), None);
+    assert_eq!(screeny_fwimage::board_of(&[0xFF; HEAD_LEN]), None);
+}
+
+#[test]
+fn the_tag_is_the_board_id_and_fits_the_field() {
+    for board in Board::ALL {
+        let tag = screeny_fwimage::board_tag(board);
+        assert_eq!(tag, format!("board={}", board.id()));
+        assert!(tag.len() < 32, "idf_ver is 32 bytes, NUL-terminated");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +367,7 @@ fn an_image_longer_than_the_slot_is_too_large() {
 fn the_slot_bound_is_enforced_on_the_stream_and_not_only_on_content_length() {
     // A sender whose `Content-Length` was a lie: the scan counts what really
     // arrives.
-    let mut scan = Scan::new(8192);
+    let mut scan = Scan::new(8192, Board::Tidbyt);
     let image = Builder::good().build();
     let mut fed = 0;
     let mut hit = None;

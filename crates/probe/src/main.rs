@@ -752,7 +752,7 @@ const SLOT_LEN: u32 = 0x20_0000;
 /// would be accepted.
 fn report_scan(path: &str, bytes: &[u8]) -> bool {
     use screeny_fwimage::{Scan, SECTOR};
-    let mut scan = Scan::new(SLOT_LEN);
+    let mut scan = Scan::any_board(SLOT_LEN);
     let mut failed = None;
     for piece in bytes.chunks(SECTOR) {
         if let Err(e) = scan.push(piece).and_then(|()| scan.check_front()) {
@@ -771,6 +771,14 @@ fn report_scan(path: &str, bytes: &[u8]) -> bool {
                 img.trailing
             );
             println!("  esp_app_desc.version {:?} | sha256 {}", img.version, hex32(&img.digest));
+            // Card 377: the scan here checks every board; the device checks
+            // its own, so say which one this image is for.
+            match img.board {
+                Some(b) => println!("  board {b} (only a {b} device takes it)"),
+                None => println!(
+                    "  board: none (built before card 377; firmware that knows its board refuses it as wrong_board)"
+                ),
+            }
             println!(
                 "  {} of a {} byte slot ({:.1}%), {} sectors to stage",
                 img.len,

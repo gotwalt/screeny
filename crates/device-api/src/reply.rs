@@ -131,8 +131,9 @@ pub struct StatusReply {
     /// `null` (absent) from firmware before card 377, which did not know.
     /// `#[serde(default)]`, so a Studio built from this commit still reads
     /// those - and offers them no update, since it cannot tell which image
-    /// fits.
-    #[serde(default)]
+    /// fits. Never written as `null`: `None` is left out, which is what that
+    /// old firmware sends, so the simulator can play it exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board: Option<Board>,
     /// A random number drawn once at boot. Same id as last time: the link
     /// flapped. Different id: the device rebooted. Random rather than a

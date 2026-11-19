@@ -380,6 +380,7 @@ fn status(shared: &Shared) -> Response {
         name: screeny_device_api::text::text(core.name()).unwrap_or_default(),
         fw: screeny_device_api::text::text(running.as_ref().map_or(ident.fw.as_str(), |r| r.version.as_str()))
             .unwrap_or_default(),
+        board: ident.board,
         boot_id: running.as_ref().map_or(ident.boot_id, |r| r.boot_id),
         uptime_ms: t.uptime_ms,
         heap_used: ident.heap_used,
@@ -738,7 +739,16 @@ fn post_firmware(shared: &Shared, head: &Head, body: Body<'_>) -> Response {
         return ok_json(&FirmwareReply::failed(0, FirmwareError::TooLarge));
     }
     let slot = u32::try_from(SLOT_LEN).unwrap_or(u32::MAX);
-    let mut scan = screeny_fwimage::Scan::new(slot);
+    // Card 377: a simulated device that knows its board refuses every other
+    // board's image, and an untagged one, exactly as the firmware does. One
+    // playing firmware from before the card (`board: None`) checks no board,
+    // which is what those devices really do - and why the Studio must check
+    // the image itself before it uploads.
+    let board = shared.core().lock().unwrap().ident().board;
+    let mut scan = match board {
+        Some(b) => screeny_fwimage::Scan::new(slot, b),
+        None => screeny_fwimage::Scan::any_board(slot),
+    };
     // One sector at a time, because that is what the device stages in: a
     // scanner that only worked on the host's convenient buffer size would be a
     // scanner the device does not run.

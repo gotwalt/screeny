@@ -60,6 +60,10 @@ NETWORK
                            (never `screeny`: that is the real device)
     --name NAME            friendly name, the name= TXT key
     --id HEX               short device id, the id= TXT key
+    --board NAME           the board the firmware says it is for [tidbyt]
+                           tidbyt | art-panel | none   (none plays firmware
+                           before 0.12.1: no board in status, and it takes
+                           any screeny-fw image)
     --http-port N          HTTP API port, 0 for an ephemeral one [8080]
                            (never 80: binding it needs root. Without this
                            flag a busy 8080 falls back to an ephemeral
@@ -183,6 +187,16 @@ impl Opts {
                 "--instance" => o.cfg.instance = value()?,
                 "--name" => o.cfg.name = value()?,
                 "--id" => o.cfg.id = value()?,
+                "--board" => {
+                    let v = value()?;
+                    o.cfg.board = match v.as_str() {
+                        "none" => None,
+                        id => Some(
+                            screeny_device_api::Board::from_id(id)
+                                .ok_or_else(|| format!("--board: unknown board {id:?} (tidbyt | art-panel | none)"))?,
+                        ),
+                    };
+                }
                 "--scale" => o.scale = num::<usize>(&value()?, "--scale")?.max(4),
                 "--levels" => o.cfg.panel = PanelModel { levels: num(&value()?, "--levels")? },
                 "--brightness" => o.cfg.brightness = num(&value()?, "--brightness")?,

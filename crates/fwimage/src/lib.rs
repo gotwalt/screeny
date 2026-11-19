@@ -20,6 +20,7 @@
 //! | 2 | the header's chip id is ESP32 (`0x0000`) | [`FirmwareError::WrongChip`] |
 //! | 3 | the header says a SHA-256 is appended (byte 23) | [`FirmwareError::BadSha256`] |
 //! | 4 | `esp_app_desc.project_name` is `screeny-fw` | [`FirmwareError::WrongProject`] |
+//! | 4b | `esp_app_desc.idf_ver` is this device's board tag (card 377) | [`FirmwareError::WrongBoard`] |
 //! | 5 | the segment table walks and the one-byte XOR checksum is right | [`FirmwareError::BadChecksum`] |
 //! | 6 | the appended SHA-256 matches the bytes it covers | [`FirmwareError::BadSha256`] |
 //!
@@ -29,14 +30,30 @@
 //! such. The two rows are kept apart here because they fail at very different
 //! moments - the flag is known from the first 24 bytes and the digest only at
 //! the end - and the first four are all decidable from the first 4,096 bytes.
-//! **That is the property the whole design rests on**: a wrong-chip or
-//! wrong-project upload is refused before a single sector has been erased.
+//! **That is the property the whole design rests on**: a wrong-chip,
+//! wrong-project or wrong-board upload is refused before a single sector has
+//! been erased.
+//!
+//! ## The board tag (card 377)
+//!
+//! One image does not fit every board - a Tidbyt image sent to the LED Art
+//! Panel booted, crashed before confirming, and was rolled back by luck - so an
+//! image says which board it is for, in the one place check 4 already reads:
+//! the app descriptor. `project_name` stays `screeny-fw`, so a device from
+//! before this card still takes the first tagged image through its page. The
+//! tag is the whole of `esp_app_desc.idf_ver`, a 32-byte field nothing in the
+//! boot path reads (the bootloader checks the eFuse revisions and the secure
+//! version beside it, never this string): `board=tidbyt` or
+//! `board=art-panel` ([`board_tag`]). An image with anything else there - every
+//! image up to 0.12.0 says `v5.x` - names no board, and a device that knows its
+//! own refuses it as [`FirmwareError::WrongBoard`] too: those are all Tidbyt
+//! images, and older than anything that knows its board, so a downgrade anyway.
 //!
 //! ## What it is not
 //!
-//! It is not a loader and it does not hold the image. [`Scan`] is 240-odd
-//! bytes: a copy of the first 80 (the header and the app descriptor), a
-//! segment cursor, a running XOR, and a SHA-256 state. Feed it the upload in
+//! It is not a loader and it does not hold the image. [`Scan`] is a few
+//! hundred bytes: a copy of the first 176 (the header and the app descriptor
+//! through the board tag), a segment cursor, a running XOR, and a SHA-256 state. Feed it the upload in
 //! whatever pieces it arrives in and it answers at the end. Nothing here
 //! allocates, reads a clock or touches I/O.
 
@@ -51,6 +68,7 @@ extern crate alloc;
 #[cfg(feature = "build")]
 pub mod build;
 
+pub use screeny_device_api::Board;
 use screeny_device_api::FirmwareError;
 use sha2::{Digest, Sha256};
 
@@ -87,8 +105,29 @@ pub const APP_DESC_MAGIC: u32 = 0xABCD_5432;
 const DESC_VERSION: usize = 16;
 /// `esp_app_desc.project_name`, relative to [`APP_DESC_OFFSET`].
 const DESC_PROJECT: usize = 48;
-/// Both of those fields are 32 bytes, NUL-padded.
+/// `esp_app_desc.idf_ver`, relative to [`APP_DESC_OFFSET`]: where the board
+/// tag lives (card 377). After `time` (16 bytes) and `date` (16 bytes).
+const DESC_IDF_VER: usize = 112;
+/// All three of those fields are 32 bytes, NUL-padded.
 const DESC_FIELD: usize = 32;
+
+/// What `esp_app_desc.idf_ver` says in an image built for `board`: the whole
+/// field, NUL-padded. A `const fn` so the firmware's `esp_app_desc!` can take
+/// it, which is what makes this crate the one spelling of the tag.
+#[must_use]
+pub const fn board_tag(board: Board) -> &'static str {
+    match board {
+        Board::Tidbyt => "board=tidbyt",
+        Board::ArtPanel => "board=art-panel",
+    }
+}
+
+/// The board a 32-byte `idf_ver` field names, or `None` when it is not a tag.
+fn board_in(field: &[u8]) -> Option<Board> {
+    let len = field.iter().position(|b| *b == 0).unwrap_or(field.len());
+    let text = core::str::from_utf8(&field[..len]).ok()?;
+    Board::ALL.into_iter().find(|b| board_tag(*b) == text)
+}
 
 /// The `esp_app_desc.project_name` this device accepts, and nothing else.
 ///
@@ -100,11 +139,11 @@ pub const PROJECT_NAME: &str = "screeny-fw";
 pub const HASH_LEN: usize = 32;
 
 /// How much of the front of an image this crate keeps a copy of: the header,
-/// the first segment header, and the app descriptor's magic, version and
-/// project name.
-pub const HEAD_LEN: usize = APP_DESC_OFFSET + DESC_PROJECT + DESC_FIELD;
+/// the first segment header, and the app descriptor from its magic through
+/// `idf_ver`, the board tag.
+pub const HEAD_LEN: usize = APP_DESC_OFFSET + DESC_IDF_VER + DESC_FIELD;
 
-const _: () = assert!(HEAD_LEN == 112);
+const _: () = assert!(HEAD_LEN == 176);
 const _: () = assert!(HEAD_LEN < SECTOR, "the head must fit the first chunk");
 
 /// The seed the ESP image checksum starts from. Every byte of every segment's
@@ -217,13 +256,22 @@ impl core::fmt::Debug for Version {
     }
 }
 
+/// The board an image's front names, with no scan at all: the same
+/// "reporting, not admitting" question as [`version_of`], and `None` for the
+/// same reasons - plus an image that names no board.
+#[must_use]
+pub fn board_of(front: &[u8]) -> Option<Board> {
+    version_of(front)?;
+    board_in(&front[APP_DESC_OFFSET + DESC_IDF_VER..APP_DESC_OFFSET + DESC_IDF_VER + DESC_FIELD])
+}
+
 /// `esp_app_desc.version` out of the front of an image, with no scan at all.
 ///
 /// [`Scan`] is how an image *arriving* is identified, and it is the only thing
 /// that may decide whether one is acceptable. This is the other question, which
 /// card 241 asks about an image that is already sitting in flash: after a
 /// rolled-back update the device wants to say **which version it just rejected**,
-/// and the answer is 112 bytes at the front of the slot it is not running from.
+/// and the answer is the first [`HEAD_LEN`] bytes of the slot it is not running from.
 /// Reading them is one aligned flash read; a full [`Scan`] of a megabyte would
 /// be a SHA-256 pass to put a string in a JSON reply.
 ///
@@ -270,6 +318,10 @@ pub struct Image {
     pub digest: [u8; HASH_LEN],
     /// `esp_app_desc.version`.
     pub version: Version,
+    /// The board the image names, or `None` for an untagged one - which a
+    /// scan made with [`Scan::new`] never accepts, so only a
+    /// [`Scan::any_board`] answer can say `None`.
+    pub board: Option<Board>,
     /// Segments the image declared.
     pub segments: u8,
 }
@@ -308,6 +360,9 @@ enum Phase {
 pub struct Scan {
     /// Longest image this slot can hold.
     slot_len: u32,
+    /// The board an image must name to be accepted; `None` for
+    /// [`Scan::any_board`], which reports the board and judges nothing.
+    board: Option<Board>,
     /// Bytes fed so far.
     pos: u32,
     phase: Phase,
@@ -340,11 +395,29 @@ pub struct Scan {
 }
 
 impl Scan {
-    /// A scanner for a slot of `slot_len` bytes.
+    /// A scanner for a slot of `slot_len` bytes on a device that is `board`:
+    /// an image for any other board, or one that names none, fails check 4b
+    /// ([`FirmwareError::WrongBoard`]). What a device runs.
     #[must_use]
-    pub fn new(slot_len: u32) -> Self {
+    pub fn new(slot_len: u32, board: Board) -> Self {
+        Self::with(slot_len, Some(board))
+    }
+
+    /// A scanner that checks everything but the board, and says in
+    /// [`Image::board`] which board the image names.
+    ///
+    /// For a tool sorting images it was handed (the Studio deciding which
+    /// panels an image is for). **Never for admitting an image onto a device**:
+    /// that is [`Scan::new`] with the device's own board.
+    #[must_use]
+    pub fn any_board(slot_len: u32) -> Self {
+        Self::with(slot_len, None)
+    }
+
+    fn with(slot_len: u32, board: Option<Board>) -> Self {
         Scan {
             slot_len,
+            board,
             pos: 0,
             phase: Phase::Header,
             head: [0; HEAD_LEN],
@@ -576,9 +649,9 @@ impl Scan {
         Ok(())
     }
 
-    /// Check 4, from the app descriptor. Called once the head copy is full,
-    /// which is 112 bytes in.
-    fn check_app_desc(&self) -> Result<Version, FirmwareError> {
+    /// Checks 4 and 4b, from the app descriptor. Called once the head copy is
+    /// full, which is [`HEAD_LEN`] (176) bytes in.
+    fn check_app_desc(&self) -> Result<(Version, Option<Board>), FirmwareError> {
         let d = &self.head[APP_DESC_OFFSET..];
         if u32::from_le_bytes([d[0], d[1], d[2], d[3]]) != APP_DESC_MAGIC {
             return Err(FirmwareError::WrongProject);
@@ -588,9 +661,17 @@ impl Scan {
         if &name[..len] != PROJECT_NAME.as_bytes() {
             return Err(FirmwareError::WrongProject);
         }
+        // 4b: the board. Only after the project name, so that somebody else's
+        // image is still `wrong_project` and not "wrong board".
+        let board = board_in(&d[DESC_IDF_VER..DESC_IDF_VER + DESC_FIELD]);
+        if let Some(want) = self.board {
+            if board != Some(want) {
+                return Err(FirmwareError::WrongBoard);
+            }
+        }
         let mut v = [0u8; DESC_FIELD];
         v.copy_from_slice(&d[DESC_VERSION..DESC_VERSION + DESC_FIELD]);
-        Ok(Version(v))
+        Ok((Version(v), board))
     }
 
     /// The segment walk is over: work out how much zero padding stands between
@@ -634,9 +715,9 @@ impl Scan {
             return Err(FirmwareError::BadSha256);
         }
         // Check 4, last of the cheap four because it is the one that needs the
-        // most bytes to have arrived (112) - but still decided from the first
+        // most bytes to have arrived (176) - but still decided from the first
         // sector, which is what lets the caller refuse before erasing.
-        let version = self.check_app_desc()?;
+        let (version, board) = self.check_app_desc()?;
         if self.phase != Phase::Trailing {
             // The image parsed but the body stopped inside it.
             return Err(FirmwareError::BadSha256);
@@ -654,7 +735,14 @@ impl Scan {
         }
         let hash_start = self.hash_start.unwrap_or(self.pos);
         let len = hash_start + HASH_LEN as u32;
-        Ok(Image { len, trailing: self.pos.saturating_sub(len), digest: self.digest, version, segments: self.segments })
+        Ok(Image {
+            len,
+            trailing: self.pos.saturating_sub(len),
+            digest: self.digest,
+            version,
+            board,
+            segments: self.segments,
+        })
     }
 
     /// Run checks 1-4 as soon as the first sector has arrived, without
@@ -726,6 +814,7 @@ impl core::fmt::Debug for Scan {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Scan")
             .field("pos", &self.pos)
+            .field("board", &self.board)
             .field("phase", &self.phase)
             .field("segments_left", &self.segments_left)
             .field("failed", &self.failed)

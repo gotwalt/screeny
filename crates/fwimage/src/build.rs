@@ -33,7 +33,11 @@ use alloc::vec::Vec;
 
 use sha2::{Digest, Sha256};
 
-use crate::{APP_DESC_MAGIC, CHIP_ID_ESP32, IMAGE_MAGIC, PROJECT_NAME};
+use crate::{board_tag, Board, APP_DESC_MAGIC, CHIP_ID_ESP32, IMAGE_MAGIC, PROJECT_NAME};
+
+/// What `esp_app_desc.idf_ver` said in every image before card 377: the
+/// version of ESP-IDF esp-bootloader-esp-idf pretends to be, and no board.
+pub const UNTAGGED_IDF_VER: &str = "v5.5.1";
 
 /// `chip_id` for the ESP32-C3: a real chip, a real image, and one this device
 /// must never run.
@@ -59,6 +63,9 @@ pub struct Builder {
     pub project: &'static str,
     /// `esp_app_desc.version`.
     pub version: &'static str,
+    /// The board the image names in `esp_app_desc.idf_ver`, or `None` for
+    /// an image from before card 377, which names none.
+    pub board: Option<Board>,
     /// `esp_app_desc.magic_word`.
     pub desc_magic: u32,
     /// The segments, in order. Segment 0 must be at least 256 bytes: the app
@@ -77,6 +84,7 @@ impl Default for Builder {
             hash_appended: true,
             project: PROJECT_NAME,
             version: "0.6.0",
+            board: Some(Board::Tidbyt),
             desc_magic: APP_DESC_MAGIC,
             segments: vec![
                 Segment {
@@ -113,6 +121,19 @@ impl Builder {
         Builder { chip_id: CHIP_ID_ESP32C3, ..Self::default() }
     }
 
+    /// A good image for `board`.
+    #[must_use]
+    pub fn for_board(board: Board) -> Self {
+        Builder { board: Some(board), ..Self::default() }
+    }
+
+    /// A good image as every release up to 0.12.0 built it: a screeny image
+    /// that does not say which board it is for.
+    #[must_use]
+    pub fn untagged() -> Self {
+        Builder { board: None, ..Self::default() }
+    }
+
     /// A good ESP32 image of somebody else's project. Also correct in every
     /// other respect.
     #[must_use]
@@ -138,6 +159,8 @@ impl Builder {
             desc[16..48].copy_from_slice(&field32(self.version));
             desc[48..80].copy_from_slice(&field32(self.project));
             desc[80..96].copy_from_slice(&field32("12:00:00")[..16]);
+            desc[96..112].copy_from_slice(&field32("Nov 19 2026")[..16]);
+            desc[112..144].copy_from_slice(&field32(self.board.map_or(UNTAGGED_IDF_VER, board_tag)));
             seg.data[..256].copy_from_slice(&desc);
         }
 
