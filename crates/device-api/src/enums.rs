@@ -367,7 +367,7 @@ impl RevertReason {
 /// One image does not fit every board: the LED Art Panel is a revision-1
 /// ESP32 with 4 MB of flash, a 32x32 panel and its display on core 0, and a
 /// Tidbyt image booted on it crashes before it can confirm itself. So an image
-/// names its board (`crates/fwimage`, spec section 8.7) and a device refuses
+/// names its board (`crates/fwimage`, spec section 8.6, check 4b) and a device refuses
 /// any other ([`FirmwareError::WrongBoard`]).
 ///
 /// The wire spelling is the board id, the same string the image's tag and the

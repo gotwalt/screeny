@@ -15,7 +15,7 @@ use screeny_device_api::reply::{
     MAX_NETWORKS,
 };
 use screeny_device_api::request::MAX_IDENTIFY_MS;
-use screeny_device_api::{route, Accepted, ErrorCode, ErrorReply, FirmwareError, IdleMode, WifiState};
+use screeny_device_api::{route, Accepted, Board, ErrorCode, ErrorReply, FirmwareError, IdleMode, WifiState};
 
 // The name the settings rules set, and take back off. **One definition**
 // (card 246, item 4): the next run recognises it by `PROBE_NAME_PREFIX`, and a
@@ -542,6 +542,22 @@ pub fn all() -> Vec<Rule> {
             secs: 0.4,
             flags: 0,
             run: clock_round_trip,
+        },
+        // --- card 377: the board -----------------------------------------
+        //
+        // Safe on any device: only the **first sector** of the image is sent,
+        // with `activate=0`. Firmware that checks the board refuses it there;
+        // firmware from before the check would stage a fragment that fails its
+        // hash, and the rule skips such a device before sending anything anyway.
+        Rule {
+            n: 47,
+            section: "firmware",
+            route: route::FIRMWARE,
+            name: "an image for another board, or one naming no board, is refused as wrong_board",
+            cite: "spec 8.6 check 4b; fwimage::board_tag; card 377",
+            secs: 0.8,
+            flags: 0,
+            run: firmware_wrong_board,
         },
     ]
 }
@@ -1220,10 +1236,60 @@ fn firmware_too_large(cx: &mut Ctx) -> Result<Outcome, String> {
 /// stages into is the one nothing boots and this firmware never writes
 /// `otadata`. What it must not be is `ok`.
 fn firmware_truncated(cx: &mut Ctx) -> Result<Outcome, String> {
-    let image = screeny_fwimage::build::Builder::good().build();
+    // Card 377: built for the device's own board, so that the board check
+    // passes and it is the hash that fails. A device too old to say takes
+    // any board, and gets the Tidbyt's.
+    let board = device_board(cx)?.unwrap_or(Board::Tidbyt);
+    let image = screeny_fwimage::build::Builder::for_board(board).build();
     // Everything but the tail of the appended digest.
     let cut = image.len() - 200;
     firmware_refuses_with(cx, &image[..cut], FirmwareError::BadSha256, "a good image with 200 bytes missing")
+}
+
+/// The board the device says it is (`status.board`), or `None` for firmware
+/// from before card 377.
+fn device_board(cx: &mut Ctx) -> Result<Option<Board>, String> {
+    Ok(cx.status()?.board)
+}
+
+/// Rule 47 (card 377). The first sector of a screeny image for the other
+/// board, then of one that names no board: both `wrong_board`, decided before
+/// an erase.
+fn firmware_wrong_board(cx: &mut Ctx) -> Result<Outcome, String> {
+    use screeny_fwimage::build::Builder;
+    let Some(board) = device_board(cx)? else {
+        return Ok(Outcome::Skip("the device does not report a board (firmware before 0.12.1)".into()));
+    };
+    let other = Board::ALL.into_iter().find(|b| *b != board).unwrap_or(board);
+    let path = format!("{}?activate=0", route::FIRMWARE);
+    let mut seen = Vec::new();
+    for (what, image) in [
+        (format!("a {other} image on a {board}"), Builder::for_board(other).build()),
+        ("an image naming no board".to_string(), Builder::untagged().build()),
+    ] {
+        let res = cx.post_bytes(&path, &image[..screeny_fwimage::SECTOR.min(image.len())])?;
+        if is_unavailable(&res) {
+            return Ok(Outcome::Skip(format!("this build does not take uploads: {}", unavailable_detail(&res))));
+        }
+        if let Some(s) = busy_with_a_trial(&res) {
+            return Ok(s);
+        }
+        if res.status != 200 {
+            return verdict(false, format!("{what}: HTTP {} - this route answers 200 with ok:false", res.status));
+        }
+        let f: FirmwareReply = res.parse()?;
+        if f.ok || f.error != Some(FirmwareError::WrongBoard) || f.written != 0 {
+            return verdict(
+                false,
+                format!(
+                    "{what}: ok {} written {} error {:?} (wanted wrong_board, written 0)",
+                    f.ok, f.written, f.error
+                ),
+            );
+        }
+        seen.push(what);
+    }
+    verdict(true, format!("{} refused before an erase", seen.join(" and ")))
 }
 
 /// Card 241: `?activate=` is parsed, and a value this API does not define is

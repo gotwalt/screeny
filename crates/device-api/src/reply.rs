@@ -123,7 +123,7 @@ pub struct StatusReply {
     /// The firmware version.
     pub fw: FwText,
     /// Which board this firmware was built for, and so which images this
-    /// device will take (card 377, spec section 8.7). One byte, so it costs
+    /// device will take (card 377, spec section 8.6). One byte, so it costs
     /// the hot path nothing worth measuring - the rule above is about bytes,
     /// and this is the one constant fact the Studio needs on the poll it
     /// already makes, because it decides what the page offers.

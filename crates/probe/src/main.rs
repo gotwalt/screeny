@@ -37,8 +37,10 @@
 //!        [--allow-reboot] [--allow-wifi-trial] [--cap-probe]
 //!                            the HTTP API's conformance suite (card 228)
 //!   fw-scan FILE             run the device's own image validator here, on a file
-//!   fw-upload FILE [--activate] [--http HOST[:PORT]] [--force]
-//!                            stage an image into the device's inactive slot (card 240)
+//!   fw-upload FILE [--activate] [--http HOST[:PORT]] [--force] [--board ID]
+//!                            stage an image into the device's inactive slot (card 240);
+//!                            refused here if it is not for the device's board (card 377),
+//!                            and a device too old to say needs --board ID to activate
 //! ```
 //!
 //! The suites themselves are `src/suite/` (the wire) and `src/http/` (the
@@ -68,7 +70,7 @@ const USAGE: &str = "usage: screeny-probe [--addr HOST[:PORT] | --name NAME] [--
                                lock-test (= conformance --only 7) |\n\
                                http [--http HOST[:PORT]] [--only N|SECTION] [--list]\n\
                                     [--allow-reboot] [--allow-wifi-trial] [--cap-probe] |\n\
-                               fw-scan FILE | fw-upload FILE [--activate] [--http HOST[:PORT]] [--force]";
+                               fw-scan FILE | fw-upload FILE [--activate] [--http HOST[:PORT]] [--force] [--board ID]";
 
 struct Args {
     host: String,
@@ -853,8 +855,43 @@ fn cmd_fw_upload(args: &Args, rest: &[String]) -> Result<bool, String> {
     // only be answered against the `boot_id` it had beforehand (card 246,
     // item 2). A short-timeout client of its own: this is one small GET and
     // the upload client waits four minutes.
-    let before =
-        screeny_probe::http::update::boot_id(&Client::new(addr, host.clone()).with_timeout(Duration::from_secs(3)));
+    let status = Client::new(addr, host.clone())
+        .with_timeout(Duration::from_secs(3))
+        .get(route::STATUS)
+        .ok()
+        .and_then(|r| r.parse::<screeny_device_api::reply::StatusReply>().ok());
+    let before = status.as_ref().map(|s| s.boot_id);
+    // Card 377: which board the image is for, against which board the device
+    // is. A device that knows refuses a mismatch itself; one that does not
+    // (firmware up to 0.12.0) takes anything, which is how a Tidbyt image
+    // reached the Art Frame - so there the person has to name the board.
+    let image_board = screeny_fwimage::board_of(&bytes);
+    let named = match flag(rest, "--board") {
+        Some(id) => Some(
+            screeny_device_api::Board::from_id(&id)
+                .ok_or_else(|| format!("--board {id}: expected tidbyt or art-panel"))?,
+        ),
+        None => None,
+    };
+    if !has_flag(rest, "--force") {
+        match (status.as_ref().map(|s| s.board), image_board) {
+            (Some(Some(dev)), img) if img != Some(dev) => {
+                return Err(format!(
+                    "the device is board {dev} and this image is for {}: it would be refused (wrong_board)",
+                    img.map_or("no board".to_string(), |b| format!("board {b}"))
+                ));
+            }
+            (Some(None), img) if activate && (named.is_none() || named != img) => {
+                return Err(format!(
+                    "this device's firmware does not say which board it is and will take any image, so \
+                     name it: --board {} if this panel really is one (the image is for {})",
+                    img.map_or("<id>", screeny_device_api::Board::id),
+                    img.map_or("no board".to_string(), |b| format!("board {b}"))
+                ));
+            }
+            _ => {}
+        }
+    }
     match before {
         Some(b) => println!("the device is running boot_id {b}"),
         None => println!("the device did not answer GET {} before the upload", route::STATUS),
