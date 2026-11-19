@@ -20,9 +20,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use screeny_device_api::Board;
 use screeny_fwimage::build::Builder;
 use screeny_sim::{Config as SimConfig, OtaTiming, SimDevice};
-use screeny_studio::firmware::{Offer, Timing};
+use screeny_studio::firmware::{Offer, Timing, NO_BOARD};
 use screeny_studio::ha::bridge;
 use screeny_studio::ha::{Command, Order, Target};
 use screeny_studio::{AppState, Config, Running, Studio};
@@ -50,8 +51,13 @@ fn image(version: &'static str) -> Vec<u8> {
     Builder { version, ..Builder::good() }.build()
 }
 
-/// A simulator on loopback with known ports, running firmware `fw`.
-fn start_sim(fw: &str) -> (SimDevice, u16, u16) {
+fn art_image(version: &'static str) -> Vec<u8> {
+    Builder { version, ..Builder::for_board(Board::ArtPanel) }.build()
+}
+
+/// A simulator on loopback with known ports, running firmware `fw` built for
+/// `board` (`None`: firmware from before card 377, which does not say).
+fn start_sim(fw: &str, board: Option<Board>) -> (SimDevice, u16, u16) {
     for i in 0..60u16 {
         let (frame, http) = (52_800 + i * 2, 53_000 + i);
         let cfg = SimConfig {
@@ -61,6 +67,7 @@ fn start_sim(fw: &str) -> (SimDevice, u16, u16) {
             http_port: http,
             http_port_explicit: true,
             fw: fw.to_string(),
+            board,
             ..SimConfig::for_test()
         };
         if let Ok(dev) = SimDevice::start_with(cfg, None) {
@@ -175,10 +182,17 @@ struct Rig {
 struct Setup {
     /// What the panel runs.
     panel: &'static str,
-    /// What the Studio carries; `None` carries nothing.
+    /// What the Studio carries for the Tidbyt; `None` carries nothing.
     offer: Option<&'static str>,
-    /// Offered as it is, unchecked: a Studio that offers what a panel refuses.
-    unchecked: Option<Vec<u8>>,
+    /// What the Studio carries for the LED Art Panel (card 377).
+    offer_art: Option<&'static str>,
+    /// The panel is an LED Art Panel rather than a Tidbyt.
+    art: bool,
+    /// The panel runs firmware from before card 377: it reports no board.
+    old_firmware: bool,
+    /// Offered as it is, unchecked, as if for this board: a Studio that offers
+    /// what a panel refuses.
+    unchecked: Option<(Board, Vec<u8>)>,
     /// Model the update at all; `false` is a panel that accepts an image and
     /// does not restart (the simulator's default).
     model: bool,
@@ -193,7 +207,12 @@ struct Setup {
 }
 
 async fn rig(s: Setup) -> Rig {
-    let (dev, frame, http) = start_sim(s.panel);
+    let board = match (s.old_firmware, s.art) {
+        (true, _) => None,
+        (false, true) => Some(Board::ArtPanel),
+        (false, false) => Some(Board::Tidbyt),
+    };
+    let (dev, frame, http) = start_sim(s.panel, board);
     if s.model {
         dev.handle().model_ota(Some(OtaTiming {
             away_for: if s.gone_for_good { Duration::from_secs(3600) } else { FAST.away_for },
@@ -220,10 +239,16 @@ async fn rig(s: Setup) -> Rig {
     if let Some(version) = s.offer {
         let path = tmp.0.join("screeny-fw.bin");
         std::fs::write(&path, image(version)).expect("write the image");
-        cfg.firmware = Some(path);
+        cfg.firmware.push(path);
     }
-    if let Some(bytes) = s.unchecked {
-        cfg.firmware_offer = Some(Offer { version: s.offer.unwrap_or("9.9.9").to_string(), bytes: bytes.into() });
+    if let Some(version) = s.offer_art {
+        let path = tmp.0.join("screeny-fw-art-panel.bin");
+        std::fs::write(&path, art_image(version)).expect("write the image");
+        cfg.firmware.push(path);
+    }
+    if let Some((board, bytes)) = s.unchecked {
+        cfg.firmware_offers =
+            vec![Offer { version: s.offer.unwrap_or("9.9.9").to_string(), board, bytes: bytes.into() }];
     }
     let studio = Studio::bind(cfg).await.expect("bind an ephemeral loopback port");
     let st = studio.state();
@@ -384,28 +409,126 @@ async fn a_studio_with_no_firmware_offers_nothing() {
     assert_eq!(r.install().await.status, 409);
 }
 
-/// Failure: the panel refuses the image. Shown, and retryable.
+/// The panel's own refusal, run by the Studio before anything is sent (card
+/// 377's second lock): an image the panel would refuse is never uploaded, and
+/// Install says why. Before card 377 this was the panel refusing mid-upload;
+/// the Studio now runs the same validator first, so the refusal comes sooner
+/// and touches nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_refused_image_is_a_reported_failure() {
+async fn an_image_the_panel_would_refuse_is_never_sent() {
     let wrong = Builder::wrong_project().build();
-    let r =
-        rig(Setup { panel: "0.10.0", offer: Some("0.11.0"), unchecked: Some(wrong), model: true, ..Setup::default() })
-            .await;
-    assert_eq!(r.install().await.status, 200);
-    let done = r.until_settled("the refusal").await;
-    let why = done["run"]["why"].as_str().unwrap_or_default().to_string();
-    assert_eq!(done["run"]["phase"], "failed", "{done}");
-    assert!(why.contains("refused") && why.contains("not screeny firmware"), "{why}");
-    assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Idle, "the panel did not switch");
-    // HA is told the panel is not updating, and why it did not.
-    let fw = bridge::fleet_of(&r.st).panels[0].snapshot.firmware.clone();
-    assert!(!fw.in_progress && fw.failed.as_ref().is_some_and(|f| f.contains("refused")), "{fw:?}");
-    // A failure is not a lock: Install is available again.
-    assert_eq!(done["available"], true, "{done}");
+    let r = rig(Setup {
+        panel: "0.10.0",
+        offer: Some("0.11.0"),
+        unchecked: Some((Board::Tidbyt, wrong)),
+        model: true,
+        ..Setup::default()
+    })
+    .await;
+    let refused = r.install().await;
+    let body = String::from_utf8_lossy(&refused.body).to_string();
+    assert_eq!(refused.status, 409, "{body}");
+    assert!(body.contains("not screeny firmware"), "{body}");
+    assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Idle, "nothing was uploaded");
+    assert!(!r.st.firmware.active(&r.id));
     assert_eq!(
         r.st.devices.get(&r.id).and_then(|d| d.facts).map(|f| f.reply.fw.to_string()).as_deref(),
         Some("0.10.0")
     );
+}
+
+/// Card 377: an Art Frame is offered the art panel's image and is updated with
+/// it; the Tidbyt's image, carried beside it, is never its.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_art_panel_is_offered_and_given_its_own_image() {
+    let r = rig(Setup {
+        panel: "0.12.1",
+        art: true,
+        offer: Some("0.12.5"),
+        offer_art: Some("0.12.2"),
+        model: true,
+        ..Setup::default()
+    })
+    .await;
+    let u = r.update().await;
+    assert_eq!(
+        (u["board"].as_str(), u["offered"].as_str(), u["available"].clone()),
+        (Some("art-panel"), Some("0.12.2"), true.into()),
+        "{u}"
+    );
+    let fw = bridge::fleet_of(&r.st).panels[0].snapshot.firmware.clone();
+    assert_eq!((fw.installed.as_deref(), fw.latest.as_deref()), (Some("0.12.1"), Some("0.12.2")));
+    let started = r.install().await;
+    assert_eq!(started.status, 200, "{}", String::from_utf8_lossy(&started.body));
+    assert_eq!(started.json()["to"], "0.12.2");
+    let done = r.until_settled("the update to finish").await;
+    assert!(done["run"].is_null(), "{done}");
+    let now = get(r.studio.addr, "/api/v1/status").await.json();
+    assert_eq!(now["devices"][0]["facts"]["fw"], "0.12.2", "{now}");
+    assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Confirmed);
+}
+
+/// Card 377: a panel whose firmware does not say which board it is - the Art
+/// Frame on 0.11.3, every Tidbyt up to 0.12.0 - is offered nothing, on the
+/// page or in Home Assistant, and the page is told why.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_panel_that_does_not_say_its_board_is_offered_nothing() {
+    let r = rig(Setup {
+        panel: "0.11.3",
+        old_firmware: true,
+        offer: Some("0.12.1"),
+        offer_art: Some("0.12.1"),
+        model: true,
+        ..Setup::default()
+    })
+    .await;
+    let u = r.update().await;
+    assert_eq!(
+        (u["available"].clone(), u["offered"].clone(), u["board"].clone()),
+        (false.into(), serde_json::Value::Null, serde_json::Value::Null),
+        "{u}"
+    );
+    assert_eq!(u["why_not"], NO_BOARD, "{u}");
+    // Home Assistant: up to date, nothing to install.
+    let fw = bridge::fleet_of(&r.st).panels[0].snapshot.firmware.clone();
+    assert_eq!((fw.installed.as_deref(), fw.latest.as_deref()), (Some("0.11.3"), Some("0.11.3")));
+    let refused = r.install().await;
+    assert_eq!(refused.status, 409, "{}", String::from_utf8_lossy(&refused.body));
+    let ha = bridge::execute(&r.st, &Order { target: Target::Panel(r.id.clone()), command: Command::InstallFirmware });
+    assert!(ha.is_err(), "{ha:?}");
+    assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Idle, "nothing was uploaded");
+}
+
+/// Card 377: a Studio carrying only the Tidbyt's image offers an Art Frame
+/// nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_board_the_studio_carries_nothing_for_is_offered_nothing() {
+    let r = rig(Setup { panel: "0.12.1", art: true, offer: Some("0.13.0"), model: true, ..Setup::default() }).await;
+    let u = r.update().await;
+    assert_eq!((u["available"].clone(), u["offered"].clone()), (false.into(), serde_json::Value::Null), "{u}");
+    assert_eq!(r.install().await.status, 409);
+    assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Idle);
+}
+
+/// Card 377's second lock: an offer whose image is for another board than the
+/// one it is filed under is refused by the Studio before it is sent - which
+/// matters for panels on firmware that does not check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_studio_will_not_send_a_panel_another_boards_image() {
+    let r = rig(Setup {
+        panel: "0.12.1",
+        offer: Some("0.12.2"),
+        unchecked: Some((Board::Tidbyt, art_image("0.12.2"))),
+        model: true,
+        ..Setup::default()
+    })
+    .await;
+    assert_eq!(r.update().await["available"], true, "filed as a Tidbyt image, so it is offered");
+    let refused = r.install().await;
+    let body = String::from_utf8_lossy(&refused.body).to_string();
+    assert_eq!(refused.status, 409, "{body}");
+    assert!(body.contains("different board"), "{body}");
+    assert_eq!(r.dev.handle().ota_phase(), screeny_sim::OtaPhase::Idle, "nothing was uploaded");
 }
 
 /// Failure: the panel goes away in the middle of the upload.

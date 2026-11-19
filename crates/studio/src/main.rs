@@ -150,11 +150,14 @@ fn parse(args: impl Iterator<Item = String>, env: &dyn Fn(&str) -> Option<String
             v.parse().map_err(|_| format!("SCREENY_DEVICE_HTTP_PORT {v}: expected a port number"))?;
     }
 
-    // Card 364: the firmware this Studio offers. The Dockerfile puts the image
-    // at the default; a laptop has none there, and then nothing is offered.
-    cfg.firmware = Some(PathBuf::from(
-        env("SCREENY_FIRMWARE_FILE").unwrap_or_else(|| screeny_studio::firmware::DEFAULT_PATH.to_string()),
-    ));
+    // Card 364: the firmware this Studio offers. The Dockerfile puts the
+    // images at the defaults; a laptop has none there, and then nothing is
+    // offered. Card 377: one per board, so `SCREENY_FIRMWARE_FILE` is a list
+    // separated by `:` (one file still works); each image says its own board.
+    cfg.firmware = match env("SCREENY_FIRMWARE_FILE") {
+        Some(list) => list.split(':').filter(|p| !p.is_empty()).map(PathBuf::from).collect(),
+        None => screeny_studio::firmware::DEFAULT_PATHS.iter().map(PathBuf::from).collect(),
+    };
 
     let mut args = args.peekable();
     while let Some(arg) = args.next() {

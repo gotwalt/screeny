@@ -1289,7 +1289,9 @@ async fn device_firmware(State(st): State<AppState>, Json(req): Json<Reboot>) ->
         return Err(ApiError::not_found(format!("no device `{}`", req.device)));
     }
     crate::firmware::start(&st, &req.device).map_err(ApiError::unreachable)?;
-    Ok(Json(serde_json::json!({ "updating": req.device, "to": st.firmware.offered() })))
+    // The board was read by `start`; it is the panel's, and so is the offer.
+    let board = st.devices.get(&req.device).and_then(|r| r.facts.as_ref().and_then(|f| f.reply.board));
+    Ok(Json(serde_json::json!({ "updating": req.device, "to": board.and_then(|b| st.firmware.offered(b)) })))
 }
 
 /// Telemetry, read now rather than from the five-second poll.

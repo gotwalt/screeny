@@ -151,14 +151,16 @@ pub struct Config {
     /// Card 359: the Home Assistant Supervisor, whose MQTT broker is used
     /// when the owner has set none.
     pub supervisor: Option<ha::supervisor::Supervisor>,
-    /// Card 364: the firmware image this Studio offers to panels (the app
-    /// image, `screeny-fw-<v>.bin`). `None`, or a path with nothing at it,
-    /// offers nothing; everything else works.
-    pub firmware: Option<PathBuf>,
-    /// Card 364: an image to offer **without checking it** - for a test that
+    /// Card 364: the firmware images this Studio offers to panels (the app
+    /// images, `screeny-fw-<v>.bin` and `screeny-fw-art-panel-<v>.bin`).
+    /// Card 377: one per board, each offered only to panels that report that
+    /// board - which board is read from the image's tag, not its name. Empty,
+    /// or paths with nothing at them, offers nothing; everything else works.
+    pub firmware: Vec<PathBuf>,
+    /// Card 364: images to offer **without checking them** - for a test that
     /// needs a Studio to offer something the panel will refuse. Wins over
-    /// [`Config::firmware`]; the product never sets it.
-    pub firmware_offer: Option<firmware::Offer>,
+    /// [`Config::firmware`] when not empty; the product never sets it.
+    pub firmware_offers: Vec<firmware::Offer>,
     /// Card 364: how patient an update is. Tests make it quick.
     pub firmware_timing: firmware::Timing,
 }
@@ -183,8 +185,8 @@ impl Default for Config {
             peers: None,
             direct: None,
             supervisor: None,
-            firmware: None,
-            firmware_offer: None,
+            firmware: Vec::new(),
+            firmware_offers: Vec::new(),
             firmware_timing: firmware::Timing::default(),
         }
     }
@@ -260,9 +262,10 @@ impl AppState {
         ha: Arc<ha::Ha>,
     ) -> Self {
         let memory = panels.memory();
-        let firmware = Arc::new(match cfg.firmware_offer.clone() {
-            Some(offer) => firmware::Firmware::with_offer(Some(offer), cfg.firmware_timing),
-            None => firmware::Firmware::load(cfg.firmware.as_deref(), cfg.firmware_timing),
+        let firmware = Arc::new(if cfg.firmware_offers.is_empty() {
+            firmware::Firmware::load(&cfg.firmware, cfg.firmware_timing)
+        } else {
+            firmware::Firmware::with_offers(cfg.firmware_offers.clone(), cfg.firmware_timing)
         });
         AppState {
             states: broadcast::Sender::new(STATE_BACKLOG),
