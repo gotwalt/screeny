@@ -4,6 +4,19 @@ Custom firmware that turns a **Tidbyt Gen 1** (ESP32 + 64x32 HUB75 panel) into a
 network frame buffer. This is firmware for that specific board; a **Tidbyt Gen 2**
 is different hardware and has not been tried.
 
+## Which files are for which board
+
+Each image says which board it is for, and from 0.12.1 a panel refuses an image for
+any other board (an image from 0.12.0 or earlier says nothing and is refused too).
+
+| Board | Over WiFi (app image) | By cable (full image) |
+|---|---|---|
+| Tidbyt Gen 1 | `screeny-fw-<version>.bin` | `screeny-fw-<version>-full.bin` |
+| LED Art Panel (32x32, 4 MB) | `screeny-fw-art-panel-<version>.bin` | `screeny-fw-art-panel-<version>-full.bin` |
+
+The instructions below are written for the Tidbyt; for the LED Art Panel use its own
+files, and its full image is for a 4 MB flash.
+
 ## The easy way: the web flasher
 
 Plug the Tidbyt into a computer with a USB-C data cable and open
@@ -40,7 +53,11 @@ reflashing.
 
 ## Updating a panel already running screeny, over WiFi
 
-No cable needed. `screeny-fw-<version>.bin` is the app-only image for this:
+No cable needed. `screeny-fw-<version>.bin` (on an LED Art Panel,
+`screeny-fw-art-panel-<version>.bin`) is the app-only image for this. A panel on
+0.12.0 or earlier does not check which board an image is for, so pick the right file
+by hand that once; the Studio offers such a panel nothing for the same reason. From
+the panel's own page (Firmware update) or:
 
 ```bash
 cargo run --release -p screeny-probe -- --addr <device-ip> \

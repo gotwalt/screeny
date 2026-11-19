@@ -267,10 +267,19 @@ impl Firmware {
         let mut offers: BTreeMap<Board, Offer> = BTreeMap::new();
         for p in paths {
             let p = p.as_ref();
+            let default = DEFAULT_PATHS.iter().any(|d| p == Path::new(d));
             let bytes = match std::fs::read(p) {
+                // The Dockerfile leaves an empty art-panel file when the
+                // release it was built from had none (anything up to 0.12.0).
+                Ok(bytes) if bytes.is_empty() => {
+                    if !default {
+                        eprintln!("studio: {}: empty; it offers nothing", p.display());
+                    }
+                    continue;
+                }
                 Ok(bytes) => bytes,
                 Err(e) => {
-                    if e.kind() != std::io::ErrorKind::NotFound || !DEFAULT_PATHS.iter().any(|d| p == Path::new(d)) {
+                    if e.kind() != std::io::ErrorKind::NotFound || !default {
                         eprintln!("studio: {}: {e}; it offers nothing", p.display());
                     }
                     continue;

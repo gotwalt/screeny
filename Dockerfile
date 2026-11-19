@@ -20,9 +20,10 @@
 #   RUST_IMAGE    override the builder base, e.g. to pin a Rust version.
 #   FIRMWARE_VERSION
 #                 the panel firmware this image offers over the air (card 364):
-#                 the release `fw-v<version>`'s `screeny-fw-<version>.bin`,
-#                 downloaded at build time and checked against SHA256SUMS.
-#                 Bump it to offer a newer one.
+#                 the release `fw-v<version>`'s `screeny-fw-<version>.bin`
+#                 (Tidbyt) and, from 0.12.1, `screeny-fw-art-panel-<version>.bin`
+#                 (LED Art Panel, card 377), downloaded at build time and
+#                 checked against SHA256SUMS. Bump it to offer a newer one.
 
 ARG RUST_IMAGE=rust:1-trixie
 ARG RUNTIME_IMAGE=debian:trixie-slim
@@ -91,15 +92,31 @@ RUN set -eux; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl; \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /fw
+# Card 377: one app image per board. The Tidbyt's keeps its old name, so old
+# links and the page's instructions hold; the art panel's is new in 0.12.1. A
+# release that lists the art panel's image must have it and it must verify; one
+# from before (<= 0.12.0, which built only the Tidbyt) has none, and then the
+# Studio simply offers art panels nothing. The Studio files each image under
+# the board its own tag names, so the names here are only for people.
 RUN set -eux; \
-    img="screeny-fw-${FIRMWARE_VERSION}.bin"; \
     base="https://github.com/${FIRMWARE_REPO}/releases/download/fw-v${FIRMWARE_VERSION}"; \
     curl -fsSL --retry 3 -o SHA256SUMS "${base}/SHA256SUMS"; \
-    curl -fsSL --retry 3 -o "${img}" "${base}/${img}"; \
-    test "$(grep -cF "  ${img}" SHA256SUMS)" = 1; \
-    grep -F "  ${img}" SHA256SUMS | sha256sum -c -; \
-    mv "${img}" screeny-fw.bin; \
-    ls -l screeny-fw.bin
+    fetch() { \
+        img="$1"; out="$2"; \
+        curl -fsSL --retry 3 -o "${img}" "${base}/${img}"; \
+        test "$(grep -cF "  ${img}" SHA256SUMS)" = 1; \
+        grep -F "  ${img}" SHA256SUMS | sha256sum -c -; \
+        mv "${img}" "${out}"; \
+    }; \
+    fetch "screeny-fw-${FIRMWARE_VERSION}.bin" screeny-fw.bin; \
+    art="screeny-fw-art-panel-${FIRMWARE_VERSION}.bin"; \
+    if grep -qF "  ${art}" SHA256SUMS; then \
+        fetch "${art}" screeny-fw-art-panel.bin; \
+    else \
+        echo "fw-v${FIRMWARE_VERSION} has no ${art}: art panels are offered nothing"; \
+        : > screeny-fw-art-panel.bin; \
+    fi; \
+    ls -l screeny-fw*.bin
 
 # ------------------------------------------------------------------ base ---
 # Everything the two images below share. Never built on its own.
@@ -136,8 +153,11 @@ RUN set -eux; \
 
 COPY --from=builder /out/screeny-studio /usr/local/bin/screeny-studio
 COPY --from=builder /out/screeny /usr/local/bin/screeny
-# Card 364: where `screeny_studio::firmware::DEFAULT_PATH` looks.
+# Card 364 / 377: where `screeny_studio::firmware::DEFAULT_PATHS` look. An
+# empty art-panel file (a release from before it existed) is read as "not an
+# image" and offers nothing; the Studio logs one line saying so.
 COPY --from=firmware /fw/screeny-fw.bin /usr/local/share/screeny/screeny-fw.bin
+COPY --from=firmware /fw/screeny-fw-art-panel.bin /usr/local/share/screeny/screeny-fw-art-panel.bin
 
 WORKDIR /data
 

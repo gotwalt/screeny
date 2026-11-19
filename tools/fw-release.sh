@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# Build the firmware (one image for every Gen 1 unit since card 361: the colour
-# order is a stored setting), package it as GitHub Release assets, and cut the
-# release. Assets go under target/fw-release/<version>/.
+# Build the firmware for every board, package it as GitHub Release assets, and
+# cut the release. Assets go under target/fw-release/<version>/.
+#
+# Boards (card 377; each image carries its board in esp_app_desc.idf_ver and
+# firmware from 0.12.1 refuses any other):
+#   tidbyt     every Gen 1 unit (one image since card 361: the colour order is a
+#              stored setting). 8 MB, firmware/partitions.csv.
+#              screeny-fw-<v>.bin, screeny-fw-<v>-full.bin (names unchanged).
+#   art-panel  the LED Art Panel: --features board-art-panel,
+#              ESP_HAL_CONFIG_MIN_CHIP_REVISION=100 (its ESP32 is rev 1.0),
+#              4 MB, firmware/partitions-4mb.csv.
+#              screeny-fw-art-panel-<v>.bin, screeny-fw-art-panel-<v>-full.bin.
 #
 # Usage: tools/fw-release.sh [--dry-run] [--draft] [--no-build]
 #   --dry-run  print every command; refuse nothing about the tag, branch or
@@ -53,7 +62,6 @@ OUT="target/fw-release/$VERSION"
 mkdir -p "$OUT"
 ELF=firmware/target/xtensa-esp32-none-elf/release/screeny-fw
 BOOTLOADER=firmware/bootloader/esp32-rollback-bootloader.bin
-PARTS=firmware/partitions.csv
 ESP_ENV="$HOME/export-esp.sh"
 
 # 3. Build + image the firmware. Paths are computed here, not returned from the
@@ -61,18 +69,23 @@ ESP_ENV="$HOME/export-esp.sh"
 # be parsed.
 APP_DEFAULT="$OUT/screeny-fw-$VERSION.bin"
 FULL_DEFAULT="$OUT/screeny-fw-$VERSION-full.bin"
+APP_ART="$OUT/screeny-fw-art-panel-$VERSION.bin"
+FULL_ART="$OUT/screeny-fw-art-panel-$VERSION-full.bin"
 
+# build_variant <features> <min-chip-rev or ""> <flash size> <partition table> <app> <full>
+# The ELF path is shared, so each variant is imaged before the next is built.
 build_variant() {
-  local features=$1 app=$2 full=$3
+  local features=$1 min_rev=$2 flash=$3 parts=$4 app=$5 full=$6
   if [[ $NO_BUILD -eq 0 ]]; then
     [[ -f "$ESP_ENV" ]] || { echo "missing $ESP_ENV (run: espup install)" >&2; exit 1; }
     # shellcheck disable=SC1090
     source "$ESP_ENV"
-    echo "building firmware${features:+ (--features $features)}"
-    (cd firmware && timeout 900 cargo build --release ${features:+--features "$features"})
+    echo "building firmware${features:+ (--features $features)}${min_rev:+ (MIN_CHIP_REVISION=$min_rev)}"
+    (cd firmware && ${min_rev:+env ESP_HAL_CONFIG_MIN_CHIP_REVISION="$min_rev"} \
+      timeout 900 cargo build --release ${features:+--features "$features"})
     # The app image: what fw-upload stages into the inactive OTA slot.
-    timeout 120 espflash save-image --chip esp32 --flash-size 8mb \
-      --partition-table "$PARTS" "$ELF" "$app"
+    timeout 120 espflash save-image --chip esp32 --flash-size "$flash" \
+      --partition-table "$parts" "$ELF" "$app"
     # The full image: bootloader + partition table + app, merged so it can be
     # written at flash address 0 in one shot. espflash pads the gaps between
     # segments with 0xFF, including 0xE000..0x10000, which is the otadata
@@ -84,22 +97,27 @@ build_variant() {
     # the settings partition at 0x410000 - the stored WiFi credentials - on
     # every reflash. The file ends where the app ends, and everything past it
     # on the chip is left alone.
-    timeout 120 espflash save-image --merge --skip-padding --chip esp32 --flash-size 8mb \
-      --partition-table "$PARTS" --bootloader "$BOOTLOADER" "$ELF" "$full"
+    timeout 120 espflash save-image --merge --skip-padding --chip esp32 --flash-size "$flash" \
+      --partition-table "$parts" --bootloader "$BOOTLOADER" "$ELF" "$full"
   else
     [[ -f "$app" && -f "$full" ]] || { echo "--no-build: $app / $full missing" >&2; exit 1; }
   fi
 }
 
-build_variant "" "$APP_DEFAULT" "$FULL_DEFAULT"
+build_variant "" "" 8mb firmware/partitions.csv "$APP_DEFAULT" "$FULL_DEFAULT"
+build_variant board-art-panel 100 4mb firmware/partitions-4mb.csv "$APP_ART" "$FULL_ART"
 
-(cd "$OUT" && shasum -a 256 screeny-fw-"$VERSION"*.bin > SHA256SUMS)
+(cd "$OUT" && shasum -a 256 screeny-fw-*"$VERSION"*.bin > SHA256SUMS)
 
-# 4. Scan the app image the way the device would; refuse the release if it
-# would refuse the image.
-for img in "$APP_DEFAULT"; do
-  echo "fw-scan $img"
-  timeout 120 cargo run --release -p screeny-probe -- fw-scan "$img"
+# 4. Scan each app image the way the device would, and check it names the
+# board its file name says; refuse the release otherwise. A Tidbyt image under
+# the art panel's name is exactly what card 377 exists to stop.
+for pair in "tidbyt:$APP_DEFAULT" "art-panel:$APP_ART"; do
+  board=${pair%%:*} img=${pair#*:}
+  echo "fw-scan $img (expect board $board)"
+  scan=$(timeout 120 cargo run -q --release -p screeny-probe -- fw-scan "$img") || { echo "$scan" >&2; exit 1; }
+  echo "$scan"
+  grep -q "^  board $board " <<<"$scan" || { echo "refusing: $img is not tagged board=$board" >&2; exit 1; }
 done
 
 # 5. Release body + the gh command. Printed before it runs, and --dry-run
@@ -109,7 +127,7 @@ sed "s/<version>/$VERSION/g" docs/release-notes-template.md > "$BODY"
 
 GH_CMD=(gh release create "$TAG" --title "screeny firmware $VERSION" --notes-file "$BODY")
 [[ $DRAFT -eq 1 ]] && GH_CMD+=(--draft)
-GH_CMD+=("$OUT"/screeny-fw-"$VERSION"*.bin "$OUT/SHA256SUMS")
+GH_CMD+=("$OUT"/screeny-fw-*"$VERSION"*.bin "$OUT/SHA256SUMS")
 
 printf 'would run:'; printf ' %q' "${GH_CMD[@]}"; printf '\n'
 if [[ $DRY_RUN -eq 0 ]]; then
