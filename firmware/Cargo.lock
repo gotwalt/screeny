@@ -1027,8 +1027,6 @@ dependencies = [
 [[package]]
 name = "esp-radio-rtos-driver"
 version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27d3ad9d7ed96260566acd1a69a908ff805cfaa73a936ae445c1252e1ec983be"
 dependencies = [
  "esp-sync",
  "portable-atomic",

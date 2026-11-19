@@ -15,6 +15,11 @@ description = "screeny firmware: Tidbyt Gen 1 (ESP32) as a UDP network frame buf
 # beside it. What changed and why: `vendor/README.md`.
 [patch.crates-io]
 hub75-framebuffer = { path = "vendor/hub75-framebuffer" }
+# Card 378: radio tasks that name no core are pinned to core 0, so esp-rtos
+# never migrates a task between cores (esp-hal #6599 / #6646, unreleased). The
+# crash it ends: `LoadProhibited` on the AppCpu inside a radio mutex, with a
+# garbage current-task pointer. One line changed: `vendor/README.md`.
+esp-radio-rtos-driver = { path = "vendor/esp-radio-rtos-driver" }
 
 [features]
 default = []
