@@ -421,7 +421,7 @@ fn reset_reason() -> ResetReason {
 enum ApiBody {
     Status(StatusReply),
     /// The RTC breadcrumb (card 243). **Boxed since card 378**: with
-    /// `last_trace` a `PanicReply` outgrew [`ApiBody::Status`] (about 236
+    /// `last_trace` a `PanicReply` outgrew [`ApiBody::Status`] (232
     /// bytes against 208), which would have made it the variant that sizes
     /// this enum and every request-path frame that holds one - card 243b's
     /// twelve-fold cost. On the heap it is four bytes here, and it is
