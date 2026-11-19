@@ -277,7 +277,15 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// Display, Clock, Panel and System, and settings apply as they change. Swaps
 /// and flash writes no longer meet, so the panel stops blinking during an
 /// update.
-pub const FW_VERSION: &str = "0.12.0";
+///
+/// **0.13.0: an image knows its board, and the radio stays on core 0.** Every
+/// image names its board in `esp_app_desc.idf_ver` and a device refuses one
+/// made for another board, or too old to say (card 377); status reports
+/// `board`. WiFi-driver tasks that name no core run on core 0, so no task moves
+/// between cores (the esp-hal #6599 trap-frame race behind a core-1
+/// `LoadProhibited`, card 378); `GET /api/v1/panic` carries `last_trace`.
+/// 0.13 rather than 0.12.1 so it sorts above every `0.12.N-clock` dev build.
+pub const FW_VERSION: &str = "0.13.0";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
