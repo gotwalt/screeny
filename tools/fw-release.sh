@@ -86,6 +86,10 @@ build_variant() {
     # on the chip is left alone.
     timeout 120 espflash save-image --merge --skip-padding --chip esp32 --flash-size 8mb \
       --partition-table "$PARTS" --bootloader "$BOOTLOADER" "$ELF" "$full"
+    # Card 378: keep the ELF beside the images, to symbolise a device's
+    # `last_panic.what` pc later. Local only: ~14 MB of debug info, and the
+    # uploads below take *.bin.
+    cp "$ELF" "${app%.bin}.elf"
   else
     [[ -f "$app" && -f "$full" ]] || { echo "--no-build: $app / $full missing" >&2; exit 1; }
   fi
