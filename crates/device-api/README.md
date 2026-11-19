@@ -16,7 +16,7 @@ Sizes are bytes of JSON, and the size columns come from the constants in the cod
 
 | Method | Path | Request | Reply | req ≤ | reply ≤ |
 |---|---|---|---|---|---|
-| GET | `/api/v1/status` | - | `StatusReply` | - | 1039 |
+| GET | `/api/v1/status` | - | `StatusReply` | - | 1059 |
 | GET | `/api/v1/telemetry` | - | `TelemetryReply` | - | 426 |
 | GET | `/api/v1/panic` | - | `PanicReply` | - | 410 |
 | GET | `/api/v1/networks` | - | `NetworksReply` (≤ 16, strongest first) | - | 3710 |
@@ -97,7 +97,7 @@ not the same kind of number on each side:
   array, and for the honest answer to "how big can this get".
 
 The bounds assume every byte of every name escapes to six characters (`\u001f`), which
-never happens: a real status reply is 385 bytes against a bound of 1039.
+never happens: a real status reply is 402 bytes against a bound of 1059.
 
 ## Three things that will bite whoever wires this up
 

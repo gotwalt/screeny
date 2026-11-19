@@ -1198,6 +1198,14 @@ shape here bumps it and moves the prefix, a new optional field does not.
   the selected entry and was corrected in 0.7.1, card 246.) Its `wifi_state` is **the link** -
   `connected` / `connecting` / `disconnected` - and never the sticky result of
   the last credentials attempt (§8.3; probe rule 8).
+
+  **`board`** (card 377, firmware 0.12.1) is the board the running firmware was
+  built for, and so the only board whose images it takes (§8.6, check 4b):
+  `"tidbyt"` or `"art-panel"`. A device that knows its board MUST send it.
+  Firmware up to 0.12.0 does not, and a reader MUST treat it as optional:
+  absent means "too old to say", never "a Tidbyt". The Studio offers such a
+  panel no update at all, because that firmware takes any `screeny-fw` image
+  and nothing on the wire says which one fits it.
   **Nothing else goes in it.** It is the one route that is polled - the Studio
   every 10 s, the page every 4 - and firmware 0.5.2 measured what a field here
   costs on the device: 44 bytes added to the reply cost **3,488 bytes of core
@@ -1301,16 +1309,37 @@ shape here bumps it and moves the prefix, a new optional field does not.
   | 2 | the header's chip id is the device's | `wrong_chip` |
   | 3 | the header says a SHA-256 is appended (byte 23) | `bad_sha256` |
   | 4 | `esp_app_desc.project_name` is `screeny-fw` | `wrong_project` |
+  | 4b | `esp_app_desc.idf_ver` is the device's own board tag | `wrong_board` |
   | 5 | the segment table walks and the one-byte XOR checksum is right | `bad_checksum` |
   | 6 | the appended SHA-256 matches the bytes it covers | `bad_sha256` |
 
   Plus `too_large` for an image or a `Content-Length` past the slot, `busy`
   when another upload is in flight, and `flash` when the write itself failed.
-  The first four are answerable from the first 4,096 bytes, and a device
-  SHOULD refuse on them before it erases anything - which is what makes a
-  wrong-chip or wrong-project upload free to send at a device (probe rules 40
-  and 41). An upload that stops early is `bad_sha256`: the digest is what a
-  truncated image fails.
+  The first four (with 4b) are answerable from the first 4,096 bytes, and a
+  device SHOULD refuse on them before it erases anything - which is what makes
+  a wrong-chip, wrong-project or wrong-board upload free to send at a device
+  (probe rules 40 and 41). An upload that stops early is `bad_sha256`: the
+  digest is what a truncated image fails.
+
+  **The board tag (check 4b, card 377).** One image does not fit every board:
+  the LED Art Panel is a revision-1 ESP32 with 4 MB of flash and its display on
+  core 0, and a Tidbyt image booted on it crashed before it could confirm
+  itself (rolled back by §8.10, by luck rather than design). So an image names
+  its board, in the field of the app descriptor nothing in the boot path
+  reads: **`esp_app_desc.idf_ver` (32 bytes at descriptor offset 112, image
+  offset 144) is exactly `board=<id>`, NUL-padded**, with `<id>` one of
+  `tidbyt` or `art-panel` - the same ids as `status.board`. `project_name`
+  stays `screeny-fw`, so a device from before the tag still takes a tagged
+  image. A device that knows its board MUST refuse, as `wrong_board`, an image
+  whose tag names another board **and an image with no tag at all** (anything
+  else in `idf_ver`; every release up to 0.12.0 says `v5.x` there): those are
+  all Tidbyt images and all older than any firmware that checks, so refusing
+  them is never refusing an upgrade. 4b runs after 4, so somebody else's image
+  is still `wrong_project`. The spelling lives in `crates/fwimage`
+  (`board_tag`), which the firmware's `esp_app_desc!` calls. A client that
+  sends images (the Studio) SHOULD run the same check against the device's
+  reported `board` before it sends, because a device from before the tag does
+  not.
 
   One implementation of the checks is `crates/fwimage`, which the firmware and
   `crates/sim` both link, so the simulator refuses exactly what the device

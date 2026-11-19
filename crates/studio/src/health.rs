@@ -317,6 +317,7 @@ pub fn collect(st: &AppState) -> Status {
                     &d.stored.id,
                     d.facts.as_ref().map(|f| f.reply.fw.to_string()).as_deref(),
                     d.facts.as_ref().map(|f| f.reply.fw_state),
+                    d.facts.as_ref().and_then(|f| f.reply.board),
                 ),
                 http: d.http.clone(),
                 traffic: d.traffic.reported(),

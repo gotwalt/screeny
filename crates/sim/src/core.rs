@@ -255,6 +255,8 @@ pub struct Ident {
     pub boot_id: u32,
     /// The firmware version string.
     pub fw: String,
+    /// The board the firmware says it is for; `None` plays old firmware.
+    pub board: Option<screeny_device_api::Board>,
     /// Heap in use, bytes.
     pub heap_used: u32,
     /// Heap total, bytes. The firmware's 64 + 32 KB (card 220).
@@ -339,6 +341,7 @@ impl Core {
                 id: cfg.id.clone(),
                 boot_id: draw_boot_id(),
                 fw: cfg.fw.clone(),
+                board: cfg.board,
                 heap_used: cfg.health.heap_used,
                 heap_size: cfg.health.heap_size,
                 stack_free: cfg.health.stack_free,

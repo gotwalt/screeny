@@ -306,6 +306,12 @@ pub struct Config {
     pub id: String,
     /// Firmware version string, the `fw=` TXT key.
     pub fw: String,
+    /// The board the simulated firmware says it is built for (card 377):
+    /// `board` in `GET /api/v1/status`, and the only board whose images
+    /// `POST /api/v1/firmware` takes. `None` plays firmware from before card
+    /// 377, which reports no board and takes any `screeny-fw` image - the
+    /// case the Studio must offer nothing to. `--board`, default `tidbyt`.
+    pub board: Option<screeny_device_api::Board>,
     /// Advertise over mDNS. Off in tests: they use loopback and a known port.
     pub mdns: bool,
     /// The brightness ceiling `SET_BRIGHTNESS` clamps to, which is how a
@@ -399,6 +405,7 @@ impl Default for Config {
             instance: crate::DEFAULT_INSTANCE.into(),
             id: "515151".into(),
             fw: concat!("sim-", env!("CARGO_PKG_VERSION")).into(),
+            board: Some(screeny_device_api::Board::Tidbyt),
             mdns: false,
             brightness_cap: 255,
             brightness: 255,

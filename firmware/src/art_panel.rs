@@ -15,6 +15,10 @@
 //! The same names as [`crate::tidbyt`], so `crate::board` can be either.
 #![allow(dead_code)]
 
+/// Which board this is, as the image's tag (`esp_app_desc.idf_ver`), the
+/// upload check and `GET /api/v1/status` say it (card 377).
+pub const BOARD: screeny_device_api::Board = screeny_device_api::Board::ArtPanel;
+
 /// Panel geometry. 1/16 scan like the Tidbyt's, so the row address is four
 /// bits and the driver is the same; only the width differs.
 pub const PANEL_COLS: usize = 32;

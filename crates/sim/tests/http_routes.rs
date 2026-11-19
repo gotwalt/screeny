@@ -287,6 +287,16 @@ fn the_firmware_route_checks_what_it_can_and_installs_nothing() {
     let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &theirs).parse();
     assert_eq!(r.error, Some(FirmwareError::WrongProject));
 
+    // Card 377: a screeny image for the other board, and one from before
+    // images named a board. Both refused from the first sector.
+    use screeny_device_api::Board;
+    let art = screeny_fwimage::build::Builder::for_board(Board::ArtPanel).build();
+    let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &art).parse();
+    assert_eq!((r.ok, r.error, r.written), (false, Some(FirmwareError::WrongBoard), 0));
+    let old = screeny_fwimage::build::Builder::untagged().build();
+    let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &old).parse();
+    assert_eq!(r.error, Some(FirmwareError::WrongBoard));
+
     let mut flipped = image();
     flipped[2000] ^= 0x01;
     let r: FirmwareReply = http::post_bytes(addr, route::FIRMWARE, &flipped).parse();
@@ -590,5 +600,32 @@ fn a_chunked_request_body_is_refused_rather_than_misread() {
     let res = http::parse(&wire);
     assert_eq!(res.status, 400);
     assert_eq!(res.error_code(), "bad_request");
+    dev.shutdown();
+}
+
+/// Card 377: the board is in the status, and a simulator playing firmware from
+/// before the card reports none and - like those devices - checks none.
+#[test]
+fn the_status_names_the_board_and_old_firmware_checks_none() {
+    use screeny_device_api::reply::StatusReply;
+    use screeny_device_api::Board;
+    let dev = SimDevice::start(Config { board: Some(Board::ArtPanel), ..Config::for_test() }).unwrap();
+    let s: StatusReply = http::get(api(&dev), route::STATUS).parse();
+    assert_eq!(s.board, Some(Board::ArtPanel));
+    let tidbyt = screeny_fwimage::build::Builder::for_board(Board::Tidbyt).build();
+    let r: FirmwareReply = http::post_bytes(api(&dev), route::FIRMWARE, &tidbyt).parse();
+    assert_eq!(r.error, Some(FirmwareError::WrongBoard), "the Art Frame incident, refused");
+    let art = screeny_fwimage::build::Builder::for_board(Board::ArtPanel).build();
+    let r: FirmwareReply = http::post_bytes(api(&dev), route::FIRMWARE, &art).parse();
+    assert!(r.ok, "{r:?}");
+    dev.shutdown();
+
+    let dev = SimDevice::start(Config { board: None, ..Config::for_test() }).unwrap();
+    let raw = http::get(api(&dev), route::STATUS);
+    assert!(!String::from_utf8_lossy(&raw.body).contains("board"), "old firmware has no such field");
+    let s: StatusReply = raw.parse();
+    assert_eq!(s.board, None);
+    let r: FirmwareReply = http::post_bytes(api(&dev), route::FIRMWARE, &tidbyt).parse();
+    assert!(r.ok, "old firmware takes any screeny-fw image: {r:?}");
     dev.shutdown();
 }

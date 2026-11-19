@@ -259,3 +259,23 @@ fn the_device_is_as_it_was_found_afterwards() {
 
     dev.shutdown();
 }
+
+/// Card 377: the firmware section holds on an art panel and on firmware too old
+/// to say its board - rule 47 refuses there, rule 43 builds its image for the
+/// device's own board, and on old firmware rule 47 skips rather than send an
+/// image that firmware would take.
+#[test]
+fn the_firmware_rules_hold_on_every_board() {
+    use screeny_device_api::Board;
+    for (board, skips) in [(Some(Board::Tidbyt), false), (Some(Board::ArtPanel), false), (None, true)] {
+        let dev = SimDevice::start(Config { board, ..Config::for_test() }).expect("bind loopback");
+        let http_addr = dev.http_addr().expect("the HTTP API is on");
+        let base =
+            http::Opts { ctrl_addr: Some(dev.control_addr()), ..http::Opts::new(http_addr, http_addr.to_string()) };
+        let s = http::run(&http::Opts { only: Some("firmware".into()), ctrlc: false, ..base.clone() }).expect("ran");
+        assert_eq!(s.failed, 0, "{board:?}");
+        let one = http::run(&http::Opts { only: Some("47".into()), ctrlc: false, ..base }).expect("ran");
+        assert_eq!((one.passed, one.skipped, one.failed), if skips { (0, 1, 0) } else { (1, 0, 0) }, "{board:?}");
+        dev.shutdown();
+    }
+}

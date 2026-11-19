@@ -154,8 +154,14 @@ fn panel_of(st: &AppState, panel: &Arc<Panel>) -> Snapshot {
     let device = panel.device();
     let record = st.devices.get(&device);
     let facts = record.as_ref().and_then(|r| r.facts.as_ref());
-    let view =
-        st.firmware.view(&device, facts.map(|f| f.reply.fw.to_string()).as_deref(), facts.map(|f| f.reply.fw_state));
+    // Card 377: offered only the image for the board it reports, and nothing
+    // when it reports none - which HA shows as up to date.
+    let view = st.firmware.view(
+        &device,
+        facts.map(|f| f.reply.fw.to_string()).as_deref(),
+        facts.map(|f| f.reply.fw_state),
+        facts.and_then(|f| f.reply.board),
+    );
     Snapshot {
         firmware: super::FirmwareState::of(&view),
         brightness: status.brightness,

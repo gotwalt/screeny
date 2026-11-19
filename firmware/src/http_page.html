@@ -95,7 +95,7 @@ progress{width:100%}
 </details>
 <details><summary>Firmware update</summary>
 <p class="sub" id="fwline"></p>
-<p class="sub">The Studio's Panel screen and Home Assistant can update it for you. Or download <code>screeny-fw-&lt;version&gt;.bin</code> (not the <code>-full.bin</code>) from
+<p class="sub">The Studio's Panel screen and Home Assistant can update it for you. Or download <code id="fwname">screeny-fw-&lt;version&gt;.bin</code> (not the <code>-full.bin</code>) from
 <a href="https://github.com/gotwalt/screeny/releases" rel="noopener">github.com/gotwalt/screeny/releases</a> and upload it here.</p>
 <form id="up" hidden>
 <label><input id="fwfile" type="file" accept=".bin" required></label>
@@ -135,7 +135,8 @@ const put=(k,v)=>{const c=cell(k);if(c)c.textContent=v};
 let busy=0;const hold=()=>{busy=Date.now()};
 const showClock=()=>{$("#clock").hidden=$("#idle").value!=="clock"};
 function paint(s){
- put("name",s.name);put("id",s.id);put("fw",s.fw);put("state",w(s.state));put("wifi",w(s.wifi_state));
+ put("name",s.name);put("id",s.id);put("fw",s.board?s.fw+" ("+s.board+")":s.fw);
+ if(s.board)$("#fwname").textContent=s.board==="tidbyt"?"screeny-fw-<version>.bin":"screeny-fw-"+s.board+"-<version>.bin";put("state",w(s.state));put("wifi",w(s.wifi_state));
  put("ssid",s.ssid??"-");put("ip",s.ip??"-");put("rssi",sig(s.rssi_dbm));
  put("brightness",s.brightness);put("idle_mode",w(s.idle_mode));
  put("uptime",up(Math.floor(s.uptime_ms/1000)));put("heap",s.heap_used+" / "+s.heap_size);
@@ -179,7 +180,8 @@ $("#ident").addEventListener("click",()=>send("/api/v1/identify",{duration_ms:10
 $("#boot").addEventListener("click",()=>{if(confirm("Reboot the panel now?"))send("/api/v1/reboot",{confirm:"RBOO"},"Rebooting")});
 const UE={bad_magic:"that is not a firmware file",wrong_chip:"it was built for a different chip",wrong_project:"that is not Screeny firmware",
  bad_checksum:"the file is damaged - download it again",bad_sha256:"the file is damaged or incomplete - download it again",
- too_large:"the file is too big for this panel",busy:"another update is already running",flash:"the panel could not write it to its memory"};
+ too_large:"the file is too big for this panel",busy:"another update is already running",flash:"the panel could not write it to its memory",
+ wrong_board:"it is for a different kind of panel, or too old to say which (anything up to 0.12.0) - use the file made for this panel"};
 const upm=t=>{$("#upm").textContent=t};
 $("#up").hidden=false;
 $("#up").addEventListener("submit",e=>{

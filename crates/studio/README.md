@@ -752,13 +752,25 @@ live facts and not state. `tests/ssid.rs` checks both.
 
 ### Firmware updates (card 364)
 
-The image carries one firmware: the Dockerfile fetches the release app image
-`screeny-fw-<FIRMWARE_VERSION>.bin` (not the `-full.bin` a first install flashes), checks it
-against the release's `SHA256SUMS` and puts it at `/usr/local/share/screeny/screeny-fw.bin`
-(`SCREENY_FIRMWARE_FILE` says otherwise). At start the studio reads it with the device's own
-validator (`screeny-fwimage`'s `Scan`) and takes the version from `esp_app_desc`. **No file,
-or a bad one, offers nothing** and everything else works - a local `cargo run` has none.
-There is no internet at runtime: a new studio image is what offers a new firmware.
+The image carries **one firmware per board** (card 377): the Dockerfile fetches the release
+app images `screeny-fw-<FIRMWARE_VERSION>.bin` (Tidbyt) and
+`screeny-fw-art-panel-<FIRMWARE_VERSION>.bin` (LED Art Panel) - not the `-full.bin` a first
+install flashes - checks both against the release's `SHA256SUMS` and puts them at
+`/usr/local/share/screeny/screeny-fw.bin` and `.../screeny-fw-art-panel.bin`
+(`SCREENY_FIRMWARE_FILE`, a `:`-separated list, says otherwise). At start the studio reads each
+with the device's own validator (`screeny-fwimage`'s `Scan`) and takes the version from
+`esp_app_desc` and **the board from the image's own tag** (`esp_app_desc.idf_ver`), never
+from the file name; an image that names no board (anything up to 0.12.0) is offered to
+nobody. **No file, or a bad one, offers nothing** for that board and everything else works -
+a local `cargo run` has none. There is no internet at runtime: a new studio image is what
+offers a new firmware.
+
+**A panel is offered only the image for the board it reports** (`board` in its
+`GET /api/v1/status`). A panel that reports none - firmware up to 0.12.0, which would take
+any `screeny-fw` image - is offered nothing: the page says "this panel's firmware is too old
+to say which board it is; update it once from its own page", and Home Assistant shows it up
+to date. Before uploading, the studio also runs the panel's own board check on the image
+(`firmware::check_for`), because old firmware does not.
 
 Each panel's `devices[].update` in `GET /api/v1/status` says what it runs, what is on offer,
 whether Install can start now (`available`, else `why_not`) and the attempt in progress or

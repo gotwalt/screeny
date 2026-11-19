@@ -424,10 +424,15 @@ async function start() {
 
   /** The Firmware row: what the panel runs, and what is on offer. */
   function firmwareRow(f, u) {
-    const running = f.fw;
+    // Card 377: the board the panel says it is, beside the version - the
+    // offer is that board's image and no other.
+    const running = u && u.board ? `${f.fw} (${u.board})` : f.fw;
     if (u && u.run && u.run.phase !== 'failed') return ['Firmware', `${running} · updating to ${u.offered}: ${updateProgress(u.run)}`, 'warn'];
     if (u && u.run && u.run.phase === 'failed') return ['Firmware', `${running} · the last update failed: ${u.run.why}`, 'warn'];
     if (u && u.available) return ['Firmware', `${running} · ${u.offered} is available`];
+    // A panel too old to say which board it is gets no offer, and is told why
+    // (it needs one update by hand from its own page).
+    if (u && u.installed && !u.board && u.why_not && u.why_not.includes('which board')) return ['Firmware', `${running} · ${u.why_not}`, 'dim'];
     return ['Firmware', running];
   }
 

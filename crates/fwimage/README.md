@@ -30,6 +30,7 @@ Research 006 section 5's, cheapest first, each with its own
 | 2 | the header's chip id is ESP32 (`0x0000`) | `wrong_chip` |
 | 3 | the header says a SHA-256 is appended (byte 23) | `bad_sha256` |
 | 4 | `esp_app_desc.project_name` is `screeny-fw` | `wrong_project` |
+| 4b | `esp_app_desc.idf_ver` is this device's board tag (`board=tidbyt`, `board=art-panel`; card 377) | `wrong_board` |
 | 5 | the segment table walks and the one-byte XOR checksum is right | `bad_checksum` |
 | 6 | the appended SHA-256 matches the bytes it covers | `bad_sha256` |
 
@@ -38,25 +39,35 @@ folds "a hash is appended" into the hash check: an image without one cannot be
 verified at all, so refusing it *is* the SHA-256 check failing.
 
 **The first four are decidable from the first 4,096 bytes**, and that is the
-property the firmware's whole design rests on: a wrong-chip or wrong-project
-upload is refused before a single flash sector has been erased. `Scan::push`
-answers 1–3 from the header and `Scan::check_front` answers 4 as soon as 112
-bytes have arrived; the staging loop calls both before it touches flash.
+property the firmware's whole design rests on: a wrong-chip, wrong-project or
+wrong-board upload is refused before a single flash sector has been erased.
+`Scan::push` answers 1–3 from the header and `Scan::check_front` answers 4 and
+4b as soon as 176 bytes have arrived; the staging loop calls both before it
+touches flash.
+
+**The board tag** (card 377) is the whole of `esp_app_desc.idf_ver`, a field
+the boot path never reads, so `project_name` stays `screeny-fw` and a device
+from before the card still takes a tagged image. `board_tag(board)` is the one
+spelling, a `const fn` the firmware's `esp_app_desc!` calls. An image whose
+`idf_ver` is anything else - every release up to 0.12.0 says `v5.x` - names no
+board and is `wrong_board` on every device that checks. `Scan::any_board` checks
+everything except the board and reports it in `Image::board`: that is for a
+tool sorting images (the Studio), never for admitting one onto a device.
 
 ## Using it
 
 ```rust
-use screeny_fwimage::{Scan, SECTOR};
+use screeny_fwimage::{Board, Scan, SECTOR};
 
-let mut scan = Scan::new(0x20_0000);       // the slot's length
+let mut scan = Scan::new(0x20_0000, Board::Tidbyt); // the slot, this board
 for piece in upload.chunks(SECTOR) {        // any sizes; the socket decides
     scan.push(piece)?;
     scan.check_front()?;                    // before you erase anything
 }
-let image = scan.finish()?;                 // len, version, segments, digest
+let image = scan.finish()?;                 // len, version, board, segments, digest
 ```
 
-`Scan` is about 240 bytes and never holds the image: a copy of the first 112, a
+`Scan` is about 240 bytes and never holds the image: a copy of the first 176, a
 segment cursor, a running XOR and a SHA-256 state. `Rehash` is the same hash
 over bytes a caller supplies from somewhere else — the firmware uses it to
 verify the staged slot *read back out of flash*, which is the half that catches
@@ -69,14 +80,15 @@ is asked for anything.
 ## Building an image (feature `build`, on by default)
 
 `build::Builder` makes a real ESP32 image byte by byte so a test can break
-exactly one thing about it — `Builder::good()`, `Builder::wrong_chip()`,
-`Builder::wrong_project()`, or any field set by hand. It is the only part of
+exactly one thing about it — `Builder::good()` (a Tidbyt image),
+`Builder::for_board(b)`, `Builder::untagged()` (as releases up to 0.12.0 were),
+`Builder::wrong_chip()`, `Builder::wrong_project()`, or any field set by hand. It is the only part of
 this crate that needs `alloc`, and the firmware takes the crate with
 `default-features = false`.
 
 ## Tests
 
-`cargo test -p screeny-fwimage`: 28 of them, one deliberate break per check, the
+`cargo test -p screeny-fwimage`: 41 of them, one deliberate break per check, the
 good image built by the same code with nothing broken, and the whole scan run at
 eleven chunk sizes from one byte to 64 KB because the transport decides where
 the boundaries fall.

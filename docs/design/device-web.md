@@ -213,7 +213,7 @@ and reply, verified through `serde_json` and `serde-json-core` on every `cargo t
 
 | method | path | request | reply |
 |---|---|---|---|
-| GET | `/api/v1/status` | - | the `GET_INFO` and telemetry numbers plus `api`, `fw_slot`, `fw_state`, `reset_reason`, `stack_free`, `store_errors` |
+| GET | `/api/v1/status` | - | the `GET_INFO` and telemetry numbers plus `api`, `board` (card 377), `fw_slot`, `fw_state`, `reset_reason`, `stack_free`, `store_errors` |
 | GET | `/api/v1/telemetry` | - | the 48 bytes of spec 6.7 as named fields |
 | GET | `/api/v1/networks` | - | at most 16, strongest first; one scan per 10 s |
 | GET | `/api/v1/wifi` | - | `{state, ssid, ip, reason}` - what the portal page's reload reads |

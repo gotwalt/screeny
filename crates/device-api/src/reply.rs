@@ -14,7 +14,7 @@ use screeny_provision::machine::{Trial, TrialOutcome};
 use serde::{Deserialize, Serialize};
 
 use crate::enums::{
-    Accepted, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
+    Accepted, Board, ColourOrder, FailReason, FirmwareError, FwSlot, FwState, IdleMode, ResetReason, RevertReason,
     StreamState, UpdateOutcome, WifiState,
 };
 use crate::text::TimeText;
@@ -122,6 +122,19 @@ pub struct StatusReply {
     pub name: NameText,
     /// The firmware version.
     pub fw: FwText,
+    /// Which board this firmware was built for, and so which images this
+    /// device will take (card 377, spec section 8.6). One byte, so it costs
+    /// the hot path nothing worth measuring - the rule above is about bytes,
+    /// and this is the one constant fact the Studio needs on the poll it
+    /// already makes, because it decides what the page offers.
+    ///
+    /// `null` (absent) from firmware before card 377, which did not know.
+    /// `#[serde(default)]`, so a Studio built from this commit still reads
+    /// those - and offers them no update, since it cannot tell which image
+    /// fits. Never written as `null`: `None` is left out, which is what that
+    /// old firmware sends, so the simulator can play it exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board: Option<Board>,
     /// A random number drawn once at boot. Same id as last time: the link
     /// flapped. Different id: the device rebooted. Random rather than a
     /// persisted counter so that booting costs no flash write.
@@ -171,6 +184,7 @@ impl StatusReply {
         + field("id", 2 + MAX_ID_LEN * ESCAPE_MAX)
         + field("name", 2 + MAX_NAME_LEN * ESCAPE_MAX)
         + field("fw", 2 + MAX_FW_LEN * ESCAPE_MAX)
+        + field("board", Board::MAX_JSON_LEN)
         + field("boot_id", MAX_U32_LEN)
         + field("uptime_ms", MAX_U32_LEN)
         + field("heap_used", MAX_U32_LEN)
