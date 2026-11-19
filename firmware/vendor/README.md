@@ -105,3 +105,44 @@ pay for it.
 and it is ~30 lines. It would want the same treatment for the `latched` and
 row-major layouts, plus a `Hub75Config::brightness` convenience, which is
 more work than this card can carry. Card 060 records that.
+
+## `esp-radio-rtos-driver` 0.4.2
+
+Vendored from crates.io (MIT OR Apache-2.0), unmodified except for one line in
+`src/lib.rs`, `task_create`: a task created with no core (`pin_to_core: None`)
+is created on core 0 instead. Wired in with `[patch.crates-io]` in
+`firmware/Cargo.toml`; esp-radio and esp-rtos both reach this crate, so the one
+copy serves them both.
+
+Upstream: <https://github.com/esp-rs/esp-hal/tree/main/esp-radio-rtos-driver>.
+
+### Why (card 378)
+
+Tidbyts rebooted with `AppCpu 'LoadProhibited' pc=0x4017c70f addr=0x000001f0`.
+That PC is `SemaphoreInner::try_take` reading the priority of the current task
+(THREADPTR), and THREADPTR was 0x100: core 1 was running radio code with a
+garbage current-task pointer.
+
+Core 1 runs radio code because the radio timer thread (`src/timer.rs`) and the
+tasks the Wi-Fi blob creates through `_task_create` name no core, and once
+`start_second_core` has run, esp-rtos 0.4.0 schedules such tasks on either core
+and moves them between cores. Moving them is what goes wrong: esp-hal #6599
+(merged 2026-10-27, unreleased) fixes the scheduler picking a task that the
+other core switched away from but is still restoring registers on top of. The
+trap frame lives on that task's stack and is read back after the scheduler
+lock is released, so a task resumed on the other core overwrites it and the
+first core restores garbage, THREADPTR included. Upstream reproduces it by
+delaying one core with a Priority3 interrupt; the HUB75 refresh ISR is a
+Priority3 interrupt on our core 1.
+
+esp-hal #6646 (merged 2026-11-02, unreleased) runs core-less radio tasks on
+the first core, which leaves no task that could move between cores. This
+backports that one rule at the single function every radio task is created
+through. The Wi-Fi task proper was already pinned to core 0
+(`wifi_task_core_id`), and core 1's only task is our own main task (the
+display executor), which esp-rtos pins to core 1.
+
+The art panel never starts core 1, so the patch changes nothing there.
+
+**Drop this copy** when esp-rtos / esp-radio / esp-radio-rtos-driver releases
+with #6599 and #6646 in it, and the HAL stack can move to them.

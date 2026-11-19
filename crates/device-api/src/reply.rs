@@ -250,6 +250,18 @@ pub struct PanicReply {
     /// `null` on a device that does not keep the record.
     #[serde(default)]
     pub last_reset: Option<ResetReason>,
+    /// Where core 0's tasks last were when the **previous** run ended
+    /// (card 378), or `null` when there was no previous run to speak of - the
+    /// first boot after power-on - or the device does not keep the record.
+    ///
+    /// The previous run is boot `boot_count - 1`; if that is
+    /// `last_panic.boot`, this is core 0 at the moment of that panic, which
+    /// is the half a core-1 exception's `what` cannot give. After a `wdt`
+    /// reset it is where core 0 stopped.
+    ///
+    /// `#[serde(default)]`: firmware before card 378 omits it.
+    #[serde(default)]
+    pub last_trace: Option<TraceRecord>,
 }
 
 impl PanicReply {
@@ -259,7 +271,50 @@ impl PanicReply {
         + field("panic_count", MAX_U32_LEN)
         + field("last_panic", PanicRecord::MAX_JSON_LEN)
         + field("update", UpdateRecord::MAX_JSON_LEN)
-        + field("last_reset", ResetReason::MAX_JSON_LEN);
+        + field("last_reset", ResetReason::MAX_JSON_LEN)
+        + field("last_trace", TraceRecord::MAX_JSON_LEN);
+}
+
+/// The last mark each of core 0's traced tasks made in a run (card 378).
+///
+/// A diagnostic, not an interface: **the step numbers belong to the firmware
+/// build that wrote them** and are read against its source (the
+/// `trace::mark` calls). What is stable is the shape and the rule for reading
+/// it - the task with the largest `before_ms` stopped first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TraceRecord {
+    /// The frame task: receive, decode, swap.
+    pub frames: TraceMark,
+    /// The firmware-upload loop.
+    pub upload: TraceMark,
+    /// Any other HTTP request.
+    pub request: TraceMark,
+    /// A flash erase or write, interrupts masked (`1` inside, `0` out).
+    pub flash: TraceMark,
+    /// The telemetry task, which feeds the liveness watchdog.
+    pub telemetry: TraceMark,
+}
+
+impl TraceRecord {
+    pub(crate) const MAX_JSON_LEN: usize = 1
+        + field("frames", TraceMark::MAX_JSON_LEN)
+        + field("upload", TraceMark::MAX_JSON_LEN)
+        + field("request", TraceMark::MAX_JSON_LEN)
+        + field("flash", TraceMark::MAX_JSON_LEN)
+        + field("telemetry", TraceMark::MAX_JSON_LEN);
+}
+
+/// One task's last mark: see [`TraceRecord`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TraceMark {
+    /// The step it had reached; `0` for a task that never marked.
+    pub step: u32,
+    /// How long before the run's last mark (by any task) it made this one, ms.
+    pub before_ms: u32,
+}
+
+impl TraceMark {
+    pub(crate) const MAX_JSON_LEN: usize = 1 + field("step", MAX_U32_LEN) + field("before_ms", MAX_U32_LEN);
 }
 
 /// What became of the last firmware update this device activated (card 241).

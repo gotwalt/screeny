@@ -883,6 +883,9 @@ async fn main(spawner: Spawner) {
     // guard has latched. A panic in the boot path below is then counted like
     // any other, which is the case the guard exists for.
     let crashed = panic::boot();
+    // Card 378: and the previous run's trace, before anything below can mark
+    // over it (`store::init` already does).
+    trace::keep_previous();
     // `mut` for the FM6124 write's reborrows, which the art panel goes without.
     #[cfg_attr(feature = "board-art-panel", allow(unused_mut))]
     let mut peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
@@ -962,7 +965,6 @@ async fn main(spawner: Spawner) {
         alloc::boxed::Box::new(settings)
     };
     clock::init(&settings);
-    trace::report_previous();
     // Card 222: `fw_slot` and `fw_state` for `GET /api/v1/status`, read once
     // here rather than per request - it needs the `STORE` lock, and nothing can
     // change the answer until card 241's confirm/revert lands. Card 243: it
