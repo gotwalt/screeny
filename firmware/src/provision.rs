@@ -490,9 +490,27 @@ async fn wait_ap(want: bool) {
     }
 }
 
-/// [`wait_ap`], for the HTTP worker that follows the soft-AP.
-pub async fn wait_ap_pub(want: bool) {
-    wait_ap(want).await
+/// Whether HTTP worker `id` should be serving the soft-AP right now.
+///
+/// Every worker follows the AP, **except** that worker 0 stays on the LAN
+/// while the device is online with the AP still up - the grace window after
+/// a join with somebody on the AP (card 388, [`Provisioner::lan_beside_ap`]).
+/// Before that card both workers were on the AP for those 30 s and TCP 80 on
+/// the station's address was refused, just as the Studio went looking for a
+/// freshly joined panel. In the portal, a trial and a retry's `Joining` both
+/// stay on the AP: the station has no network there, and the AP needs the
+/// two (`http.rs`, `serve_on`).
+#[must_use]
+pub fn http_on_ap(id: usize) -> bool {
+    ap_up() && !(id == 0 && with(Provisioner::lan_beside_ap).unwrap_or(false))
+}
+
+/// Block until [`http_on_ap`] for worker `id` reads `want`. Polled at
+/// [`AP_POLL`], for the reason that constant gives.
+pub async fn wait_http_on_ap(id: usize, want: bool) {
+    while http_on_ap(id) != want {
+        Timer::after(AP_POLL).await;
+    }
 }
 
 /// DHCP on the AP interface: a small pool, the portal as router and DNS

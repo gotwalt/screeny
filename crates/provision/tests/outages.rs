@@ -16,9 +16,11 @@
 //! - `DropAp` is a mode change, so it restarts the radio and the station has
 //!   to associate (and get a lease) again before the LAN can reach it.
 //!
-//! "On the LAN" is what the owner's Studio needs: `Online`, the soft-AP down
-//! (while it is up both HTTP workers serve only the setup network,
-//! `http.rs`'s `http_task`), and the station associated with an address.
+//! "On the LAN" is what the owner's Studio needs: `Online` and the station
+//! associated with an address. The soft-AP may still be up - its grace window -
+//! since card 388, which keeps one HTTP worker on the LAN for it
+//! (`Provisioner::lan_beside_ap`, `http.rs`'s `http_task`); before that card
+//! both workers served only the setup network while it was up.
 
 use screeny_provision::{Action, Config, Event, FailReason, JoinTarget, Provisioner, Screen, State, Timing, UriForm};
 
@@ -90,7 +92,7 @@ impl World {
     }
 
     fn on_lan(&self) -> bool {
-        self.p.state() == State::Online && !self.p.ap_up() && self.associated
+        self.p.state() == State::Online && self.associated
     }
 
     fn step(&mut self, ev: Event<'_>) {

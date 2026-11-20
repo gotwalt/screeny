@@ -176,6 +176,30 @@ fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
     assert!(p.step(Event::Tick, 10_000).is_empty());
 }
 
+/// Card 388: the LAN and the setup network are both served exactly while the
+/// device is `Online` with the AP still up - the grace window - and never in
+/// the portal, a trial or a retry's `Joining`, where the station has no
+/// network and both HTTP workers belong to the AP.
+#[test]
+fn the_lan_is_served_beside_the_ap_only_in_the_grace_window() {
+    let (mut p, _) = booted(false);
+    assert!(p.ap_up() && !p.lan_beside_ap(), "portal");
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500);
+    assert!(p.ap_up() && !p.lan_beside_ap(), "trial");
+    p.step(Event::Joined { ip: [192, 168, 7, 221] }, 600);
+    assert!(p.ap_up() && p.lan_beside_ap(), "online in the grace window");
+    p.step(Event::Tick, 600 + T.ap_grace_ms);
+    assert!(!p.ap_up() && !p.lan_beside_ap(), "the AP is gone: the LAN has every worker");
+
+    // A retry out of the portal: `Joining` with the AP up is not the LAN.
+    let (mut p, _) = booted(true);
+    fail_n(&mut p, 3, FailReason::NetworkNotFound, 0);
+    assert_eq!(p.state(), State::Portal);
+    p.step(Event::Tick, 10_000);
+    assert_eq!(p.state(), State::Joining);
+    assert!(p.ap_up() && !p.lan_beside_ap(), "a portal retry");
+}
+
 /// Row 7: `TRIAL` + failed -> `PORTAL`, with a reason the page can show and
 /// **nothing written to the store**.
 #[test]

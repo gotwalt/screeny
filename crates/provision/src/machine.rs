@@ -484,6 +484,21 @@ impl Provisioner {
         self.ap_up
     }
 
+    /// Whether the device is on the LAN **and** the soft-AP is up: the
+    /// `ap_grace_ms` window after a join with somebody on the AP.
+    ///
+    /// Card 388: in this window the station has a network and the setup
+    /// network may still have a phone on it, so the firmware serves HTTP on
+    /// both - one worker each - instead of moving every worker to the AP.
+    /// In `Portal`, `Trial` and a `Joining` with the AP up it is `false`:
+    /// there the station has no network and both workers stay on the AP,
+    /// because smoltcp has no listen backlog and an iPhone's captive sheet
+    /// opens two connections at once (`firmware/src/http.rs`, `serve_on`).
+    #[must_use]
+    pub fn lan_beside_ap(&self) -> bool {
+        self.state == State::Online && self.ap_up
+    }
+
     /// How many stations are associated to the soft-AP.
     #[must_use]
     pub fn ap_clients(&self) -> u8 {
