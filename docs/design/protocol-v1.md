@@ -1213,7 +1213,7 @@ shape here bumps it and moves the prefix, a new optional field does not.
   `connected` / `connecting` / `disconnected` - and never the sticky result of
   the last credentials attempt (§8.3; probe rule 8).
 
-  **`board`** (card 377, firmware 0.12.1) is the board the running firmware was
+  **`board`** (card 377, firmware 0.13.0) is the board the running firmware was
   built for, and so the only board whose images it takes (§8.6, check 4b):
   `"tidbyt"` or `"art-panel"`. A device that knows its board MUST send it.
   Firmware up to 0.12.0 does not, and a reader MUST treat it as optional:

@@ -6,7 +6,7 @@ is different hardware and has not been tried.
 
 ## Which files are for which board
 
-Each image says which board it is for, and from 0.12.1 a panel refuses an image for
+Each image says which board it is for, and from 0.13.0 a panel refuses an image for
 any other board (an image from 0.12.0 or earlier says nothing and is refused too).
 
 | Board | Over WiFi (app image) | By cable (full image) |

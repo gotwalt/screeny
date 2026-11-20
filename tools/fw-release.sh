@@ -3,7 +3,7 @@
 # cut the release. Assets go under target/fw-release/<version>/.
 #
 # Boards (card 377; each image carries its board in esp_app_desc.idf_ver and
-# firmware from 0.12.1 refuses any other):
+# firmware from 0.13.0 refuses any other):
 #   tidbyt     every Gen 1 unit (one image since card 361: the colour order is a
 #              stored setting). 8 MB, firmware/partitions.csv.
 #              screeny-fw-<v>.bin, screeny-fw-<v>-full.bin (names unchanged).

@@ -145,7 +145,7 @@ fn slot() -> u32 {
 /// version that is not printable.
 pub fn check_image(bytes: &[u8]) -> Result<(String, Board), String> {
     let image = scan(bytes, screeny_fwimage::Scan::any_board(slot()))?;
-    let board = image.board.ok_or("it does not say which board it is for (built before firmware 0.12.1)")?;
+    let board = image.board.ok_or("it does not say which board it is for (built before firmware 0.13.0)")?;
     let version = image.version.as_str().map(str::to_string).ok_or("its version is not printable")?;
     Ok((version, board))
 }

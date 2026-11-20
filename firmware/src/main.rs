@@ -144,7 +144,7 @@ use display::Mode;
 //
 // **`idf_ver` is the board tag** (card 377): `board=tidbyt` or
 // `board=art-panel`, spelled by `crates/fwimage` and checked by every
-// firmware from 0.12.1 before it erases a sector (check 4b). Nothing in the
+// firmware from 0.13.0 before it erases a sector (check 4b). Nothing in the
 // boot path reads the field - the bootloader checks the eFuse revisions and
 // the secure version beside it - so the pretend ESP-IDF version it used to
 // hold was never load-bearing. `project_name` stays `screeny-fw`, which is
