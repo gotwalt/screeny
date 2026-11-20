@@ -19,7 +19,7 @@ cd "$ROOT"
 # ESP Web Tools: pinned. To bump: `npm view esp-web-tools@<v> dist.integrity`.
 EWT_VERSION=10.4.0
 EWT_INTEGRITY='sha512-3pwkeFFm5Fj7UQo8SJNYK5RXrtNCpq6X9QoI6bMT4GBZWgrJqjn0YvM9ihG74BtMoSFYXfmDtkehuxe50PTMPQ=='
-# esptool-js (backup and restore, site/stock.js): pinned the same way.
+# esptool-js (backup, restore and the art panel check, site/stock.js): pinned the same way.
 EJS_VERSION=0.7.0
 EJS_INTEGRITY='sha512-9wHuW/s9t4Vs6HKcr3pra3gbRVWwaN0eabMWodWH4KEJHEYZxgmWwZ3s0F4xcWVCZOc/L98bGZ4uWoZvR8KBKA=='
 
