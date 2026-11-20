@@ -603,3 +603,20 @@ async fn the_status_poll_keeps_off_a_panel_that_is_being_updated() {
     assert!(!r.st.firmware.active(&r.id));
     assert!(r.st.devices.get(&r.id).map_or(0, |d| d.http.reads) > reads_before);
 }
+
+/// Card 380: the panel list says which board a panel is from its TXT record
+/// alone - before, or without, its HTTP API - and says nothing for firmware
+/// too old to know.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_board_comes_from_the_txt_record_before_any_http() {
+    let r = rig(Setup { panel: "0.13.1", art: true, no_http: true, ..Setup::default() }).await;
+    let v = get(r.studio.addr, "/api/v1/status").await.json();
+    let d = &v["devices"][0];
+    assert!(d["facts"].is_null(), "no HTTP was read: {d}");
+    assert_eq!(d["board"], "art-panel", "{d}");
+    drop(r);
+
+    let r = rig(Setup { panel: "0.11.3", old_firmware: true, no_http: true, ..Setup::default() }).await;
+    let v = get(r.studio.addr, "/api/v1/status").await.json();
+    assert!(v["devices"][0]["board"].is_null(), "{v}");
+}

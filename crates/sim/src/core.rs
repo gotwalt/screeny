@@ -319,6 +319,9 @@ impl Core {
         let mut r = rx::Receiver::new(&rx::Params {
             id: &cfg.id,
             fw: &cfg.fw,
+            // `--board none` plays firmware from before card 377, which
+            // leaves `board=` out of its TXT record too.
+            board: cfg.board.map_or("", screeny_device_api::Board::id),
             name: &cfg.name,
             control_port: cfg.control_port,
             brightness: cfg.brightness,

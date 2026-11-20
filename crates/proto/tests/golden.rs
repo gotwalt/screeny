@@ -394,7 +394,38 @@ fn txt_requires_the_keys_section_5_2_calls_required() {
     let info = DeviceInfo::parse(&plus).unwrap();
     assert_eq!(info.mtu, 1464);
     assert_eq!(info.fw, "");
+    assert_eq!(info.board, "");
     assert_eq!(info.name, "");
+}
+
+#[test]
+fn txt_board_follows_fw_and_is_absent_when_unknown() {
+    // Card 380: a device that knows its board says so after `fw`.
+    let info = DeviceInfo {
+        codecs: screeny_proto::dec::CODECS_TXT,
+        fw: "0.13.1",
+        board: "art-panel",
+        id: "a4cf12",
+        name: "Desk panel",
+        ..DeviceInfo::DEFAULT
+    };
+    let bytes = built(|b| info.write(b).unwrap());
+    let keys: Vec<&[u8]> = txt::iter(&bytes).map(|e| e.key).collect();
+    assert_eq!(
+        keys,
+        vec![&b"txtvers"[..], b"proto", b"w", b"h", b"codecs", b"mtu", b"ctrl", b"fw", b"board", b"id", b"name",]
+    );
+    let at = bytes.windows(16).position(|w| w == b"\x0Fboard=art-panel".as_slice()).expect("board entry");
+    assert_eq!(&bytes[at - 10..at], b"\x09fw=0.13.1".as_slice(), "board comes straight after fw");
+    assert_eq!(DeviceInfo::parse(&bytes).unwrap(), info);
+    // The largest record a device writes stays far under RFC 6763's 1300 B.
+    assert!(bytes.len() < 200, "{} bytes", bytes.len());
+
+    // A device from before card 380 sends no `board`: it parses, as unknown.
+    let old = built(|b| DeviceInfo { board: "", ..info }.write(b).unwrap());
+    assert_eq!(txt::find(&old, "board"), None, "an empty board is not written");
+    assert_eq!(old.len() + 16, bytes.len());
+    assert_eq!(DeviceInfo::parse(&old).unwrap().board, "");
 }
 
 #[test]

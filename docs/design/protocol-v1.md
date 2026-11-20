@@ -473,12 +473,20 @@ Keys are lowercase ASCII, values are ASCII unless noted. Order is as listed;
 | `mtu` | `1464` | max pixel payload bytes the device accepts |
 | `ctrl` | `49375` | control UDP port |
 | `fw` | `0.1.0` | firmware version |
+| `board` | `tidbyt` | optional (card 380): the board the firmware was built for, `tidbyt` or `art-panel`, the same id as `status.board` (§8.6) |
 | `id` | `a4cf12` | stable short device id (MAC suffix) |
 | `name` | `Desk panel` | friendly name, UTF-8, may contain spaces |
 
-Total stays far under RFC 6763 §6.2's 1300-byte ceiling. A sender MUST tolerate
+Total stays far under RFC 6763 §6.2's 1300-byte ceiling: with a 24-byte `fw`
+(the longest the receiver keeps), a 32-byte `name` and `board=art-panel` the
+record is at most 162 bytes (`board` adds at most 16 to the 146 before it). A sender MUST tolerate
 unknown keys and missing optional keys; `proto`, `w`, `h`, `codecs` and `ctrl`
 are required and a service missing any of them MUST be ignored.
+
+`board` is written only by a device that knows its board (firmware after
+0.13.0). A device that does not know it leaves the key out rather than sending
+it empty, and a sender MUST read an absent `board` as **unknown** - never as
+"a Tidbyt" - exactly as it reads a `status` reply without `board`.
 
 ### 5.3 Device side
 
@@ -692,7 +700,8 @@ bytes, or with the wrong magic, has no header to read and is discarded
 
 The body is **exactly the DNS-SD TXT record wire format**: a sequence of
 length-prefixed `key=value` strings, each `u8 length` followed by that many
-bytes, with the same keys and values as §5.2, in the same order. One table in
+bytes, with the same keys and values as §5.2 (optional `board` included when the
+device writes it), in the same order. One table in
 the firmware, one parser in the sender, and a sender that was handed a bare IP
 gets identical metadata to one that browsed mDNS.
 

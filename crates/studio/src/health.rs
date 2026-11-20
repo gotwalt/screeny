@@ -134,6 +134,10 @@ pub struct DeviceStatus {
     /// Seconds since anything was heard from it. `None` means never.
     pub last_seen_ago: Option<f64>,
     pub firmware: Option<String>,
+    /// Card 380: the board it says it is (`tidbyt`, `art-panel`), from its TXT
+    /// record, else from its HTTP status. `None`: it has not said - firmware
+    /// too old, or nothing heard yet - which is unknown, not "a Tidbyt".
+    pub board: Option<String>,
     pub panel_size: Option<String>,
     /// The device's own telemetry: uptime, RSSI, drops by cause, brightness.
     pub telemetry: Option<Telem>,
@@ -306,6 +310,10 @@ pub fn collect(st: &AppState) -> Status {
                 control_addr: d.resolved.as_ref().map(|r| r.control.to_string()),
                 last_seen_ago: d.seen_unix.map(|s| now.saturating_sub(s) as f64),
                 firmware: info.map(|i| i.fw.clone()),
+                board: info
+                    .map(|i| i.board.clone())
+                    .filter(|b| !b.is_empty())
+                    .or_else(|| d.facts.as_ref().and_then(|f| f.reply.board).map(|b| b.id().to_string())),
                 panel_size: info.map(|i| format!("{}x{}", i.w, i.h)),
                 telemetry_ago: d.telemetry.as_ref().map(|t| now.saturating_sub(t.heard_unix) as f64),
                 telemetry: d.telemetry.clone(),

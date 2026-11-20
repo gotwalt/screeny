@@ -39,6 +39,9 @@ pub struct DeviceInfo {
     pub ctrl: u16,
     /// Firmware version.
     pub fw: String,
+    /// The board the firmware is for (`tidbyt`, `art-panel`); empty when the
+    /// device did not say, which means unknown (spec 5.2, card 380).
+    pub board: String,
     /// Stable short device id (MAC suffix).
     pub id: String,
     /// Friendly name.
@@ -58,6 +61,7 @@ impl Default for DeviceInfo {
             mtu: d.mtu,
             ctrl: d.ctrl,
             fw: d.fw.to_string(),
+            board: d.board.to_string(),
             id: d.id.to_string(),
             name: d.name.to_string(),
         }
@@ -84,6 +88,7 @@ impl DeviceInfo {
             mtu: d.mtu,
             ctrl: d.ctrl,
             fw: d.fw.to_string(),
+            board: d.board.to_string(),
             id: d.id.to_string(),
             name: d.name.to_string(),
         })
@@ -137,6 +142,7 @@ impl DeviceInfo {
             mtu: self.mtu,
             ctrl: self.ctrl,
             fw: &self.fw,
+            board: &self.board,
             id: &self.id,
             name: &self.name,
         };
@@ -183,11 +189,12 @@ impl fmt::Display for DeviceInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} ({}x{}, fw {}, mtu {}, codecs {:?})",
+            "{} ({}x{}, fw {}, board {}, mtu {}, codecs {:?})",
             if self.name.is_empty() { &self.id } else { &self.name },
             self.w,
             self.h,
             self.fw,
+            if self.board.is_empty() { "?" } else { &self.board },
             self.mtu,
             self.codecs
         )
@@ -290,16 +297,25 @@ mod tests {
             "mtu=1464",
             "ctrl=49375",
             "fw=0.1.0",
+            "board=tidbyt",
             "id=a4cf12",
             "name=Desk panel",
         ]);
         let info = DeviceInfo::parse(&bytes).expect("parses");
+        assert_eq!(info.board, "tidbyt");
+        assert!(info.to_string().contains("board tidbyt"), "{info}");
         assert_eq!(info.codecs, screeny_proto::dec::SUPPORTED_CODECS.to_vec());
         assert_eq!(info.name, "Desk panel");
         assert_eq!(info.budget(), 1464);
         assert_eq!(info.best_codec(&[0x28, 0x02]), Some(0x28));
         assert_eq!(info.common_codecs(&[0x02, 0x10]), vec![0x10, 0x02]);
         assert_eq!(DeviceInfo::parse(&info.to_txt().unwrap()).unwrap(), info);
+        assert_eq!(info.to_txt().unwrap(), bytes, "board= written back after fw=");
+
+        // A device from before card 380 has no board= and is still a device.
+        let old = DeviceInfo::parse(&txt(&["proto=1", "w=64", "h=32", "codecs=16", "ctrl=49375"])).unwrap();
+        assert_eq!(old.board, "");
+        assert!(old.to_string().contains("board ?"), "{old}");
     }
 
     /// A required key missing means the service must be ignored (spec 5.2).

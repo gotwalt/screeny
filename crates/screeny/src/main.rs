@@ -373,6 +373,8 @@ fn print_device(d: &Device, verbose: bool) {
         }
         println!("  mtu      {}", i.mtu);
         println!("  firmware {}", i.fw);
+        // Spec 5.2: an absent `board=` is unknown, never "a Tidbyt".
+        println!("  board    {}", if i.board.is_empty() { "unknown (firmware too old to say)" } else { &i.board });
         println!("  id       {}", i.id);
         if !i.name.is_empty() {
             println!("  name     {}", i.name);

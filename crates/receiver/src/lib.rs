@@ -49,7 +49,7 @@ use screeny_proto::{dec, ControlPacket, DecodeError, FramePacket, Reject, Rgb888
 use screeny_proto::{C_REPLY, MAX_UDP_PAYLOAD, TYPE_CONTROL, VERSION};
 
 /// Longest `GET_INFO` / TXT record this crate will build. The v1 key set with
-/// a 32-byte name is about 130 bytes.
+/// a 24-byte `fw`, `board=art-panel` and a 32-byte name is 162 bytes.
 pub const INFO_MAX: usize = 224;
 
 /// Largest unsolicited datagram: a 48-byte `TELEMETRY` body plus the header.
@@ -663,6 +663,9 @@ pub struct Params<'a> {
     pub id: &'a str,
     /// Firmware version string, the `fw=` TXT key.
     pub fw: &'a str,
+    /// Board id, the optional `board=` TXT key (card 380): `tidbyt`,
+    /// `art-panel`, or empty for "do not say" (the key is then left out).
+    pub board: &'a str,
     /// Friendly name, the `name=` TXT key. `SET_NAME` changes it. Longer than
     /// [`screeny_proto::control::MAX_NAME_LEN`] is truncated.
     pub name: &'a str,
@@ -686,6 +689,7 @@ impl Default for Params<'_> {
         Params {
             id: "000000",
             fw: "0.1.0",
+            board: "",
             name: "screeny",
             control_port: screeny_proto::DEFAULT_CONTROL_PORT,
             brightness: 255,
@@ -708,6 +712,7 @@ pub struct Receiver<A> {
     name: heapless::String<NAME_MAX>,
     id: heapless::String<16>,
     fw: heapless::String<24>,
+    board: heapless::String<16>,
     /// `GET_INFO` body and mDNS TXT record: the same bytes (section 6.6).
     info: heapless::Vec<u8, INFO_MAX>,
     ctrl_port: u16,
@@ -768,6 +773,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
             name: heapless::String::new(),
             id: heapless::String::new(),
             fw: heapless::String::new(),
+            board: heapless::String::new(),
             info: heapless::Vec::new(),
             ctrl_port: p.control_port,
             brightness_cap: p.brightness_cap,
@@ -799,6 +805,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
         push_truncated(&mut c.name, p.name);
         push_truncated(&mut c.id, p.id);
         push_truncated(&mut c.fw, p.fw);
+        push_truncated(&mut c.board, p.board);
         c.rebuild_info();
         c
     }
@@ -938,6 +945,7 @@ impl<A: Copy + PartialEq + Eq> Receiver<A> {
             codecs: dec::CODECS_TXT,
             ctrl: self.ctrl_port,
             fw: &self.fw,
+            board: &self.board,
             id: &self.id,
             name: &self.name,
             ..DeviceInfo::DEFAULT
@@ -1437,4 +1445,33 @@ fn emit<H: Host>(h: &mut H, from: H::Addr, op: u8, req_id: u16, reply: &Reply<'_
     let written = if req_id == 0 { None } else { reply.write(op, req_id, out).ok() };
     h.event(Event::Control { from, op, req_id, error, replied: written.is_some() });
     written
+}
+
+#[cfg(test)]
+mod info_tests {
+    use super::{Params, Receiver, INFO_MAX, NAME_MAX};
+    use screeny_proto::txt::{self, DeviceInfo};
+
+    #[test]
+    fn the_record_carries_the_board_and_the_worst_case_fits() {
+        let name = "n".repeat(NAME_MAX);
+        let r: Receiver<u32> = Receiver::new(&Params {
+            fw: "0.13.1-a-long-test-build",
+            board: "art-panel",
+            name: &name,
+            ..Params::default()
+        });
+        let info = r.info_bytes();
+        assert_eq!(txt::find(info, "board"), Some(&b"art-panel"[..]));
+        assert_eq!(DeviceInfo::parse(info).unwrap().board, "art-panel");
+        assert_eq!(info.len(), 162, "spec 5.2's worst case");
+        assert!(info.len() <= INFO_MAX);
+    }
+
+    #[test]
+    fn no_board_means_no_key() {
+        let r: Receiver<u32> = Receiver::new(&Params::default());
+        assert_eq!(txt::find(r.info_bytes(), "board"), None);
+        assert!(!txt::iter(r.info_bytes()).any(|e| e.key == b"board"));
+    }
 }
