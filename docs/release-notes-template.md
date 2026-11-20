@@ -21,7 +21,9 @@ files, and its full image is for a 4 MB flash.
 
 Plug the Tidbyt into a computer with a USB-C data cable and open
 <https://gotwalt.github.io/screeny/> in Chrome or Edge. It installs this release and
-then sets up WiFi over the same cable.
+then sets up WiFi over the same cable. For an LED Art Panel, choose it at the top of the
+page (or open `?board=art-panel`): it checks the chip for 4 MB of flash instead of taking
+a backup, then installs that board's image.
 
 To go back to the stock firmware later, Tidbyt's support pages have the official
 firmware and instructions: <https://help.tidbyt.com>.
