@@ -58,7 +58,7 @@ async function connect(log) {
   const loader = new ESPLoader({ transport, baudrate: BAUD, romBaudrate: BAUD, terminal });
   try {
     const chip = await loader.main();
-    if (!/ESP32(?!-)/.test(chip)) throw new Error(`This is an ${chip}, not the ESP32 in a Tidbyt Gen 1.`);
+    if (loader.chip.CHIP_NAME !== "ESP32") throw new Error(`This is an ${chip}, not the ESP32 in a Tidbyt Gen 1.`);
     const size = await loader.detectFlashSize();
     if (size && size !== "8MB") throw new Error(`This chip has ${size} of flash; a Tidbyt Gen 1 has 8MB.`);
     const mac = await loader.chip.readMac(loader);
@@ -158,7 +158,7 @@ async function checkArtPanel() {
     const terminal = { clean() {}, writeLine: log, write: log };
     loader = new ESPLoader({ transport, baudrate: BAUD, romBaudrate: BAUD, terminal });
     const chip = await loader.main();
-    if (!/ESP32(?!-)/.test(chip)) throw new Error(`This is an ${chip}, not the ESP32 in an LED Art Panel.`);
+    if (loader.chip.CHIP_NAME !== "ESP32") throw new Error(`This is an ${chip}, not the ESP32 in an LED Art Panel.`);
     const size = await loader.detectFlashSize();
     if (size === "8MB") throw new Error("This chip has 8 MB of flash, like a Tidbyt Gen 1, not the 4 MB of an LED Art Panel. Nothing was written. If it is a Tidbyt, choose Tidbyt above and back it up first: installing the art panel's image would erase Tidbyt's original firmware.");
     if (size !== want.flash) throw new Error(`This chip has ${size || "an unknown amount of"} flash; an LED Art Panel has 4 MB. Nothing was written.`);
