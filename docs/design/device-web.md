@@ -160,9 +160,10 @@ operation; nothing large is held across an `await` (it silently becomes `.bss`).
   QR on the panel, DHCP + DNS + HTTP on 192.168.4.1). Posted credentials go to TRIAL:
   nothing committed, the AP stays up, and a full-page reload reports "connected, I am
   at 192.168.x.y" or "wrong password / network not found"; commit and drop the AP only
-  on success. PORTAL is never terminal: every 10 minutes, if no phone is associated,
-  retry the stored credentials (the 3 a.m. router reboot heals itself). Telemetry
-  state is `PROVISIONING` in PORTAL and TRIAL.
+  on success. PORTAL is never terminal: every 30 s (10 minutes until card 387), if no
+  phone is associated, retry the stored credentials (an AP outage or the 3 a.m. router
+  reboot heals itself within a minute); the QR stays up across the retry. Telemetry
+  state is `PROVISIONING` in PORTAL, TRIAL and the portal's own retry.
 - **Captive-portal rules**: DNS answers everything with 192.168.4.1; unknown hosts get
   **the setup page itself - `200`, `text/html`, `no-store`, no `Location`** - with a
   non-empty body (Android treats `Content-Length <= 4` as failure; iOS needs content).

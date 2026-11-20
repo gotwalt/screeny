@@ -1111,6 +1111,15 @@ impl Driver {
             Ok(Either3::Third(())) => return self.wiped(controller).await,
             Err(_) => {
                 warn!("wifi: associated, but DHCP did not answer in {} s", DHCP_WAIT.as_secs());
+                // **A failed attempt leaves nothing associated** (card 387).
+                // Without this the association outlived the failure, and on
+                // the third one - a retry out of the portal, with the AP
+                // already up, so no mode change and no radio restart - the
+                // late lease landed under a machine sitting in `Portal`: the
+                // station answered ping and mDNS kept advertising it, while
+                // both HTTP workers served only the setup network.
+                // `NotConnected` here only means it had already dropped.
+                let _ = controller.disconnect_async().await;
                 Event::JoinFailed {
                     reason: FailReason::Other,
                 }
@@ -1143,10 +1152,22 @@ impl Driver {
                 LINK_DOWNS.fetch_add(1, Ordering::Relaxed);
             }
             info!("wifi: link {}", if up { "up" } else { "down" });
-            let acts = step(
-                if up { Event::LinkUp } else { Event::LinkDown },
-                crate::now_ms(),
-            );
+            // Card 387: a link that comes up under a machine in `Portal` is a
+            // join the machine was told had failed (an association that
+            // outlived its attempt). `LinkUp` means nothing there; `Joined`
+            // with the address it got does, and takes the device back to the
+            // LAN instead of leaving it answering ping while serving only the
+            // setup network.
+            let ev = match (up, self.sta_stack.config_v4()) {
+                (true, Some(c)) if with(Provisioner::state) == Some(State::Portal) => {
+                    Event::Joined {
+                        ip: c.address.address().octets(),
+                    }
+                }
+                (true, _) => Event::LinkUp,
+                (false, _) => Event::LinkDown,
+            };
+            let acts = step(ev, crate::now_ms());
             self.apply_actions(acts, controller).await;
         }
         let acts = step(Event::Tick, crate::now_ms());
