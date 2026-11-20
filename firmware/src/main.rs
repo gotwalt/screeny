@@ -285,7 +285,12 @@ esp_bootloader_esp_idf::esp_app_desc!(
 /// between cores (the esp-hal #6599 trap-frame race behind a core-1
 /// `LoadProhibited`, card 378); `GET /api/v1/panic` carries `last_trace`.
 /// 0.13 rather than 0.12.1 so it sorts above every `0.12.N-clock` dev build.
-pub const FW_VERSION: &str = "0.13.0";
+///
+/// **0.13.1: back on the LAN sooner.** A dropped link re-associates every 10 s
+/// inside the 60 s link-down window (card 389), one HTTP worker stays on the LAN
+/// while the setup AP is in its grace window (card 388), the board is in the
+/// mDNS TXT record and `GET_INFO` (card 380).
+pub const FW_VERSION: &str = "0.13.1";
 
 pub const FRAME_PORT: u16 = screeny_proto::DEFAULT_FRAME_PORT;
 pub const CONTROL_PORT: u16 = screeny_proto::DEFAULT_CONTROL_PORT;
