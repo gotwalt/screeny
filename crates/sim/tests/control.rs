@@ -62,6 +62,7 @@ fn every_opcode_is_implemented() {
         assert!(info.supports(id), "a v1 device must decode {id:#04x}");
     }
     assert_eq!(txt, &sim.info_bytes()[..], "the mDNS TXT record is the same bytes");
+    assert_eq!(info.board, "tidbyt", "card 380: board= is the status board");
 
     // TELEMETRY
     let d = ctrl.call(&Request::Telemetry, 3).expect("TELEMETRY");
@@ -218,4 +219,25 @@ fn a_request_with_no_reply_wanted_is_still_carried_out() {
 /// `control_dgram` is the same three lines for the same reason.
 fn raw_control(op: u8, flags: u8, req_id: u16, body: &[u8]) -> Vec<u8> {
     screeny_probe::suite::control_dgram(op, flags, req_id, body)
+}
+
+/// Card 380: `board=` is in the TXT record and `GET_INFO`, and a simulator
+/// playing firmware from before card 377 leaves the key out entirely.
+#[test]
+fn get_info_names_the_board_and_old_firmware_leaves_it_out() {
+    for (board, want) in [(Some(screeny_device_api::Board::ArtPanel), Some(&b"art-panel"[..])), (None, None)] {
+        let dev = SimDevice::start(Config {
+            board,
+            timing: Timing { info_min_interval_ms: 0, ..Timing::SPEC },
+            ..Config::for_test()
+        })
+        .expect("bind loopback");
+        let ctrl = Ctrl::new(dev.control_addr());
+        let d = ctrl.call(&Request::GetInfo, 1).expect("GET_INFO");
+        let Ok(Reply::Info(txt)) = parse_reply(&d).1 else { panic!("expected Info") };
+        assert_eq!(screeny_proto::txt::find(txt, "board"), want);
+        assert_eq!(DeviceInfo::parse(txt).unwrap().board, want.map_or("", |b| core::str::from_utf8(b).unwrap()));
+        assert_eq!(txt, &dev.handle().info_bytes()[..]);
+        dev.shutdown();
+    }
 }

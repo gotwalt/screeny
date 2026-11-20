@@ -268,6 +268,7 @@ impl Core {
             rx: rx::Receiver::new(&rx::Params {
                 id,
                 fw: crate::FW_VERSION,
+                board: crate::board::BOARD.id(),
                 name: &name,
                 control_port: crate::CONTROL_PORT,
                 // Card 136: `Receiver::new` applies `clamp_brightness` itself
