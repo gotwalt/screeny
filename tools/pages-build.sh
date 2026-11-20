@@ -7,9 +7,9 @@
 #   --out  output directory (default: target/pages)
 #
 # Needs: gh (authenticated for the repo), curl, tar, openssl, shasum, python3.
-# Nothing here is committed: the firmware image comes from the release, is
-# checked against the release's SHA256SUMS, and is written next to a manifest
-# that names its version. ESP Web Tools is vendored from the npm registry at a
+# Nothing here is committed: the firmware images (one per board) come from the
+# release, are checked against the release's SHA256SUMS, and are written next to
+# manifests that name their version. ESP Web Tools is vendored from the npm registry at a
 # pinned version, checked against the registry's published sha512 integrity.
 set -euo pipefail
 
@@ -45,22 +45,36 @@ rm -rf "$OUT"
 mkdir -p "$OUT/vendor"
 cp site/index.html site/flasher.css site/stock.js "$OUT/"
 
-# 1. Firmware: the merged image (bootloader + partition table + app, unpadded so
-# the settings partition is never overwritten). One image for every unit.
+# 1. Firmware: the merged images (bootloader + partition table + app, unpadded so
+# the settings partition is never overwritten), one per board, each checked
+# against the release's SHA256SUMS. The Tidbyt's keeps the original names
+# (firmware.bin, manifest.json) so existing links hold. The LED Art Panel's
+# (4 MB flash) sits beside it from release 0.13.0 on; an older release has
+# none, and the page then offers the Tidbyt only.
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-IMG="screeny-fw-$VERSION-full.bin"
-gh release download "$TAG" --pattern "$IMG" --pattern SHA256SUMS --dir "$WORK"
-(cd "$WORK" && grep -F " $IMG" SHA256SUMS | shasum -a 256 -c -) \
-  || { echo "SHA256SUMS does not match $IMG" >&2; exit 1; }
-cp "$WORK/$IMG" "$OUT/firmware.bin"
+gh release download "$TAG" --pattern SHA256SUMS --dir "$WORK"
 
-# 2. Manifest. `name` must equal the firmware name the device reports over
-# Improv (command 3, "screeny-fw"): ESP Web Tools compares them to tell an
-# update (no erase, WiFi kept) from a first install (full erase).
-python3 - "$OUT/manifest.json" "$VERSION" <<'PY'
+# fetch <release asset> <published name>: download one image and verify it.
+fetch() {
+  local img=$1 out=$2
+  gh release download "$TAG" --pattern "$img" --dir "$WORK"
+  (cd "$WORK" && grep -F " $img" SHA256SUMS | shasum -a 256 -c -) \
+    || { echo "SHA256SUMS does not match $img" >&2; exit 1; }
+  cp "$WORK/$img" "$OUT/$out"
+}
+
+# 2. Manifests, one per board. `name` must equal the firmware name the device
+# reports over Improv (command 3, "screeny-fw") on every board: ESP Web Tools
+# compares them to tell an update (no erase, WiFi kept) from a first install
+# (full erase). A manifest cannot tell the two boards apart (both are
+# chipFamily ESP32, and ESP Web Tools matches on nothing else), so the page
+# checks the chip's flash size itself (site/stock.js): the Tidbyt's backup step
+# needs 8 MB, and the art panel's image is offered only after a check finds 4 MB.
+manifest() {
+  python3 - "$OUT/$1" "$VERSION" "$2" <<'PY'
 import json, sys
-out, version = sys.argv[1:3]
+out, version, image = sys.argv[1:4]
 json.dump({
     "name": "screeny-fw",
     "version": version,
@@ -68,11 +82,23 @@ json.dump({
     "builds": [{
         "chipFamily": "ESP32",
         "improv": True,
-        "parts": [{"path": "firmware.bin", "offset": 0}],
+        "parts": [{"path": image, "offset": 0}],
     }],
 }, open(out, "w"), indent=2)
 open(out, "a").write("\n")
 PY
+}
+
+fetch "screeny-fw-$VERSION-full.bin" firmware.bin
+manifest manifest.json firmware.bin
+
+ART="screeny-fw-art-panel-$VERSION-full.bin"
+if grep -qF " $ART" "$WORK/SHA256SUMS"; then
+  fetch "$ART" firmware-art-panel.bin
+  manifest manifest-art-panel.json firmware-art-panel.bin
+else
+  echo "flasher: $TAG has no LED Art Panel image; the page offers the Tidbyt only" >&2
+fi
 
 # 3. ESP Web Tools, vendored (no third-party CDN on a page that flashes devices).
 curl -fsSL "https://registry.npmjs.org/esp-web-tools/-/esp-web-tools-$EWT_VERSION.tgz" -o "$WORK/ewt.tgz"
