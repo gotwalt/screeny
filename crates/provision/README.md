@@ -29,7 +29,7 @@ drive it, so the behaviour cannot drift between them. Card 221; the design is
         │ AP down   │Joined│ ING saved │
         │ after 30 s│      └───────────┘
         └─────┬─────┘             ▲
-              │ LinkDown > 60 s   │ Tick, 10 min, no AP client
+              │ LinkDown > 60 s   │ Tick, 30 s, no AP client
               └───────────────────┘   (stored credentials only)
 
 Event::ButtonWipe, from any state: ClearCredentials, then Portal.
@@ -89,6 +89,7 @@ door it came in by (card 232):
 | `CommitCredentials { which }` | write to the settings store. The **only** commit, and never before a join succeeded |
 | `ClearCredentials` | erase the stored credentials |
 | `Announce` | mDNS and the LAN HTTP server up |
+| `Reassociate` | `Online` with the link down: associate again and wait for the lease, telling the machine nothing (success is the next `LinkUp`). On the `LinkDown` edge, then every `reassociate_ms` = 10 s (card 389) |
 
 ## Driving it from the firmware
 

@@ -1078,7 +1078,12 @@ that arrives during a retry is a portal trial.
 
 **While online**, a link that goes down and stays down for `link_down_ms` =
 60 s returns the device to step 1. A link that comes back inside that window is
-not an event. (What the *frame* path does on a link loss is §7.3's: `HOLD` at
+not an event. Inside it the device re-associates with the network it was on -
+at once, then every `reassociate_ms` = 10 s - without leaving the online state,
+because the radio does not reconnect by itself: an access-point blip is back
+within ~10-25 s of the access point returning instead of waiting out the 60 s
+and a join (card 389). A re-association that associates but gets no lease in
+the join's DHCP wait is disconnected, as a failed attempt is. (What the *frame* path does on a link loss is §7.3's: `HOLD` at
 once.)
 
 A credentials wipe - the button's five-second hold - erases the store and opens
