@@ -1017,7 +1017,10 @@ holds the credential until the machine asks for it to be committed, which is
 Each target gets `join_attempts` = 3 attempts and each attempt is bounded by
 `join_attempt_ms` = 15 s, so a target is ~45 s. The deadline is the machine's
 own, so a radio that never answers still advances. **A join is not a join until
-there is an address**: an association with no DHCP answer is a failed attempt.
+there is an address**: an association with no DHCP answer is a failed attempt,
+and the device disconnects it, so a failed attempt leaves nothing associated. If
+the station is found associated and addressed on the stored network while the
+portal is up anyway, that is a join and the device takes it (card 387).
 
 **Credentials posted** - to `POST /api/v1/wifi`, to `POST /setup` or by
 `SET_WIFI` - start a **trial**, from whatever state the device is in:
@@ -1047,19 +1050,30 @@ there is an address**: an association with no DHCP answer is a failed attempt.
 
 On success the credentials are committed, mDNS re-announces (§5.3), and:
 
-- a soft-AP that is up stays up for `ap_grace_ms` = 30 s, whatever raised it,
-  so a phone standing on the portal can reload the page and read the new
-  address; and
+- a soft-AP that is up stays up for `ap_grace_ms` = 30 s after a **portal
+  trial**, or while a phone is associated to it, so a phone standing on the
+  portal can reload the page and read the new address. A portal *retry* that
+  joins with nobody on the AP drops it at once: while the AP is up the LAN has
+  no HTTP, and there is nobody on the setup network to wait for (card 387); and
 - after a **portal** trial only, the acquired address goes on the panel for
   `connected_screen_ms` = 60 s. It yields to a stream: the phone's page carries
   the address too, and a panel that is being sent a picture shows the picture.
 
 **While the portal is up**, if the store holds credentials and **no station is
 associated to the AP**, the stored pair is retried every `portal_retry_ms` =
-10 minutes, so the 3 a.m. router reboot heals itself. A retry is suppressed
-while somebody is on the AP, because it would cost them a ~45 s outage, and
+30 s, so an access-point outage or the 3 a.m. router reboot heals itself within
+a minute of the network returning. (It was 10 minutes until card 387: the retry
+was already gated on nobody being on the AP, so the outage it was protecting a
+phone from was never paid, and every panel in the house stayed off the LAN for
+~12 minutes after any outage longer than ~105 s.) A retry is suppressed while
+somebody is on the AP, because it would cost them a ~45 s outage, and
 suppressing it does not reset the timer: it fires on the first tick after the
-last client leaves. The AP stays up across the retry.
+last client leaves. A client count with no AP client event behind it for
+`portal_client_hold_ms` = 10 minutes stops suppressing the retry: the device
+hears those events only while its radio loop is idle, so a phone that left
+during a join can otherwise hold the portal up for ever. The AP stays up across
+the retry, and so do the portal screen and the `PROVISIONING` overlay; a post
+that arrives during a retry is a portal trial.
 
 **While online**, a link that goes down and stays down for `link_down_ms` =
 60 s returns the device to step 1. A link that comes back inside that window is

@@ -51,7 +51,8 @@ pub type Actions = Vec<Action, MAX_ACTIONS>;
 // ---------------------------------------------------------------------------
 
 /// The timing constants of research 007 section 5.2, overridable so a test
-/// does not have to wait ten real minutes to watch the portal retry.
+/// does not have to wait real minutes to watch the link-down rule or the
+/// portal retry.
 ///
 /// [`Timing::SPEC`] is a device's behaviour and is the default. Anything else
 /// is a test fixture.
