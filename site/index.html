@@ -28,11 +28,10 @@
       <label><input type="radio" name="board" value="art-panel"> <span><strong>LED Art Panel</strong>
         <small>32x32, 4 MB of flash</small></span></label>
     </div>
-    <p class="note">Each board has its own image and a panel will not run the other's. The installer cannot
-    tell them apart by itself, so this page reads the chip's flash size first: the Tidbyt's backup needs 8 MB,
-    and the art panel's image is offered only once its check has found 4 MB. Skipping a Tidbyt's backup skips
-    that check too; if the Tidbyt image went onto an art panel by mistake, it will not start, and choosing
-    LED Art Panel and installing again puts it right.</p>
+    <p class="note">Each board has its own image; a panel will not run the other's. The installer cannot tell
+    them apart, so this page checks the chip's flash size: a Tidbyt's backup needs 8 MB, and the art panel's
+    image is offered only after its check finds 4 MB. Skipping a Tidbyt's backup skips that check; a Tidbyt image
+    on an art panel will not start, and choosing LED Art Panel and installing again puts it right.</p>
   </section>
 
   <section class="card" id="backup" data-for="tidbyt">
