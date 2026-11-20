@@ -254,11 +254,13 @@ fn the_portal_retries_the_stored_credentials_when_nobody_is_on_it() {
     assert_eq!(p.state(), State::Joining);
     assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
     assert!(p.ap_up(), "the retry keeps the AP up: APSTA, so the portal survives it");
-    // And if it works this time, the AP comes down after the grace window.
+    // And if it works this time, the AP comes down at once: nobody is on it
+    // (that is what let the retry fire), so a grace window would only keep
+    // the LAN's HTTP workers on an empty setup network (card 387).
     let a = p.step(Event::Joined { ip: [192, 168, 7, 221] }, T.portal_retry_ms + 20);
-    assert_eq!(a.as_slice(), [Action::Announce]);
-    let a = p.step(Event::Tick, T.portal_retry_ms + 20 + T.ap_grace_ms);
-    assert_eq!(a.as_slice(), [Action::DropAp]);
+    assert_eq!(a.as_slice(), [Action::Announce, Action::DropAp]);
+    assert!(!p.ap_up());
+    assert!(p.step(Event::Tick, T.portal_retry_ms + 20 + T.ap_grace_ms).is_empty());
 }
 
 /// Card 221: the retry is suppressed while a client is associated, because it

@@ -675,6 +675,18 @@ impl Provisioner {
                 Event::CredentialsPosted { ssid } => {
                     self.begin_trial(now_ms, ssid, TrialOrigin::Portal, &mut out);
                 }
+                // Card 387: the station turned out to be on the stored network
+                // after all - an association that outlived a failed attempt,
+                // whose DHCP lease landed late. Sitting in `Portal` with the
+                // LAN address held is the worst of both: the device answers
+                // ping and mDNS, and serves only the setup network. Take it;
+                // the AP drops after its grace like any other join. A late
+                // *trial* association is not taken - the page has already
+                // said those credentials failed - and the next retry, which
+                // disconnects first, puts the station back on the stored pair.
+                Event::Joined { ip } if self.has_stored && self.target == JoinTarget::Stored => {
+                    self.go_online(now_ms, ip, &mut out);
+                }
                 // The 3 a.m. router reboot heals itself - but only while
                 // nobody is standing on the portal, because a retry costs
                 // them a ~45 s outage.
@@ -858,11 +870,20 @@ impl Provisioner {
         self.ip = Some(ip);
         self.link_down_since = None;
         self.portal_after_failure = false;
-        // Hold the AP for the grace window whatever brought us here: on the
-        // trial path so the page can report the new address, and on the
-        // portal-retry path because dropping it instantly would be no kinder.
-        self.ap_grace_since = if self.ap_up { Some(now_ms) } else { None };
+        // Hold the AP for the grace window **only when it is for somebody**
+        // (card 387): after a portal trial, so the page on the phone can
+        // reload and read the new address, or when a phone is on the AP.
+        // A retry out of the portal fires only while nobody is on it, and
+        // there the grace was 30 s of a joined panel whose HTTP workers serve
+        // only the empty setup network - so the AP goes now.
+        let keep_ap = self.ap_up && (from_trial || self.someone_on_the_ap(now_ms));
+        self.ap_grace_since = if keep_ap { Some(now_ms) } else { None };
         push(out, Action::Announce);
+        if self.ap_up && !keep_ap {
+            self.ap_up = false;
+            self.ap_clients = 0;
+            push(out, Action::DropAp);
+        }
     }
 
     fn enter_portal(&mut self, now_ms: u32, after_failure: bool, out: &mut Actions) {
