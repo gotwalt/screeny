@@ -2115,7 +2115,8 @@ fn router(ap: bool) -> Router<ServicePathRouter<Dispatch>> {
 /// was every `curl` failing for as long as one idle `nc` was connected. It is
 /// card 227's finding again, on the other interface. The LAN has no HTTP for
 /// as long as the AP is up - which is the portal (no LAN at all) plus the 30 s
-/// grace window after a join, when the one client that matters is on the AP.
+/// grace window after a portal trial (card 387: a retry with nobody on the AP
+/// drops it at once), when the one client that matters is on the AP.
 ///
 /// A *third* worker bound to the AP stack was the obvious shape and is what
 /// this card did not do: a worker is 7,504 bytes of `.bss`
