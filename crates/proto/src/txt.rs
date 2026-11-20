@@ -158,6 +158,11 @@ pub struct DeviceInfo<'a> {
     pub ctrl: u16,
     /// Firmware version.
     pub fw: &'a str,
+    /// The board the firmware was built for (`tidbyt`, `art-panel`), the same
+    /// id as `GET /api/v1/status`'s `board`. Optional: empty means the device
+    /// did not say (firmware before card 380), which is "unknown", never "a
+    /// Tidbyt". Written only when non-empty.
+    pub board: &'a str,
     /// Stable short device id (MAC suffix).
     pub id: &'a str,
     /// Friendly name, UTF-8, may contain spaces.
@@ -176,6 +181,7 @@ impl DeviceInfo<'static> {
         mtu: crate::MAX_PIXEL_PAYLOAD as u16,
         ctrl: crate::DEFAULT_CONTROL_PORT,
         fw: "",
+        board: "",
         id: "",
         name: "",
     };
@@ -228,12 +234,15 @@ impl<'a> DeviceInfo<'a> {
             mtu: opt_num("mtu", DeviceInfo::DEFAULT.mtu)?,
             ctrl: req_num("ctrl")?,
             fw: opt_str("fw", "")?,
+            board: opt_str("board", "")?,
             id: opt_str("id", "")?,
             name: opt_str("name", "")?,
         })
     }
 
     /// Write the TXT record, keys in the order section 5.2 lists them.
+    /// `board` is left out when empty, as a device that does not know its
+    /// board leaves it out.
     ///
     /// Returns the number of bytes written.
     ///
@@ -258,6 +267,9 @@ impl<'a> DeviceInfo<'a> {
         let n = put_u16(self.ctrl, &mut num);
         w.push(b"ctrl", &num[..n])?;
         w.push(b"fw", self.fw.as_bytes())?;
+        if !self.board.is_empty() {
+            w.push(b"board", self.board.as_bytes())?;
+        }
         w.push(b"id", self.id.as_bytes())?;
         w.push(b"name", self.name.as_bytes())?;
         Ok(w.at)
