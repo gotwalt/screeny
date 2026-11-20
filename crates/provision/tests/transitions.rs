@@ -21,6 +21,7 @@ const T: Timing = Timing {
     trial_attempts: 3,
     ap_grace_ms: 300,
     portal_retry_ms: 1_000,
+    portal_client_hold_ms: 5_000,
     link_down_ms: 600,
     connected_screen_ms: 700,
 };

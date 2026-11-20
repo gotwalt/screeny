@@ -36,6 +36,7 @@ fn quick_timing() -> WifiTiming {
         trial_attempts: 3,
         ap_grace_ms: 200,
         portal_retry_ms: 1_000,
+        portal_client_hold_ms: 5_000,
         link_down_ms: 200,
         connected_screen_ms: 1_000,
     }

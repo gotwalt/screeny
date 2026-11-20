@@ -72,11 +72,28 @@ pub struct Timing {
     /// panel is showing.
     pub ap_grace_ms: u32,
     /// How often the portal retries the stored credentials while no client
-    /// is associated to the AP. 007 section 5.2 argues this number: WLED
-    /// throttles at 5 minutes, Tasmota's manager window is 3, and each retry
-    /// costs a phone on the portal a ~45 s outage - hence 10 minutes, gated
-    /// on nobody being there to notice.
+    /// is associated to the AP.
+    ///
+    /// **30 s since card 387, down from 007 section 5.2's 10 minutes.** 007's
+    /// argument for 10 minutes was the ~45 s outage a retry costs a phone on
+    /// the portal - but the retry is already gated on no phone being on it, so
+    /// that cost is never paid, and what the 10 minutes did cost was every
+    /// panel on the house's network staying off it for ~12 minutes after any
+    /// access-point outage longer than ~105 s (the owner's "my screens keep
+    /// falling off the network", 2026-11-19). 30 s plus a join brings a panel
+    /// back within a minute of its network returning. The AP stays up and the
+    /// QR stays on the panel across a retry ([`Provisioner::screen`]).
     pub portal_retry_ms: u32,
+    /// How long an AP client count above zero is believed without an AP
+    /// client event to back it up.
+    ///
+    /// Card 387: the firmware learns of clients from esp-radio events that are
+    /// only heard while its radio loop is idle, so a phone that leaves during a
+    /// join can leave the count at 1 for ever - and a count that never reaches
+    /// zero suppresses the retry for ever. Past this, the count stops
+    /// suppressing anything: nobody stands on a setup page for ten minutes
+    /// without doing something the radio would tell us about.
+    pub portal_client_hold_ms: u32,
     /// How long the link may be down in `Online` before the device goes back
     /// to `Joining`.
     pub link_down_ms: u32,
@@ -93,7 +110,8 @@ impl Timing {
         join_attempts: 3,
         trial_attempts: 3,
         ap_grace_ms: 30_000,
-        portal_retry_ms: 600_000,
+        portal_retry_ms: 30_000,
+        portal_client_hold_ms: 600_000,
         link_down_ms: 60_000,
         connected_screen_ms: 60_000,
     };
@@ -342,6 +360,9 @@ pub struct Provisioner {
 
     ap_up: bool,
     ap_clients: u8,
+    /// When the last AP client event arrived, for
+    /// [`Timing::portal_client_hold_ms`].
+    ap_client_event_at: u32,
     /// When the AP's post-success grace started, if it is running.
     ap_grace_since: Option<u32>,
 
@@ -383,6 +404,7 @@ impl Provisioner {
             attempt_since: 0,
             ap_up: false,
             ap_clients: 0,
+            ap_client_event_at: 0,
             ap_grace_since: None,
             portal_since: 0,
             portal_after_failure: false,
@@ -417,6 +439,9 @@ impl Provisioner {
         match self.state {
             State::Portal => Some(tstate::PROVISIONING),
             State::Trial if self.trial_origin() == Some(TrialOrigin::Portal) => Some(tstate::PROVISIONING),
+            // The portal's own retry (card 387): the AP is up and the device
+            // is still in setup as far as anybody looking at it can tell.
+            State::Joining if self.ap_up => Some(tstate::PROVISIONING),
             _ => None,
         }
     }
@@ -527,10 +552,12 @@ impl Provisioner {
             // A `TrialOrigin::Online` trial never raised an AP, so there is no
             // portal to point anybody at: the panel stays the stream's.
             State::Trial if self.trial_origin() == Some(TrialOrigin::Online) => None,
-            State::Portal | State::Trial => {
-                let layout = if uri::fits(self.form, &self.ap_ssid) { Layout::QrAndName } else { Layout::Text };
-                Some(Screen::Portal { ssid: &self.ap_ssid, layout, form: self.form })
-            }
+            // `Joining` with the AP up is the portal's stored-credential retry
+            // (card 387), which runs every `portal_retry_ms` while nobody is on
+            // the AP. The QR stays: at 30 s a retry is most of the portal's
+            // life, and a code that keeps leaving cannot be scanned.
+            State::Portal | State::Trial => self.portal_screen(),
+            State::Joining if self.ap_up => self.portal_screen(),
             State::Online => match (self.connected_since, self.ip) {
                 (Some(since), Some(ip)) if now_ms.wrapping_sub(since) < self.timing.connected_screen_ms => {
                     Some(Screen::Connected { ip })
@@ -539,6 +566,11 @@ impl Provisioner {
             },
             _ => None,
         }
+    }
+
+    fn portal_screen(&self) -> Option<Screen<'_>> {
+        let layout = if uri::fits(self.form, &self.ap_ssid) { Layout::QrAndName } else { Layout::Text };
+        Some(Screen::Portal { ssid: &self.ap_ssid, layout, form: self.form })
     }
 
     // --- the step ----------------------------------------------------------
@@ -559,10 +591,12 @@ impl Provisioner {
         match ev {
             Event::ApClientAssociated => {
                 self.ap_clients = self.ap_clients.saturating_add(1);
+                self.ap_client_event_at = now_ms;
                 return out;
             }
             Event::ApClientLeft => {
                 self.ap_clients = self.ap_clients.saturating_sub(1);
+                self.ap_client_event_at = now_ms;
                 return out;
             }
             // "any state -> PORTAL", research 007 section 5.2's last row.
@@ -606,9 +640,15 @@ impl Provisioner {
                 // Spec 8.2: `SET_WIFI` works from any state. The attempt in
                 // flight is abandoned - there is one station - and the new
                 // credentials are tried instead, without raising the AP.
+                //
+                // **Unless the AP is already up** (card 387): a joining device
+                // with the AP up is the portal's own stored-credential retry,
+                // the post came from the phone on the portal, and it is owed a
+                // portal trial - AP kept, a failure back to the portal page.
                 Event::CredentialsPosted { ssid } => {
                     push(&mut out, Action::StopJoin);
-                    self.begin_trial(now_ms, ssid, TrialOrigin::Online, &mut out);
+                    let origin = if self.ap_up { TrialOrigin::Portal } else { TrialOrigin::Online };
+                    self.begin_trial(now_ms, ssid, origin, &mut out);
                 }
                 _ => {}
             },
@@ -640,7 +680,7 @@ impl Provisioner {
                 // them a ~45 s outage.
                 Event::Tick
                     if self.has_stored
-                        && self.ap_clients == 0
+                        && !self.someone_on_the_ap(now_ms)
                         && now_ms.wrapping_sub(self.portal_since) >= self.timing.portal_retry_ms =>
                 {
                     self.start_join(JoinTarget::Stored, now_ms, &mut out);
@@ -726,6 +766,12 @@ impl Provisioner {
         // On the portal path the AP is *not* dropped: that is the whole point
         // of APSTA here, and it is what lets the page report the result.
         push(out, Action::StartJoin { which: JoinTarget::Trial, attempt: 1 });
+    }
+
+    /// Whether a phone is (believably) on the setup network, which is what
+    /// holds the portal's retry off. See [`Timing::portal_client_hold_ms`].
+    fn someone_on_the_ap(&self, now_ms: u32) -> bool {
+        self.ap_clients > 0 && now_ms.wrapping_sub(self.ap_client_event_at) < self.timing.portal_client_hold_ms
     }
 
     fn attempt_expired(&self, now_ms: u32) -> bool {
