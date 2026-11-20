@@ -1062,8 +1062,9 @@ On success the credentials are committed, mDNS re-announces (§5.3), and:
 - a soft-AP that is up stays up for `ap_grace_ms` = 30 s after a **portal
   trial**, or while a phone is associated to it, so a phone standing on the
   portal can reload the page and read the new address. A portal *retry* that
-  joins with nobody on the AP drops it at once: while the AP is up the LAN has
-  no HTTP, and there is nobody on the setup network to wait for (card 387); and
+  joins with nobody on the AP drops it at once: there is nobody on the setup
+  network to wait for, and dropping the AP restarts the radio (card 387). In
+  the grace window the API is served on both networks (§8.5, card 388); and
 - after a **portal** trial only, the acquired address goes on the panel for
   `connected_screen_ms` = 60 s. It yields to a stream: the phone's page carries
   the address too, and a panel that is being sent a picture shows the picture.
@@ -1086,7 +1087,12 @@ that arrives during a retry is a portal trial.
 
 **While online**, a link that goes down and stays down for `link_down_ms` =
 60 s returns the device to step 1. A link that comes back inside that window is
-not an event. (What the *frame* path does on a link loss is §7.3's: `HOLD` at
+not an event. Inside it the device re-associates with the network it was on -
+at once, then every `reassociate_ms` = 10 s - without leaving the online state,
+because the radio does not reconnect by itself: an access-point blip is back
+within ~10-25 s of the access point returning instead of waiting out the 60 s
+and a join (card 389). A re-association that associates but gets no lease in
+the join's DHCP wait is disconnected, as a failed attempt is. (What the *frame* path does on a link loss is §7.3's: `HOLD` at
 once.)
 
 A credentials wipe - the button's five-second hold - erases the store and opens
@@ -1173,7 +1179,10 @@ iOS does not retry a refused connection where macOS retries after a second.
 up the API is served on 192.168.4.1 and **not** on the station address, and the
 rest of the time it is served on the station address. The station has no
 network while the portal is up, so there is nobody on the LAN for the borrowed
-worker to have served; the window where both exist is §8.3's 30 s grace.
+worker to have served. The one window where both networks exist is §8.3's 30 s
+grace, when the device is online with the AP still up, and there it is served
+on **both**: one worker on the station address, the rest on 192.168.4.1
+(card 388; before it the station address refused TCP 80 for those 30 s).
 
 The request line, the headers and the body of a buffered route MUST fit the
 server's request buffer together (1,536 bytes in firmware 0.5.1, against a

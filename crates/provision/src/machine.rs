@@ -98,6 +98,15 @@ pub struct Timing {
     /// How long the link may be down in `Online` before the device goes back
     /// to `Joining`.
     pub link_down_ms: u32,
+    /// How often, while `Online` with the link down, the station is asked to
+    /// re-associate with the network it was on ([`Action::Reassociate`]).
+    ///
+    /// Card 389: esp-radio does not reconnect by itself, so before this a
+    /// ten-second access-point blip cost the whole of `link_down_ms` and then
+    /// a join - ~75 s off the LAN. The first request goes out on the
+    /// `LinkDown` edge, then one every `reassociate_ms` until the link is back
+    /// or `link_down_ms` hands over to `Joining`.
+    pub reassociate_ms: u32,
     /// How long the acquired address stays on the panel after a successful
     /// trial. The panel is the only channel that survives the radio changing
     /// channel, and Chrome on Android will not resolve `.local`.
@@ -114,6 +123,7 @@ impl Timing {
         portal_retry_ms: 30_000,
         portal_client_hold_ms: 600_000,
         link_down_ms: 60_000,
+        reassociate_ms: 10_000,
         connected_screen_ms: 60_000,
     };
 }
@@ -315,6 +325,13 @@ pub enum Action {
     ClearCredentials,
     /// We are on the LAN: start mDNS and the LAN HTTP server.
     Announce,
+    /// `Online` with the link down: associate the station again with the
+    /// network it was on, and wait for its address (card 389). Not a join -
+    /// the machine stays `Online` and nothing is reported back: if it works,
+    /// the link coming up is a [`Event::LinkUp`]; if not, the next one is
+    /// asked for in [`Timing::reassociate_ms`], and [`Timing::link_down_ms`]
+    /// still decides when to give up and join from scratch.
+    Reassociate,
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +392,9 @@ pub struct Provisioner {
 
     /// When the link went down in `Online`.
     link_down_since: Option<u32>,
+    /// When the last [`Action::Reassociate`] was asked for, while the link is
+    /// down in `Online`.
+    reassociate_at: Option<u32>,
 
     trial: Option<Trial>,
     /// A [`TrialOrigin::Online`] trial failed and we went back to the previous
@@ -410,6 +430,7 @@ impl Provisioner {
             portal_since: 0,
             portal_after_failure: false,
             link_down_since: None,
+            reassociate_at: None,
             trial: None,
             trial_failed_sticky: false,
             ip: None,
@@ -482,6 +503,21 @@ impl Provisioner {
     #[must_use]
     pub fn ap_up(&self) -> bool {
         self.ap_up
+    }
+
+    /// Whether the device is on the LAN **and** the soft-AP is up: the
+    /// `ap_grace_ms` window after a join with somebody on the AP.
+    ///
+    /// Card 388: in this window the station has a network and the setup
+    /// network may still have a phone on it, so the firmware serves HTTP on
+    /// both - one worker each - instead of moving every worker to the AP.
+    /// In `Portal`, `Trial` and a `Joining` with the AP up it is `false`:
+    /// there the station has no network and both workers stay on the AP,
+    /// because smoltcp has no listen backlog and an iPhone's captive sheet
+    /// opens two connections at once (`firmware/src/http.rs`, `serve_on`).
+    #[must_use]
+    pub fn lan_beside_ap(&self) -> bool {
+        self.state == State::Online && self.ap_up
     }
 
     /// How many stations are associated to the soft-AP.
@@ -612,6 +648,7 @@ impl Provisioner {
                 self.ip = None;
                 self.connected_since = None;
                 self.link_down_since = None;
+                self.reassociate_at = None;
                 self.enter_portal(now_ms, false, &mut out);
                 return out;
             }
@@ -710,9 +747,16 @@ impl Provisioner {
                 Event::LinkDown => {
                     if self.link_down_since.is_none() {
                         self.link_down_since = Some(now_ms);
+                        // Card 389: straight away - a deauth or a blip shorter
+                        // than the beacon timeout is back on the first try.
+                        self.reassociate_at = Some(now_ms);
+                        push(&mut out, Action::Reassociate);
                     }
                 }
-                Event::LinkUp => self.link_down_since = None,
+                Event::LinkUp => {
+                    self.link_down_since = None;
+                    self.reassociate_at = None;
+                }
                 Event::Tick => {
                     if let Some(since) = self.ap_grace_since {
                         if now_ms.wrapping_sub(since) >= self.timing.ap_grace_ms {
@@ -725,9 +769,15 @@ impl Provisioner {
                     if let Some(since) = self.link_down_since {
                         if now_ms.wrapping_sub(since) >= self.timing.link_down_ms {
                             self.link_down_since = None;
+                            self.reassociate_at = None;
                             self.ip = None;
                             self.connected_since = None;
                             self.start_join(JoinTarget::Stored, now_ms, &mut out);
+                        } else if let Some(at) = self.reassociate_at {
+                            if now_ms.wrapping_sub(at) >= self.timing.reassociate_ms {
+                                self.reassociate_at = Some(now_ms);
+                                push(&mut out, Action::Reassociate);
+                            }
                         }
                     }
                 }
@@ -775,6 +825,7 @@ impl Provisioner {
             self.ip = None;
             self.connected_since = None;
             self.link_down_since = None;
+            self.reassociate_at = None;
         }
         // On the portal path the AP is *not* dropped: that is the whole point
         // of APSTA here, and it is what lets the page report the result.
@@ -870,6 +921,7 @@ impl Provisioner {
         self.state = State::Online;
         self.ip = Some(ip);
         self.link_down_since = None;
+        self.reassociate_at = None;
         self.portal_after_failure = false;
         // Hold the AP for the grace window **only when it is for somebody**
         // (card 387): after a portal trial, so the page on the phone can

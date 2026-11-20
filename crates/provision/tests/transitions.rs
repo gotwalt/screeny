@@ -23,6 +23,7 @@ const T: Timing = Timing {
     portal_retry_ms: 1_000,
     portal_client_hold_ms: 5_000,
     link_down_ms: 600,
+    reassociate_ms: 250,
     connected_screen_ms: 700,
 };
 
@@ -176,6 +177,30 @@ fn a_trial_that_works_commits_then_drops_the_ap_after_the_grace_window() {
     assert!(p.step(Event::Tick, 10_000).is_empty());
 }
 
+/// Card 388: the LAN and the setup network are both served exactly while the
+/// device is `Online` with the AP still up - the grace window - and never in
+/// the portal, a trial or a retry's `Joining`, where the station has no
+/// network and both HTTP workers belong to the AP.
+#[test]
+fn the_lan_is_served_beside_the_ap_only_in_the_grace_window() {
+    let (mut p, _) = booted(false);
+    assert!(p.ap_up() && !p.lan_beside_ap(), "portal");
+    p.step(Event::CredentialsPosted { ssid: "Example-Wifi1" }, 500);
+    assert!(p.ap_up() && !p.lan_beside_ap(), "trial");
+    p.step(Event::Joined { ip: [192, 168, 7, 221] }, 600);
+    assert!(p.ap_up() && p.lan_beside_ap(), "online in the grace window");
+    p.step(Event::Tick, 600 + T.ap_grace_ms);
+    assert!(!p.ap_up() && !p.lan_beside_ap(), "the AP is gone: the LAN has every worker");
+
+    // A retry out of the portal: `Joining` with the AP up is not the LAN.
+    let (mut p, _) = booted(true);
+    fail_n(&mut p, 3, FailReason::NetworkNotFound, 0);
+    assert_eq!(p.state(), State::Portal);
+    p.step(Event::Tick, 10_000);
+    assert_eq!(p.state(), State::Joining);
+    assert!(p.ap_up() && !p.lan_beside_ap(), "a portal retry");
+}
+
 /// Row 7: `TRIAL` + failed -> `PORTAL`, with a reason the page can show and
 /// **nothing written to the store**.
 #[test]
@@ -305,7 +330,8 @@ fn a_link_that_stays_down_goes_back_to_joining() {
 
     p.step(Event::LinkDown, 2_000);
     assert_eq!(p.state(), State::Online, "a blip is not a disconnection");
-    assert!(p.step(Event::Tick, 2_000 + T.link_down_ms - 1).is_empty());
+    // Inside the window the machine only asks for re-associations (card 389).
+    assert_eq!(p.step(Event::Tick, 2_000 + T.link_down_ms - 1).as_slice(), [Action::Reassociate]);
     assert_eq!(p.state(), State::Online);
 
     let a = p.step(Event::Tick, 2_000 + T.link_down_ms);
@@ -330,6 +356,49 @@ fn a_link_that_comes_back_in_time_is_not_a_disconnection() {
     assert_eq!(p.state(), State::Online);
     p.step(Event::Tick, 10_000 + T.link_down_ms);
     assert_eq!(p.state(), State::Joining);
+}
+
+/// Card 389: while the link is down in `Online` the station is asked to
+/// re-associate on the `LinkDown` edge and then every `reassociate_ms`, the
+/// machine stays `Online` throughout, and it stops the moment the link is
+/// back or `link_down_ms` hands over to a join.
+#[test]
+fn a_link_down_asks_for_reassociation_until_it_is_back() {
+    let mut p = provisioned_through_the_portal();
+    p.step(Event::Tick, 1_000 + T.ap_grace_ms); // drop the AP first
+    assert_eq!(p.step(Event::LinkDown, 2_000).as_slice(), [Action::Reassociate], "straight away");
+    // A second LinkDown (a repeated edge) asks for nothing new.
+    assert!(p.step(Event::LinkDown, 2_010).is_empty());
+    let mut asked = vec![2_000];
+    let mut t = 2_000;
+    while t < 2_000 + T.link_down_ms - 10 {
+        t += 10;
+        if p.step(Event::Tick, t).as_slice() == [Action::Reassociate] {
+            asked.push(t);
+        }
+        assert_eq!(p.state(), State::Online, "re-associating is not a join");
+    }
+    assert_eq!(asked, [2_000, 2_000 + T.reassociate_ms, 2_000 + 2 * T.reassociate_ms]);
+
+    // Back inside the window: a LinkUp, and nothing more is asked for.
+    p.step(Event::LinkUp, t);
+    for i in 1..=100 {
+        assert!(p.step(Event::Tick, t + i * 10).is_empty());
+    }
+    assert_eq!(p.state(), State::Online);
+    assert_eq!(p.ip(), Some([192, 168, 7, 221]), "the address was never given up");
+
+    // Down for good: the window still ends in a join, and that tick asks
+    // for a join rather than another re-association.
+    let t = t + 2_000;
+    p.step(Event::LinkDown, t);
+    let a = p.step(Event::Tick, t + T.link_down_ms);
+    assert_eq!(a.as_slice(), [Action::StartJoin { which: JoinTarget::Stored, attempt: 1 }]);
+    assert_eq!(p.state(), State::Joining);
+    // And `Joining` never asks for one.
+    for i in 1..=10 {
+        assert!(!p.step(Event::Tick, t + T.link_down_ms + i * T.reassociate_ms).contains(&Action::Reassociate));
+    }
 }
 
 /// Row 10: `ONLINE` -> `JOINING` -> three failures -> `PORTAL`. "The device
@@ -454,7 +523,14 @@ fn every_timer_survives_the_49_day_wrap() {
     assert_eq!(a.as_slice(), [Action::DropAp]);
 
     p.step(Event::LinkDown, NEAR.wrapping_add(100));
-    assert!(p.step(Event::Tick, NEAR.wrapping_add(100 + T.link_down_ms - 1)).is_empty());
+    // The re-association cadence too (card 389): not yet, then due.
+    assert!(p.step(Event::Tick, NEAR.wrapping_add(100 + T.reassociate_ms - 1)).is_empty());
+    assert_eq!(p.step(Event::Tick, NEAR.wrapping_add(100 + T.reassociate_ms)).as_slice(), [Action::Reassociate]);
+    assert!(!p.step(Event::Tick, NEAR.wrapping_add(100 + T.link_down_ms - 1)).contains(&Action::StartJoin {
+        which: JoinTarget::Stored,
+        attempt: 1
+    }));
+    assert_eq!(p.state(), State::Online);
     p.step(Event::Tick, NEAR.wrapping_add(100 + T.link_down_ms));
     assert_eq!(p.state(), State::Joining);
 

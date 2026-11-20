@@ -490,9 +490,27 @@ async fn wait_ap(want: bool) {
     }
 }
 
-/// [`wait_ap`], for the HTTP worker that follows the soft-AP.
-pub async fn wait_ap_pub(want: bool) {
-    wait_ap(want).await
+/// Whether HTTP worker `id` should be serving the soft-AP right now.
+///
+/// Every worker follows the AP, **except** that worker 0 stays on the LAN
+/// while the device is online with the AP still up - the grace window after
+/// a join with somebody on the AP (card 388, [`Provisioner::lan_beside_ap`]).
+/// Before that card both workers were on the AP for those 30 s and TCP 80 on
+/// the station's address was refused, just as the Studio went looking for a
+/// freshly joined panel. In the portal, a trial and a retry's `Joining` both
+/// stay on the AP: the station has no network there, and the AP needs the
+/// two (`http.rs`, `serve_on`).
+#[must_use]
+pub fn http_on_ap(id: usize) -> bool {
+    ap_up() && !(id == 0 && with(Provisioner::lan_beside_ap).unwrap_or(false))
+}
+
+/// Block until [`http_on_ap`] for worker `id` reads `want`. Polled at
+/// [`AP_POLL`], for the reason that constant gives.
+pub async fn wait_http_on_ap(id: usize, want: bool) {
+    while http_on_ap(id) != want {
+        Timer::after(AP_POLL).await;
+    }
 }
 
 /// DHCP on the AP interface: a small pool, the portal as router and DNS
@@ -785,9 +803,10 @@ struct Driver {
     sta: StationConfig,
     /// A join the machine has asked for and this loop has not started yet.
     pending_join: Option<JoinTarget>,
-    /// The radio was stopped and restarted by a mode change while the device
-    /// was online, so the station has to be told to associate again. See
-    /// [`Driver::drop_ap`].
+    /// The station has to be told to associate again: a mode change restarted
+    /// the radio under an online device ([`Driver::drop_ap`]), or the machine
+    /// asked for it with the link down in `Online` ([`Action::Reassociate`],
+    /// card 389). Run by [`Driver::reassociate`] at the top of the loop.
     reassociate: bool,
     /// What the last tick thought of the link, for the `LinkUp`/`LinkDown`
     /// edges the machine's sixty-second rule is measured from.
@@ -863,8 +882,17 @@ impl Driver {
         // APSTA -> STA is a mode change, so `esp_wifi_stop`/`start` ran and the
         // station's association went with it. Nothing in the machine describes
         // that (it is `Online` and, as far as it knows, still is), so the
-        // reconnect is this module's job; if it fails, the tick's link
-        // reconciliation feeds `LinkDown` and the sixty-second rule takes over.
+        // reconnect is this module's job ([`Driver::reassociate`], which waits
+        // for the lease too, so the tick never sees the gap); if it fails, the
+        // tick's link reconciliation feeds `LinkDown`, and the machine's own
+        // `Reassociate` cadence and then its sixty-second rule take over.
+        //
+        // **The restart is not avoidable with this esp-radio** (card 389):
+        // `set_config` stops the radio on any mode change (esp-radio
+        // 1.0.0-beta.1 `wifi/mod.rs`, `if previous_mode != mode { stop_impl }`)
+        // and staying in APSTA would leave the open setup network beaconing.
+        // The price is one association plus one DHCP, ~15 s on this mesh,
+        // once, at the end of a grace window.
         self.reassociate = true;
         info!("provision: soft-AP down; re-associating the station");
     }
@@ -931,6 +959,9 @@ impl Driver {
                 crate::set_current_ssid(b"");
             }
             Action::Announce => crate::net::INFO_CHANGED.signal(()),
+            // Card 389. Deferred to the top of the loop, like `drop_ap`'s:
+            // this is called with the tick's own actions still being applied.
+            Action::Reassociate => self.reassociate = true,
             // `Action` is `#[non_exhaustive]`.
             _ => warn!("provision: an action this firmware does not know: {:?}", a),
         }
@@ -1129,6 +1160,101 @@ impl Driver {
         self.apply_actions(acts, controller).await;
     }
 
+    /// Associate the station again with the network it is configured for, and
+    /// wait for its address - **without telling the machine anything**.
+    ///
+    /// The machine is `Online` and stays there: if this works, the next tick
+    /// sees the link up and feeds `LinkUp`; if not, it sees it down, and the
+    /// machine asks again in `reassociate_ms` or joins from scratch at
+    /// `link_down_ms` (card 389). Before that card this ran only after
+    /// `drop_ap`, and an access-point blip waited out the whole 60 s.
+    ///
+    /// **Card 212's rule holds on every path in here: `connect_async` is never
+    /// called while the station is associated or still connecting.**
+    /// `disconnect_async` returns `NotConnected` at once when it is neither,
+    /// and otherwise cancels the attempt or drops the association - so it is
+    /// called unconditionally, which also covers an attempt that an earlier
+    /// timeout or cancellation abandoned mid-way (`is_connected` alone reads
+    /// `false` for that one).
+    ///
+    /// The address is waited for here, with the radio loop busy, because the
+    /// tick would otherwise see "associated, no lease yet" as the link still
+    /// being down - and with the machine asking for a re-association every ten
+    /// seconds, that would cancel this mesh's 10-12 s DHCP every time.
+    ///
+    /// A post or the button interrupts it at any point, as they do a join:
+    /// the attempt is abandoned (and disconnected, so the join that follows
+    /// starts from nothing) and handed to the machine.
+    async fn reassociate(&mut self, controller: &mut WifiController<'static>) {
+        let _ = with_timeout(ATTEMPT_WAIT, controller.disconnect_async()).await;
+        if controller.is_connected() {
+            // The disconnect's event never came. Do not connect on top of an
+            // association (card 212); the machine asks again in 10 s.
+            warn!("wifi: still associated after a disconnect; re-association skipped");
+            return;
+        }
+        let ch = Self::channel(controller);
+        let outcome = with_timeout(
+            ATTEMPT_WAIT,
+            select3(
+                controller.connect_async(),
+                crate::NEW_WIFI.wait(),
+                BUTTON_WIPE.wait(),
+            ),
+        )
+        .await;
+        match outcome {
+            Ok(Either3::First(Ok(info))) => {
+                // The AP follows the station's channel, as in `run_join`.
+                if ap_up() && info.channel != ch {
+                    self.apply(controller, info.channel);
+                }
+            }
+            Ok(Either3::First(Err(ConnectionError::Failed(info)))) => {
+                info!("wifi: re-association failed: {:?}", info.reason);
+                return;
+            }
+            Ok(Either3::First(Err(e))) => {
+                info!("wifi: re-association failed: {:?}", e);
+                return;
+            }
+            Ok(Either3::Second(n)) => {
+                let _ = with_timeout(ATTEMPT_WAIT, controller.disconnect_async()).await;
+                return self.posted(n, controller).await;
+            }
+            Ok(Either3::Third(())) => {
+                let _ = with_timeout(ATTEMPT_WAIT, controller.disconnect_async()).await;
+                return self.wiped(controller).await;
+            }
+            Err(_) => {
+                warn!("wifi: the radio did not answer a re-association in {} s", ATTEMPT_WAIT.as_secs());
+                let _ = with_timeout(ATTEMPT_WAIT, controller.disconnect_async()).await;
+                return;
+            }
+        }
+        let got = with_timeout(
+            DHCP_WAIT,
+            select3(
+                self.sta_stack.wait_config_up(),
+                crate::NEW_WIFI.wait(),
+                BUTTON_WIPE.wait(),
+            ),
+        )
+        .await;
+        match got {
+            Ok(Either3::First(())) => info!("wifi: re-associated"),
+            // The machine's trial from `Online` disconnects before it joins
+            // (`run_join`), so the association can be left to it.
+            Ok(Either3::Second(n)) => self.posted(n, controller).await,
+            Ok(Either3::Third(())) => self.wiped(controller).await,
+            Err(_) => {
+                // Card 387's rule: a failed attempt leaves nothing associated.
+                warn!("wifi: re-associated, but DHCP did not answer in {} s", DHCP_WAIT.as_secs());
+                let _ = with_timeout(ATTEMPT_WAIT, controller.disconnect_async()).await;
+            }
+        }
+    }
+
     /// One second of nothing happening: the RSSI, the link edges, and the
     /// machine's own timers.
     async fn tick(&mut self, controller: &mut WifiController<'static>) {
@@ -1225,12 +1351,10 @@ pub async fn provision_task(
             d.run_join(which, &mut controller).await;
             continue;
         }
-        // A mode change restarted the radio under an online station.
+        // A mode change restarted the radio under an online station, or the
+        // machine asked for it with the link down (card 389).
         if core::mem::take(&mut d.reassociate) {
-            if controller.is_connected() {
-                let _ = controller.disconnect_async().await;
-            }
-            let _ = with_timeout(ATTEMPT_WAIT, controller.connect_async()).await;
+            d.reassociate(&mut controller).await;
             continue;
         }
 

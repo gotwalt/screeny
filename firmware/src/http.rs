@@ -2102,9 +2102,11 @@ fn router(ap: bool) -> Router<ServicePathRouter<Dispatch>> {
 
 /// Which stack a worker serves.
 ///
-/// **Every worker follows the soft-AP**: while the AP is up they all listen on
-/// 192.168.4.1, and the rest of the time they are the LAN workers exactly as
-/// card 227 made them.
+/// **Every worker follows the soft-AP** ([`crate::provision::http_on_ap`]):
+/// while the AP is up they all listen on 192.168.4.1, and the rest of the time
+/// they are the LAN workers exactly as card 227 made them - **except in the
+/// grace window** (card 388): online with the AP still up, worker 0 stays on
+/// the LAN and worker 1 alone serves the AP.
 ///
 /// Card 223 moved only one, and the author's phone test (2026-09-20) is why
 /// that was wrong. smoltcp has no listen backlog: with one socket, a second
@@ -2113,10 +2115,17 @@ fn router(ap: bool) -> Router<ServicePathRouter<Dispatch>> {
 /// one it does, the idle one held the only worker for `start_read_request`,
 /// and the sheet said "error opening page". From the bench Mac the same thing
 /// was every `curl` failing for as long as one idle `nc` was connected. It is
-/// card 227's finding again, on the other interface. The LAN has no HTTP for
-/// as long as the AP is up - which is the portal (no LAN at all) plus the 30 s
-/// grace window after a portal trial (card 387: a retry with nobody on the AP
-/// drops it at once), when the one client that matters is on the AP.
+/// card 227's finding again, on the other interface. So the portal, a trial
+/// and a retry's `Joining` - no LAN at all - keep both workers on the AP.
+///
+/// The 30 s grace window after a portal trial is the one time both networks
+/// exist, and until card 388 the LAN had no HTTP for it: TCP 80 on the
+/// freshly joined address was refused just as the Studio went looking for
+/// it. There the LAN gets worker 0 back and the AP keeps one. That is a
+/// trade, made on purpose: the phone on the AP in that window is reloading
+/// one page to read the new address, and a second connection it opens at the
+/// same instant is refused (iOS does not retry it); the Studio on the LAN is
+/// the client the window exists to let in.
 ///
 /// A *third* worker bound to the AP stack was the obvious shape and is what
 /// this card did not do: a worker is 7,504 bytes of `.bss`
@@ -2124,10 +2133,10 @@ fn router(ap: bool) -> Router<ServicePathRouter<Dispatch>> {
 /// a third one would have spent the whole of the card's 2,432-byte lever three
 /// times over. Moving one instead costs nothing measurable - the two arms of
 /// the match below hold the same `listen_and_serve` future type, so the task's
-/// own future is the size of one of them, not two - and the moment it matters
-/// is the moment it is free: while the AP is up the station is, by the
-/// machine's own rules, not on a network, so there is nobody on the LAN for
-/// the borrowed worker to have served.
+/// own future is the size of one of them, not two - and outside the grace
+/// window the moment it matters is the moment it is free: in the portal the
+/// station is, by the machine's own rules, not on a network, so there is
+/// nobody on the LAN for the borrowed worker to have served.
 async fn serve_on(
     id: usize,
     stack: Stack<'static>,
@@ -2421,7 +2430,10 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
         // serving, which is right in both directions: the AP going up means
         // the station is about to lose its network anyway, and the AP going
         // down means the interface under the socket is being taken away.
-        if crate::provision::ap_up() {
+        // Worker 0 also leaves the AP when a trial joins and the grace window
+        // starts (card 388): that drops a connection from the phone, which
+        // the other worker is still there to take again.
+        if crate::provision::http_on_ap(id) {
             let _ = select(
                 serve_on(
                     id,
@@ -2433,7 +2445,7 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
                     &mut rx[..],
                     &mut tx[..],
                 ),
-                crate::provision::wait_ap_pub(false),
+                crate::provision::wait_http_on_ap(id, false),
             )
             .await;
         } else {
@@ -2448,7 +2460,7 @@ pub async fn http_task(id: usize, stack: Stack<'static>, ap_stack: Stack<'static
                     &mut rx[..],
                     &mut tx[..],
                 ),
-                crate::provision::wait_ap_pub(true),
+                crate::provision::wait_http_on_ap(id, true),
             )
             .await;
             warn!("http: worker {} left the lan for the setup network", id);
@@ -2827,7 +2839,7 @@ async fn selftest(
             HTTP_TASKS - 1,
             HTTP_PORT,
             me,
-            if crate::provision::ap_up() { "up" } else { "down" },
+            if crate::provision::http_on_ap(id) { "up" } else { "down" },
         );
     }
 

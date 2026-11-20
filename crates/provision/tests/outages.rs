@@ -12,13 +12,21 @@
 //!   mesh answers DHCP in 10-12 s, `provision.rs`'s `DHCP_WAIT` notes);
 //! - the station does **not** reassociate by itself when the access point
 //!   comes back: esp-radio has no auto-reconnect, so the only ways back are a
-//!   join the machine asks for and the driver's re-association after `DropAp`;
+//!   join the machine asks for, the machine's `Reassociate` while the link is
+//!   down in `Online` (card 389), and the driver's re-association after
+//!   `DropAp`;
+//! - a re-association (`Driver::reassociate`) is the same radio work as a
+//!   join - a scan, then association plus DHCP when the access point is there -
+//!   and the driver runs it to completion before it ticks again, so its
+//!   success reaches the machine as the tick's `LinkUp` edge;
 //! - `DropAp` is a mode change, so it restarts the radio and the station has
 //!   to associate (and get a lease) again before the LAN can reach it.
 //!
-//! "On the LAN" is what the owner's Studio needs: `Online`, the soft-AP down
-//! (while it is up both HTTP workers serve only the setup network,
-//! `http.rs`'s `http_task`), and the station associated with an address.
+//! "On the LAN" is what the owner's Studio needs: `Online` and the station
+//! associated with an address. The soft-AP may still be up - its grace window -
+//! since card 388, which keeps one HTTP worker on the LAN for it
+//! (`Provisioner::lan_beside_ap`, `http.rs`'s `http_task`); before that card
+//! both workers served only the setup network while it was up.
 
 use screeny_provision::{Action, Config, Event, FailReason, JoinTarget, Provisioner, Screen, State, Timing, UriForm};
 
@@ -43,7 +51,8 @@ struct World {
     lease: [u8; 4],
     /// A join in flight: when it resolves.
     join_done_at: Option<u32>,
-    /// The driver's post-`DropAp` re-association in flight.
+    /// A re-association in flight - the driver's own after `DropAp`, or the
+    /// machine's `Reassociate` - and when it resolves.
     reassoc_done_at: Option<u32>,
     /// Station associated with an address.
     associated: bool,
@@ -90,7 +99,7 @@ impl World {
     }
 
     fn on_lan(&self) -> bool {
-        self.p.state() == State::Online && !self.p.ap_up() && self.associated
+        self.p.state() == State::Online && self.associated
     }
 
     fn step(&mut self, ev: Event<'_>) {
@@ -111,6 +120,12 @@ impl World {
                 // APSTA -> STA restarts the radio: the association goes, and
                 // the driver re-associates (`Driver::drop_ap`).
                 Action::DropAp => {
+                    self.associated = false;
+                    self.reassoc_done_at = Some(self.now + SCAN_MS);
+                }
+                // Card 389: `Driver::reassociate` disconnects first (card
+                // 212), then scans.
+                Action::Reassociate => {
                     self.associated = false;
                     self.reassoc_done_at = Some(self.now + SCAN_MS);
                 }
@@ -148,12 +163,14 @@ impl World {
             return;
         }
         if let Some(at) = self.reassoc_done_at {
-            if now >= at {
-                self.reassoc_done_at = None;
-                if self.ap_present(now) {
-                    self.now += DHCP_MS;
-                    self.associated = true;
-                }
+            if now < at {
+                // Mid-re-association: no tick (the driver is inside it).
+                return;
+            }
+            self.reassoc_done_at = None;
+            if self.ap_present(now) {
+                self.now += DHCP_MS;
+                self.associated = true;
             }
         }
         // The driver's link reconciliation, then `Tick`.
@@ -186,17 +203,94 @@ fn outage_of(secs: u32) -> u32 {
     w.back_after_outage(30 * 60_000)
 }
 
+/// The worst a blip shorter than `link_down_ms` costs after the access point
+/// is back (card 389): the AP returns just after a re-association's scan
+/// found nothing, so the next one is up to `reassociate_ms` away, and then a
+/// scan, DHCP and the tick that sees the link.
+const WORST_BLIP_MS: u32 = Timing::SPEC.reassociate_ms + SCAN_MS + DHCP_MS + 2_000;
+
 /// A ten-second blip: the link is down, nothing reconnects the station by
-/// itself, and the machine rejoins at `link_down_ms`. Never reaches the
-/// portal.
+/// itself, and the machine's `Reassociate` every `reassociate_ms` brings it
+/// back without ever leaving `Online` - no join, no portal (card 389).
+/// Before that card it waited out `link_down_ms` and then joined: 65 s.
 #[test]
-fn a_ten_second_outage_is_back_by_the_link_down_rule() {
+fn a_ten_second_outage_is_back_by_reassociating() {
     let mut w = World::online();
+    let joins_before = w.log.iter().filter(|(_, a)| matches!(a, Action::StartJoin { .. })).count();
     w.outage = (w.now + 5_000, w.now + 15_000);
     let after = w.back_after_outage(10 * 60_000);
     assert!(!w.log.iter().any(|(_, a)| *a == Action::RaiseAp), "a blip must not raise the setup network");
-    // Link down at the outage start; 60 s later a join; join + DHCP.
-    assert!(after <= Timing::SPEC.link_down_ms + SCAN_MS + DHCP_MS + 2_000, "back {} s after", after / 1000);
+    let joins = w.log.iter().filter(|(_, a)| matches!(a, Action::StartJoin { .. })).count();
+    assert_eq!(joins, joins_before, "a blip is re-associated, not joined");
+    assert!(w.log.iter().any(|(_, a)| *a == Action::Reassociate));
+    assert!(after <= WORST_BLIP_MS, "back {} s after", after / 1000);
+    assert!(after <= 25_000, "the card's ~10-25 s: back {} s after", after / 1000);
+}
+
+/// Every blip from 1 s to just under `link_down_ms`, a second apart: back
+/// within [`WORST_BLIP_MS`] of the access point, and never by a join - except
+/// a blip that ends after the window's last re-association has already
+/// failed, where `link_down_ms` joins first (bounded all the same, by
+/// `no_outage_length_strands_the_panel`).
+#[test]
+fn every_blip_is_back_by_reassociating() {
+    let last_chance = Timing::SPEC.link_down_ms - Timing::SPEC.reassociate_ms;
+    for secs in 1..last_chance / 1_000 {
+        let mut w = World::online();
+        let joins_before = w.log.iter().filter(|(_, a)| matches!(a, Action::StartJoin { .. })).count();
+        let start = w.now + 5_000;
+        w.outage = (start, start + secs * 1_000);
+        let after = w.back_after_outage(10 * 60_000);
+        assert!(after <= WORST_BLIP_MS, "a {secs} s blip: back {} s after the AP returned", after / 1000);
+        let joins = w.log.iter().filter(|(_, a)| matches!(a, Action::StartJoin { .. })).count();
+        assert_eq!(joins, joins_before, "a {secs} s blip went to a join");
+    }
+}
+
+/// `DropAp` restarts the radio (APSTA -> STA is a mode change in esp-radio
+/// 1.0.0-beta.1, `set_config`), so the end of a grace window costs a second
+/// association and a second DHCP. What it costs, held to the model: the
+/// station is off the LAN for one scan plus one lease, and the machine never
+/// leaves `Online` for it.
+#[test]
+fn dropping_the_ap_costs_one_reassociation() {
+    let mut p = Provisioner::new(&Config {
+        ap_ssid: "screeny-4a00a4",
+        has_stored: false,
+        form: UriForm::NoPass,
+        timing: Timing::SPEC,
+    });
+    let mut w = World {
+        p: p.clone(),
+        now: 0,
+        outage: (u32::MAX, u32::MAX),
+        lease: LAN,
+        join_done_at: None,
+        reassoc_done_at: None,
+        associated: false,
+        link_was_up: false,
+        log: Vec::new(),
+    };
+    let a = p.step(Event::Boot, 0);
+    w.p = p;
+    w.carry_out(a.as_slice());
+    w.step(Event::CredentialsPosted { ssid: "Example-Wifi1" });
+    while w.p.state() != State::Online {
+        w.second();
+    }
+    assert!(w.p.ap_up() && w.on_lan(), "the grace window is on the LAN since card 388");
+    while w.p.ap_up() {
+        w.second();
+    }
+    let dropped = w.now;
+    let mut off = 0;
+    while !w.on_lan() {
+        w.second();
+        off = w.now - dropped;
+        assert!(off < 60_000, "still off the LAN {} s after DropAp", off / 1000);
+    }
+    assert!(off <= SCAN_MS + DHCP_MS + 1_000, "off the LAN {} s after DropAp", off / 1000);
+    assert_eq!(w.p.state(), State::Online);
 }
 
 /// A minute: the rejoin at `link_down_ms` lands just after it comes back.
@@ -222,13 +316,12 @@ fn a_five_minute_outage_comes_back_within_the_bound() {
 
 /// Every outage length from 1 s to 15 min, and every phase of the portal's
 /// retry cycle the return can land in: never longer than the bound once the
-/// portal is involved, and never longer than the link-down rule before it.
+/// portal is involved, and never longer than a re-association before it (card 389).
 #[test]
 fn no_outage_length_strands_the_panel() {
-    let worst_blip = Timing::SPEC.link_down_ms + SCAN_MS + DHCP_MS + 2_000;
     for secs in (1..=900).step_by(7) {
         let after = outage_of(secs);
-        let limit = if secs * 1_000 < Timing::SPEC.link_down_ms { worst_blip } else { BOUND_MS.max(worst_blip.saturating_sub(secs * 1_000)) };
+        let limit = if secs * 1_000 < Timing::SPEC.link_down_ms { WORST_BLIP_MS } else { BOUND_MS };
         assert!(after <= limit, "a {secs} s outage: back {} s after the AP returned", after / 1000);
     }
 }
@@ -383,4 +476,14 @@ fn an_online_rejoin_is_not_the_portal() {
     assert!(!w.p.ap_up());
     assert_eq!(w.p.screen(w.now), None);
     assert_eq!(w.p.overlay_state(), None);
+}
+
+/// Not a check: the table the card logs. `cargo test -p screeny-provision
+/// --test outages -- --ignored --nocapture outage_table`.
+#[test]
+#[ignore]
+fn outage_table() {
+    for secs in [1, 5, 10, 20, 30, 45, 59, 60, 90, 120, 300, 900] {
+        println!("outage {secs:>4} s: back on the LAN {:>3} s after the AP returned", outage_of(secs) / 1000);
+    }
 }
