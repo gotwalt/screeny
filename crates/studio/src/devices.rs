@@ -1597,6 +1597,7 @@ mod tests {
             mtu: 1464,
             ctrl: 49375,
             fw: "test".into(),
+            board: String::new(),
             id: String::new(),
             name: String::new(),
         }

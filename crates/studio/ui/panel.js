@@ -301,7 +301,8 @@ async function start() {
           drops ? 'warn' : null,
         ]);
       }
-      if (d.firmware) rows.push(['Firmware', d.firmware + (d.panel_size ? ` · ${d.panel_size}` : '')]);
+      // Card 380: the board from the TXT record, before the HTTP API is read.
+      if (d.firmware) rows.push(['Firmware', d.firmware + (d.board ? ` (${d.board})` : '') + (d.panel_size ? ` · ${d.panel_size}` : '')]);
       if (d.last_error) rows.push(['Last error', d.last_error, 'bad']);
     }
     if (!rows.length) rows.push(['Link', attachedId() ? 'nothing yet' : 'no panel attached', 'dim']);

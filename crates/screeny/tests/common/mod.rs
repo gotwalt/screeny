@@ -141,6 +141,7 @@ impl OwnedInfo {
             mtu: self.mtu,
             ctrl,
             fw: &self.fw,
+            board: "",
             id: &self.id,
             name: &self.name,
         };
