@@ -1,15 +1,30 @@
-// Back up and restore a Tidbyt's whole flash from the browser (Web Serial, esptool-js).
+// Back up and restore a Tidbyt's whole flash from the browser (Web Serial, esptool-js),
+// and check an LED Art Panel's chip before its image is offered.
 //
 // Tidbyt does not publish its firmware, so the copy saved here is the only way back to
 // the original. Every chunk read is checked against the chip's own MD5 of that range and
 // read again on a mismatch: long reads through the Tidbyt's CP2102N have corrupted at
 // higher rates, which is also why everything here runs at 230400 baud.
+//
+// The page offers one image per board, and ESP Web Tools cannot tell the boards apart
+// (both are a plain ESP32 to it), so the flash size is the guard: a Tidbyt Gen 1 has
+// 8 MB and its backup refuses anything else; an LED Art Panel has 4 MB, and its image is
+// offered only after "Check" has found 4 MB. That check is what keeps the art panel's
+// path (no backup, full erase) away from a Tidbyt's original firmware.
 import { ESPLoader, Transport } from "./vendor/esptool-js/bundle.js";
 
 const FLASH_BYTES = 8 * 1024 * 1024; // Tidbyt Gen 1: ESP32 with 8 MB of flash
 const CHUNK = 256 * 1024;
 const TRIES = 4;
 const BAUD = 230400;
+
+// What the page knows about each board. `manifest` is the ESP Web Tools manifest the
+// Install button uses; the Tidbyt's keeps the original name so existing links hold.
+const BOARDS = {
+  "tidbyt": { manifest: "manifest.json" },
+  "art-panel": { manifest: "manifest-art-panel.json", flash: "4MB", minRev: 1 },
+};
+let board = "tidbyt";
 
 const $ = (id) => document.getElementById(id);
 let busy = false;
@@ -19,7 +34,8 @@ function say(el, text, cls) {
   el.className = "status" + (cls ? " " + cls : "");
 }
 
-// Install stays off until there is a backup, or the owner says they do not need one.
+// Install stays off until there is a backup, or the owner says they do not need one
+// (Tidbyt), or until the check has found an art panel's chip (LED Art Panel).
 function setInstallAllowed(ok) {
   $("install-go").disabled = !ok || busy;
   $("install").classList.toggle("locked", !ok);
@@ -28,8 +44,10 @@ function setInstallAllowed(ok) {
 function setBusy(b) {
   busy = b;
   $("backup-go").disabled = b;
+  $("check-go").disabled = b;
   $("restore-go").disabled = b || !$("restore-file").files.length;
-  setInstallAllowed(backedUp || $("skip").checked);
+  for (const r of document.querySelectorAll("input[name=board]")) r.disabled = b;
+  setInstallAllowed(board === "tidbyt" ? backedUp || $("skip").checked : artChecked);
 }
 
 async function connect(log) {
@@ -40,7 +58,7 @@ async function connect(log) {
   const loader = new ESPLoader({ transport, baudrate: BAUD, romBaudrate: BAUD, terminal });
   try {
     const chip = await loader.main();
-    if (!/ESP32(?!-)/.test(chip)) throw new Error(`This is an ${chip}, not the ESP32 in a Tidbyt Gen 1.`);
+    if (loader.chip.CHIP_NAME !== "ESP32") throw new Error(`This is an ${chip}, not the ESP32 in a Tidbyt Gen 1.`);
     const size = await loader.detectFlashSize();
     if (size && size !== "8MB") throw new Error(`This chip has ${size} of flash; a Tidbyt Gen 1 has 8MB.`);
     const mac = await loader.chip.readMac(loader);
@@ -71,6 +89,7 @@ function looksLikeFlash(img) {
 }
 
 let backedUp = false;
+let artChecked = false;
 
 async function backup() {
   const status = $("backup-status");
@@ -121,6 +140,43 @@ async function backup() {
   }
 }
 
+// An LED Art Panel has no original firmware to keep (its maker's sketch is rebuilt from
+// source), so instead of a backup it gets a quick look at the chip: a classic ESP32 of
+// revision 1 or later (the image's minimum) with 4 MB of flash. Reads nothing else.
+async function checkArtPanel() {
+  const status = $("check-status");
+  const want = BOARDS["art-panel"];
+  artChecked = false;
+  setBusy(true);
+  let loader = null, transport = null;
+  try {
+    if (!("serial" in navigator)) throw new Error("This browser cannot talk to USB serial devices. Use desktop Chrome, Edge or Opera.");
+    say(status, "Pick the panel's port...");
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, false);
+    const log = (s) => console.log("[check]", s);
+    const terminal = { clean() {}, writeLine: log, write: log };
+    loader = new ESPLoader({ transport, baudrate: BAUD, romBaudrate: BAUD, terminal });
+    const chip = await loader.main();
+    if (loader.chip.CHIP_NAME !== "ESP32") throw new Error(`This is an ${chip}, not the ESP32 in an LED Art Panel.`);
+    const size = await loader.detectFlashSize();
+    if (size === "8MB") throw new Error("This chip has 8 MB of flash, like a Tidbyt Gen 1, not the 4 MB of an LED Art Panel. Nothing was written. If it is a Tidbyt, choose Tidbyt above and back it up first: installing the art panel's image would erase Tidbyt's original firmware.");
+    if (size !== want.flash) throw new Error(`This chip has ${size || "an unknown amount of"} flash; an LED Art Panel has 4 MB. Nothing was written.`);
+    const rev = await loader.chip.getChipRevision(loader);
+    if (rev < want.minRev) throw new Error(`This ESP32 is revision ${rev}; screeny needs revision ${want.minRev} or later. Nothing was written.`);
+    artChecked = true;
+    say(status, `Found an ESP32 (revision ${rev}) with 4 MB of flash: an LED Art Panel. Install is ready; pick the same port again.`, "ok");
+  } catch (e) {
+    say(status, friendly(e, "panel"), "bad");
+  } finally {
+    if (loader) {
+      try { await loader.after("hard_reset"); } catch (e) { /* the port may already be gone */ }
+    }
+    if (transport) await transport.disconnect().catch(() => {});
+    setBusy(false);
+  }
+}
+
 async function restore() {
   const status = $("restore-status");
   const bar = $("restore-bar");
@@ -157,11 +213,11 @@ async function restore() {
   }
 }
 
-function friendly(e) {
+function friendly(e, who = "Tidbyt") {
   const msg = (e && e.message) || String(e);
-  if (e && e.name === "NotFoundError") return "No port picked. Plug the Tidbyt in and try again.";
-  if (/Failed to open serial port|already open/i.test(msg)) return "The port is busy. Close other tabs or programs using it, unplug and replug the Tidbyt, and try again.";
-  if (/Failed to connect|Timeout|timed out/i.test(msg)) return "The Tidbyt did not answer. Unplug and replug the cable and try again. " + msg;
+  if (e && e.name === "NotFoundError") return `No port picked. Plug the ${who} in and try again.`;
+  if (/Failed to open serial port|already open/i.test(msg)) return `The port is busy. Close other tabs or programs using it, unplug and replug the ${who}, and try again.`;
+  if (/Failed to connect|Timeout|timed out/i.test(msg)) return `The ${who} did not answer. Unplug and replug the cable and try again. ` + msg;
   return msg;
 }
 
@@ -211,10 +267,51 @@ function md5hex(bytes) {
 }
 export { md5hex };
 
+// The board choice: shows that board's steps and points Install at its manifest. A
+// change of board never carries the other board's backup or check across.
+function choose(b) {
+  if (!BOARDS[b]) b = "tidbyt";
+  board = b;
+  document.body.dataset.board = b;
+  const r = document.querySelector(`input[name=board][value="${b}"]`);
+  if (r) r.checked = true;
+  $("install-button").setAttribute("manifest", BOARDS[b].manifest);
+  showVersion();
+  setBusy(false);
+}
+
+// Each manifest is generated at deploy time and names its firmware version. A release
+// without an art panel image has no manifest-art-panel.json: the choice then goes.
+const versions = {};
+function showVersion() {
+  const v = versions[board] || "";
+  $("ver").textContent = v;
+  $("ver2").textContent = versions["tidbyt"] || "-";
+}
+async function loadManifests() {
+  for (const [b, { manifest }] of Object.entries(BOARDS)) {
+    try {
+      const r = await fetch(manifest);
+      if (!r.ok) throw new Error(r.status);
+      versions[b] = (await r.json()).version;
+    } catch (e) {
+      if (b !== "tidbyt") {
+        $("board").hidden = true;
+        if (board === b) choose("tidbyt");
+      }
+    }
+  }
+  showVersion();
+}
+
 if (typeof document !== "undefined" && $("backup-go")) {
   $("backup-go").addEventListener("click", backup);
+  $("check-go").addEventListener("click", checkArtPanel);
   $("restore-go").addEventListener("click", restore);
   $("restore-file").addEventListener("change", () => setBusy(false));
   $("skip").addEventListener("change", () => setBusy(false));
-  setBusy(false);
+  for (const r of document.querySelectorAll("input[name=board]")) r.addEventListener("change", () => choose(r.value));
+  // ?board=art-panel opens the page with the art panel chosen.
+  choose(new URLSearchParams(location.search).get("board") || "tidbyt");
+  loadManifests();
 }
